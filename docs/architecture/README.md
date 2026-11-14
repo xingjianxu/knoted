@@ -1,12 +1,14 @@
 # 架构现状
 
-截至 2026-11-14，T01—T05 已落地基础骨架：Rust 2024 workspace（`crates/knoted-core` 配置与数据库、`crates/knoted-api`、`crates/knoted-worker`）、pnpm workspace（`apps/web` React 外壳、`packages/ui`、`packages/api-client` 生成客户端）、`api/openapi.yaml` 与 `api/intelligence.openapi.yaml` 契约、`migrations/` 迁移。业务模块、认证、笔记、文件与 RAG 尚未实现，仍按 [实施计划](../plans/knoted-v1/README.md) 逐卡推进；本页不构成 Accepted ADR。
+截至 2026-11-15，T01—T16 已落地：Rust 2024 workspace（`crates/knoted-core` 配置/数据库/任务队列/认证内核/暂存与内部协议客户端、`crates/knoted-api` axum 服务与健康检查/认证路由、`crates/knoted-worker` 领取-心跳-提交骨架）、pnpm workspace（`apps/web` React 外壳、`packages/ui`、`packages/api-client` 生成客户端）、`api/openapi.yaml` 与 `api/intelligence.openapi.yaml` 契约、`migrations/0001—0004`，以及 `services/intelligence/` 的 Python 执行服务（SQLite 账本、Docling+RapidOCR 解析、BGE-M3 dense 嵌入）。笔记、项目/事项、文件扫描与检索、RAG 生成尚未实现，仍按 [实施计划](../plans/knoted-v1/README.md) 逐卡推进；本页不构成 Accepted ADR。
 
 | 边界 | 责任 |
 |---|---|
-| `crates/` | Rust workspace：core（配置/数据库）、api、worker 进程入口 |
+| `crates/` | Rust workspace：core（配置/数据库/`jobs`/`auth`/`files::staging`/`intelligence` 客户端）、api（axum 路由、`middleware` request_id/认证、`admin` CLI）、worker（runner 骨架） |
 | `apps/`、`packages/` | React 前端、UI 基础包与 OpenAPI 生成客户端 |
-| `api/`、`migrations/` | 浏览器与内部契约、数据库迁移 |
+| `api/`、`migrations/` | 浏览器与内部契约、数据库迁移（`0001` registry、`0002` jobs/outbox、`0003` auth、`0004` job retry） |
+| `services/intelligence/` | Python（uv 管理，Python 3.12）：受控执行服务、SQLite 执行账本、离线解析/嵌入适配；不接触业务数据库与源目录 |
+| `nix/` | Knoted 侧 provider 契约模块（当前作为部署契约与 preflight 参考，见 `docs/plans/knoted-v1/evidence/t12-deployment.md`） |
 | `Cargo.toml`、`package.json` | 构建元数据与锁定依赖；技术栈迁移需单独评估 |
 | `AGENTS.md` / `.agents/skills/` | 开发规则及项目管理流程，不加入运行时依赖 |
 | `docs/decisions/` / `docs/rfcs/` | 已讨论的决策及重要方案 |
