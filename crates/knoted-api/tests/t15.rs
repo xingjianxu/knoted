@@ -22,9 +22,9 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use knoted_api::logging::{self, LogBuffer};
 use knoted_api::middleware::auth::{
     CSRF_COOKIE, CSRF_HEADER, CurrentSession, SESSION_COOKIE, attach_session_cookies, require_csrf,
-    require_session,
+    require_origin, require_session,
 };
-use knoted_core::auth::sessions::CreatedSession;
+use knoted_core::auth::sessions::{CreatedSession, Session};
 use knoted_core::auth::{self, hash_token, sessions};
 use knoted_core::config::{AppConfig, AuthConfig, ConfigError, LogFormat, LogLevel};
 use knoted_core::context::{AppContext, FixedClock};
@@ -62,9 +62,85 @@ async fn owner(pool: &PgPool) -> Uuid {
 }
 
 async fn new_session(pool: &PgPool, user_id: Uuid, now: DateTime<Utc>) -> CreatedSession {
-    sessions::create_session(pool, user_id, now, Some("t15 test agent"), false)
+    create_session(pool, user_id, now, Some("t15 test agent"), false).await
+}
+
+/// A pooled connection, mirroring how a route handler reaches the session API.
+async fn connection(pool: &PgPool) -> sqlx::pool::PoolConnection<sqlx::Postgres> {
+    pool.acquire().await.expect("a pooled connection must open")
+}
+
+// The helpers below mirror the production signatures exactly and only supply the
+// connection, so the tests exercise the same `&mut PgConnection` contract T14 and
+// T16 use from a transaction.
+async fn create_session(
+    pool: &PgPool,
+    user_id: Uuid,
+    now: DateTime<Utc>,
+    user_agent: Option<&str>,
+    verified: bool,
+) -> CreatedSession {
+    let mut connection = connection(pool).await;
+    sessions::create_session(&mut connection, user_id, now, user_agent, verified)
         .await
         .expect("a session must be created")
+}
+
+async fn resolve_session(
+    pool: &PgPool,
+    token: &str,
+    now: DateTime<Utc>,
+) -> Result<Option<Session>, knoted_core::db::DbError> {
+    let mut connection = connection(pool).await;
+    sessions::resolve_session(&mut connection, token, now).await
+}
+
+async fn logout(
+    pool: &PgPool,
+    user_id: Uuid,
+    session_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<bool, knoted_core::db::DbError> {
+    let mut connection = connection(pool).await;
+    sessions::logout(&mut connection, user_id, session_id, now).await
+}
+
+async fn list_sessions(
+    pool: &PgPool,
+    user_id: Uuid,
+    now: DateTime<Utc>,
+    limit: Option<u32>,
+) -> Result<Vec<Session>, knoted_core::db::DbError> {
+    let mut connection = connection(pool).await;
+    sessions::list_sessions(&mut connection, user_id, now, limit).await
+}
+
+async fn revoke_session(
+    pool: &PgPool,
+    user_id: Uuid,
+    session_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<bool, knoted_core::db::DbError> {
+    let mut connection = connection(pool).await;
+    sessions::revoke_session(&mut connection, user_id, session_id, now).await
+}
+
+async fn mark_verified(
+    pool: &PgPool,
+    session_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<bool, knoted_core::db::DbError> {
+    let mut connection = connection(pool).await;
+    sessions::mark_verified(&mut connection, session_id, now).await
+}
+
+async fn revoke_all_sessions_for_user(
+    pool: &PgPool,
+    user_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<u64, knoted_core::db::DbError> {
+    let mut connection = connection(pool).await;
+    sessions::revoke_all_sessions_for_user(&mut connection, user_id, now).await
 }
 
 /// A fixed-clock context so the middleware resolves sessions deterministically.
@@ -81,9 +157,43 @@ fn context(pool: &PgPool, now: DateTime<Utc>) -> AppContext {
 fn guarded_app(ctx: AppContext) -> Router {
     knoted_api::with_transport_layers(
         Router::new()
-            .route("/guarded", get(identity).post(identity))
+            .route(
+                "/guarded",
+                get(identity)
+                    .post(identity)
+                    .head(identity)
+                    .options(identity),
+            )
             .layer(from_fn_with_state(AuthConfig::default(), require_csrf))
             .layer(from_fn_with_state(ctx, require_session)),
+    )
+}
+
+/// Router exposing the anonymous write guard (no session required).
+fn anonymous_app(config: AuthConfig) -> Router {
+    knoted_api::with_transport_layers(
+        Router::new()
+            .route(
+                "/anonymous",
+                get(anonymous)
+                    .post(anonymous)
+                    .head(anonymous)
+                    .options(anonymous),
+            )
+            .layer(from_fn_with_state(config, require_origin)),
+    )
+}
+
+async fn anonymous() -> &'static str {
+    "ok"
+}
+
+/// Router with the CSRF guard alone, to prove it fails closed without a session.
+fn csrf_only_app(config: AuthConfig) -> Router {
+    knoted_api::with_transport_layers(
+        Router::new()
+            .route("/csrf-only", axum::routing::post(anonymous))
+            .layer(from_fn_with_state(config, require_csrf)),
     )
 }
 
@@ -180,7 +290,7 @@ async fn t15_1_idle_and_absolute_expiry() {
 
     // An idle session is usable one second before the idle boundary.
     let almost_idle = new_session(pool, user, now).await;
-    let resolved = sessions::resolve_session(
+    let resolved = resolve_session(
         pool,
         &almost_idle.token,
         now + Duration::days(7) - Duration::seconds(1),
@@ -202,7 +312,7 @@ async fn t15_1_idle_and_absolute_expiry() {
     // At the idle boundary exactly, the session is already expired.
     let idle_boundary = new_session(pool, user, now).await;
     assert!(
-        sessions::resolve_session(pool, &idle_boundary.token, now + Duration::days(7))
+        resolve_session(pool, &idle_boundary.token, now + Duration::days(7))
             .await
             .expect("resolving an expired session must not fail")
             .is_none(),
@@ -215,14 +325,14 @@ async fn t15_1_idle_and_absolute_expiry() {
     let sliding = new_session(pool, user, now).await;
     for day in [6, 12, 18, 24, 29] {
         let at = now + Duration::days(day);
-        let resolved = sessions::resolve_session(pool, &sliding.token, at)
+        let resolved = resolve_session(pool, &sliding.token, at)
             .await
             .expect("resolving a live session must not fail")
             .unwrap_or_else(|| panic!("day {day} is inside the absolute limit"));
         assert_eq!(resolved.last_seen_at, at);
         assert_eq!(resolved.absolute_expires_at, now + Duration::days(30));
     }
-    let resolved = sessions::resolve_session(pool, &sliding.token, now + Duration::days(29))
+    let resolved = resolve_session(pool, &sliding.token, now + Duration::days(29))
         .await
         .expect("resolving a live session must not fail")
         .expect("day 29 is inside the absolute limit");
@@ -240,7 +350,7 @@ async fn t15_1_idle_and_absolute_expiry() {
         .await
         .expect("the test must be able to age the row");
     assert!(
-        sessions::resolve_session(pool, &absolute.token, now + Duration::days(30))
+        resolve_session(pool, &absolute.token, now + Duration::days(30))
             .await
             .expect("resolving an expired session must not fail")
             .is_none(),
@@ -256,7 +366,7 @@ async fn t15_1_idle_and_absolute_expiry() {
         .execute(pool)
         .await
         .expect("the test must be able to age the row");
-    let resolved = sessions::resolve_session(
+    let resolved = resolve_session(
         pool,
         &almost_absolute.token,
         now + Duration::days(30) - Duration::seconds(1),
@@ -280,6 +390,22 @@ async fn t15_2_logout_revokes_only_that_session() {
     let now = fixed_now();
     let app = guarded_app(context(pool, now));
 
+    // No cookie at all is the plain unauthenticated case.
+    let (status, headers, body) = call(
+        &app,
+        Request::get("/guarded")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "body: {body}");
+    assert_eq!(body["code"], "unauthenticated");
+    assert_eq!(
+        body["request_id"],
+        header_request_id(&headers).to_string(),
+        "the 401 body and header must carry the same request id"
+    );
+
     let first = new_session(pool, user, now).await;
     let second = new_session(pool, user, now).await;
 
@@ -292,16 +418,25 @@ async fn t15_2_logout_revokes_only_that_session() {
     assert_eq!(body, second.session.id.to_string());
 
     assert!(
-        sessions::logout(pool, first.session.id, now)
+        logout(pool, user, first.session.id, now)
             .await
             .expect("logging out must succeed"),
         "the first logout must report a live session as revoked"
     );
     assert!(
-        !sessions::logout(pool, first.session.id, now)
+        !logout(pool, user, first.session.id, now)
             .await
             .expect("logging out twice must not fail"),
         "a repeated logout must be idempotent and report nothing new"
+    );
+
+    // A logout cannot reach another account's session: the account id is part
+    // of the predicate, exactly like `revoke_session`.
+    assert!(
+        !logout(pool, Uuid::new_v4(), second.session.id, now)
+            .await
+            .expect("a foreign logout must not fail"),
+        "a different account must not log the owner out"
     );
 
     // The revoked token stops working immediately, with the shared error body.
@@ -330,7 +465,7 @@ async fn t15_2_logout_revokes_only_that_session() {
     );
 
     // The listing reflects the revocation and only returns live sessions.
-    let listed = sessions::list_sessions(pool, user)
+    let listed = list_sessions(pool, user, now, None)
         .await
         .expect("sessions must be listable");
     assert!(
@@ -363,7 +498,7 @@ async fn t15_2_logout_revokes_only_that_session() {
     // Revoking another user's session is impossible: the row carries the owner,
     // and a mismatching user id must not touch it.
     assert!(
-        !sessions::revoke_session(pool, Uuid::new_v4(), second.session.id, now)
+        !revoke_session(pool, Uuid::new_v4(), second.session.id, now)
             .await
             .expect("revoking must not fail"),
         "a different account must not revoke the owner's session"
@@ -401,9 +536,21 @@ async fn t15_3_cross_site_write_rejected() {
     assert_eq!(status, StatusCode::OK, "body: {body}");
 
     // Read requests need neither Origin nor CSRF: a cross-site GET carries no
-    // state change.
-    let (status, _, body) = call(&app, session_request(Method::GET, "/guarded", &session)).await;
-    assert_eq!(status, StatusCode::OK, "body: {body}");
+    // state change. HEAD and OPTIONS are equally exempt.
+    for method in [Method::GET, Method::HEAD, Method::OPTIONS] {
+        let request = Request::builder()
+            .method(method.clone())
+            .uri("/guarded")
+            .header(header::COOKIE, cookie.as_str())
+            .body(Body::empty())
+            .expect("request");
+        let (status, _, body) = call(&app, request).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{method} must not require Origin or CSRF: {body}"
+        );
+    }
 
     // A missing or foreign Origin is rejected even with a valid CSRF token.
     for origin in [
@@ -559,11 +706,11 @@ async fn t15_4_token_not_stored_plaintext() {
     }
 
     // The normal lifecycle logs the events without the secrets.
-    sessions::resolve_session(pool, &token, now)
+    resolve_session(pool, &token, now)
         .await
         .expect("resolving the session must not fail")
         .expect("the fresh session must resolve");
-    sessions::logout(pool, created.session.id, now)
+    logout(pool, user, created.session.id, now)
         .await
         .expect("logging out must succeed");
 
@@ -712,8 +859,27 @@ fn t15_7_auth_config_defaults_and_overrides() {
     // load time instead.
     for (section, field) in [
         ("rp_id = \"wlab.132140.xyz:15601\"", "auth.rp_id"),
+        ("rp_id = \"https://wlab.132140.xyz\"", "auth.rp_id"),
+        ("rp_id = \"\"", "auth.rp_id"),
         ("origin = \"https://wlab.132140.xyz:15601/\"", "auth.origin"),
         ("origin = \"wlab.132140.xyz\"", "auth.origin"),
+        ("origin = \"http://wlab.132140.xyz:15601\"", "auth.origin"),
+        (
+            "origin = \"https://wlab.132140.xyz:15601/path\"",
+            "auth.origin",
+        ),
+        (
+            "origin = \"https://user@wlab.132140.xyz:15601\"",
+            "auth.origin",
+        ),
+        (
+            "origin = \"https://wlab.132140.xyz:15601?x=1\"",
+            "auth.origin",
+        ),
+        (
+            "origin = \"https://wlab.132140.xyz:15601#frag\"",
+            "auth.origin",
+        ),
     ] {
         std::fs::write(&path, format!("{database}\n[auth]\n{section}\n"))
             .expect("the configuration must be written");
@@ -742,15 +908,19 @@ async fn t15_6_verification_window() {
     let window = Duration::minutes(5);
 
     let created = new_session(pool, user, now).await;
+    let session_id = created.session.id;
     assert!(
         !sessions::recently_verified(&created.session, now, window),
         "a fresh login that did not verify a Passkey is not verified"
     );
 
-    sessions::mark_verified(pool, created.session.id, now)
-        .await
-        .expect("marking the session verified must succeed");
-    assert_eq!(last_verified_at(pool, created.session.id).await, Some(now));
+    assert!(
+        mark_verified(pool, session_id, now)
+            .await
+            .expect("marking the session verified must succeed"),
+        "a live session must be marked verified"
+    );
+    assert_eq!(last_verified_at(pool, session_id).await, Some(now));
     let mut verified = created.session;
     verified.last_verified_at = Some(now);
     assert!(
@@ -766,13 +936,287 @@ async fn t15_6_verification_window() {
         "the window is exclusive at five minutes"
     );
 
+    // A backwards clock must not widen the window: a verification stamped in the
+    // future does not count.
+    assert!(
+        !sessions::recently_verified(&verified, now - Duration::seconds(1), window),
+        "a future verification timestamp must not be trusted"
+    );
+
+    // A revoked session can no longer record a verification.
+    assert!(
+        logout(pool, user, session_id, now)
+            .await
+            .expect("logging out must succeed"),
+        "the fixture session must be live"
+    );
+    assert!(
+        !mark_verified(pool, session_id, now)
+            .await
+            .expect("marking a revoked session must not fail"),
+        "a revoked session must not report a successful verification"
+    );
+
     // A login that verified at creation is already verified for T16's sensitive
     // operations.
-    let strong = sessions::create_session(pool, user, now, None, true)
-        .await
-        .expect("a verified session must be created");
+    let strong = create_session(pool, user, now, None, true).await;
     assert_eq!(strong.session.last_verified_at, Some(now));
     assert!(sessions::recently_verified(&strong.session, now, window));
+
+    db.drop().await;
+}
+
+#[tokio::test]
+async fn t15_8_session_writes_join_the_callers_transaction() {
+    let db = test_db().await;
+    let pool = &db.pool;
+    let user = owner(pool).await;
+    let now = fixed_now();
+
+    // T14 finishes a ceremony by writing the Passkey and the session together.
+    // Both statements therefore share one transaction.
+    let mut tx = pool.begin().await.expect("a transaction must start");
+    sqlx::query(
+        "INSERT INTO passkey_credentials (id, user_id, credential_id, passkey, name)          VALUES ($1, $2, $3, '{}'::jsonb, 'T14 key')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(user)
+    .bind(b"t15-credential".to_vec())
+    .execute(&mut *tx)
+    .await
+    .expect("a Passkey row must be insertable");
+    let created = sessions::create_session(&mut tx, user, now, Some("T14 ceremony"), true)
+        .await
+        .expect("a session must be creatable inside the caller's transaction");
+    tx.commit()
+        .await
+        .expect("the ceremony transaction must commit");
+
+    // The committed transaction left both rows behind, and the session works.
+    let stored: i64 = sqlx::query_scalar("SELECT count(*) FROM sessions WHERE id = $1")
+        .bind(created.session.id)
+        .fetch_one(pool)
+        .await
+        .expect("sessions must be readable");
+    assert_eq!(stored, 1, "the committed session must exist");
+    let passkeys: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM passkey_credentials WHERE user_id = $1")
+            .bind(user)
+            .fetch_one(pool)
+            .await
+            .expect("passkey_credentials must be readable");
+    assert_eq!(passkeys, 1, "the committed Passkey must exist");
+    assert!(
+        resolve_session(pool, &created.token, now)
+            .await
+            .expect("resolving must not fail")
+            .is_some(),
+        "the session created in the transaction must be usable"
+    );
+
+    // A failed ceremony rolls the session back with everything else: no orphan
+    // session may survive.
+    let mut tx = pool.begin().await.expect("a transaction must start");
+    sqlx::query(
+        "INSERT INTO passkey_credentials (id, user_id, credential_id, passkey, name)          VALUES ($1, $2, $3, '{}'::jsonb, 'rolled back key')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(user)
+    .bind(b"t15-rolled-back".to_vec())
+    .execute(&mut *tx)
+    .await
+    .expect("a Passkey row must be insertable");
+    let doomed = sessions::create_session(&mut tx, user, now, None, false)
+        .await
+        .expect("a session must be creatable inside the transaction");
+    tx.rollback()
+        .await
+        .expect("the failed ceremony must roll back");
+
+    let stored: i64 = sqlx::query_scalar("SELECT count(*) FROM sessions WHERE id = $1")
+        .bind(doomed.session.id)
+        .fetch_one(pool)
+        .await
+        .expect("sessions must be readable");
+    assert_eq!(stored, 0, "a rolled-back transaction must leave no session");
+    let passkeys: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM passkey_credentials WHERE user_id = $1")
+            .bind(user)
+            .fetch_one(pool)
+            .await
+            .expect("passkey_credentials must be readable");
+    assert_eq!(
+        passkeys, 1,
+        "a rolled-back transaction must leave no Passkey"
+    );
+    assert!(
+        resolve_session(pool, &doomed.token, now)
+            .await
+            .expect("resolving must not fail")
+            .is_none(),
+        "a rolled-back session token must be unknown"
+    );
+
+    // Recovery (T16) revokes every live session of the account at once.
+    let first = new_session(pool, user, now).await;
+    let second = new_session(pool, user, now).await;
+    assert_eq!(
+        revoke_all_sessions_for_user(pool, user, now)
+            .await
+            .expect("revoking every session must succeed"),
+        3,
+        "the committed session and both fixtures must be revoked"
+    );
+    for token in [&created.token, &first.token, &second.token] {
+        assert!(
+            resolve_session(pool, token, now)
+                .await
+                .expect("resolving must not fail")
+                .is_none(),
+            "every session of the account must be revoked"
+        );
+    }
+    assert_eq!(
+        revoke_all_sessions_for_user(pool, user, now)
+            .await
+            .expect("revoking every session twice must not fail"),
+        0,
+        "a repeated revocation must change nothing"
+    );
+
+    db.drop().await;
+}
+
+#[tokio::test]
+async fn t15_9_anonymous_write_origin_guard() {
+    let config = AuthConfig::default();
+    let app = anonymous_app(config.clone());
+
+    // An anonymous write from the configured origin is allowed: the ceremony
+    // endpoints T14/T16 add are protected by Origin alone, without a session.
+    let (status, _, body) = call(
+        &app,
+        Request::post("/anonymous")
+            .header(header::ORIGIN, config.origin.as_str())
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+
+    // Missing or foreign origins are rejected in the shared error shape.
+    for origin in [
+        None,
+        Some("https://evil.example"),
+        Some("https://wlab.132140.xyz"),
+    ] {
+        let mut request = Request::post("/anonymous");
+        if let Some(origin) = origin {
+            request = request.header(header::ORIGIN, origin);
+        }
+        let (status, headers, body) =
+            call(&app, request.body(Body::empty()).expect("request")).await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "origin {origin:?} must be rejected: {body}"
+        );
+        assert_eq!(body["code"], "csrf_failed");
+        assert_eq!(
+            body["request_id"],
+            header_request_id(&headers).to_string(),
+            "the 403 body and header must carry the same request id"
+        );
+    }
+
+    // Reads stay open without an Origin.
+    for method in [Method::GET, Method::HEAD, Method::OPTIONS] {
+        let request = Request::builder()
+            .method(method.clone())
+            .uri("/anonymous")
+            .body(Body::empty())
+            .expect("request");
+        let (status, _, body) = call(&app, request).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{method} must stay readable: {body}"
+        );
+    }
+
+    // The CSRF guard alone fails closed: without a resolved session there is no
+    // digest to compare, so even a same-origin write is rejected.
+    let csrf_only = csrf_only_app(config.clone());
+    let (status, _, body) = call(
+        &csrf_only,
+        Request::post("/csrf-only")
+            .header(header::ORIGIN, config.origin.as_str())
+            .header(CSRF_HEADER, "some-token")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "body: {body}");
+    assert_eq!(body["code"], "unauthenticated");
+}
+
+#[tokio::test]
+async fn t15_10_session_list_filters_and_caps() {
+    let db = test_db().await;
+    let pool = &db.pool;
+    let user = owner(pool).await;
+    let now = fixed_now();
+
+    // Created ten days ago, whose seven-day idle limit has already passed.
+    let expired =
+        create_session(pool, user, now - Duration::days(10), Some("expired"), false).await;
+    let middle = create_session(pool, user, now - Duration::hours(2), Some("middle"), false).await;
+    let second = create_session(pool, user, now - Duration::hours(1), Some("second"), false).await;
+    let newest = create_session(pool, user, now, Some("newest"), false).await;
+
+    let listed = list_sessions(pool, user, now, None)
+        .await
+        .expect("sessions must be listable");
+    let ids: Vec<Uuid> = listed.iter().map(|session| session.id).collect();
+    assert_eq!(
+        ids,
+        vec![newest.session.id, second.session.id, middle.session.id],
+        "the list must be newest first, stably ordered, and skip expired sessions"
+    );
+    assert!(
+        !ids.contains(&expired.session.id),
+        "an expired session must not be listed"
+    );
+
+    // The query is bounded: the caller can ask for fewer rows, a zero limit is
+    // clamped to one and the maximum limit keeps the statement bounded.
+    let capped = list_sessions(pool, user, now, Some(2))
+        .await
+        .expect("sessions must be listable");
+    assert_eq!(
+        capped
+            .iter()
+            .map(|session| session.id)
+            .collect::<Vec<Uuid>>(),
+        vec![newest.session.id, second.session.id],
+        "the limit must keep the newest rows"
+    );
+    assert_eq!(
+        list_sessions(pool, user, now, Some(0))
+            .await
+            .expect("a zero limit must not fail")
+            .len(),
+        1,
+        "a zero limit must be clamped to one row"
+    );
+    assert_eq!(
+        list_sessions(pool, user, now, Some(u32::MAX))
+            .await
+            .expect("the maximum limit must not fail")
+            .len(),
+        3,
+        "the maximum limit must still bound the query to the existing rows"
+    );
 
     db.drop().await;
 }

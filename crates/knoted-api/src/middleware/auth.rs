@@ -1,11 +1,20 @@
 //! Session and write-request protection.
 //!
-//! Two guards cooperate, and the order matters: [`require_session`] resolves the
-//! `knoted_session` cookie and inserts [`CurrentSession`], then [`require_csrf`]
-//! rejects a state-changing request unless its `Origin` is exactly the
-//! configured one and its `X-CSRF-Token` matches the session's digest. Both
-//! are public so a router can mount them without a business route, which is how
-//! the integration tests verify the guard.
+//! Three guards cooperate:
+//!
+//! - [`require_session`] resolves the `knoted_session` cookie and inserts
+//!   [`CurrentSession`].
+//! - [`require_csrf`] rejects a state-changing request unless its `Origin` is
+//!   exactly the configured one and its `X-CSRF-Token` matches the session's
+//!   digest. Mount it *after* (inside) `require_session`.
+//! - [`require_origin`] is the anonymous variant: it checks only the `Origin`
+//!   of writes, for the ceremony endpoints that run before a session exists.
+//!
+//! Wiring convention for T14/T16: `bootstrap/*`, `login/*` and `recovery/*`
+//! start without a session, so those routes mount [`require_origin`]; every
+//! authenticated route mounts [`require_csrf`] inside [`require_session`]. All
+//! three are public so a router can mount them without a business route, which
+//! is how the integration tests verify the guard.
 //!
 //! Failures use the shared [`ApiErrorBody`] with the request's own id: a missing,
 //! expired or revoked session answers `401 unauthenticated`, a cross-site or
@@ -71,7 +80,20 @@ pub async fn require_session(
         return unauthenticated(request_id);
     };
 
-    match sessions::resolve_session(ctx.pool(), &token, ctx.now()).await {
+    let mut connection = match ctx.pool().acquire().await {
+        Ok(connection) => connection,
+        Err(error) => {
+            tracing::warn!(
+                target: "knoted_api::auth",
+                request_id = %request_id.get(),
+                error = %error,
+                "session lookup failed"
+            );
+            return unavailable(request_id);
+        }
+    };
+
+    match sessions::resolve_session(&mut connection, &token, ctx.now()).await {
         Ok(Some(session)) => {
             request.extensions_mut().insert(CurrentSession { session });
             next.run(request).await
@@ -92,14 +114,37 @@ pub async fn require_session(
                 error = %error,
                 "session lookup failed"
             );
-            ApiErrorBody::new(
-                DEPENDENCY_UNAVAILABLE,
-                "the session could not be checked",
-                request_id.get(),
-            )
-            .into_response(StatusCode::SERVICE_UNAVAILABLE)
+            unavailable(request_id)
         }
     }
+}
+
+/// Rejects a state-changing request whose `Origin` is not the configured one.
+///
+/// This is the anonymous guard: the bootstrap, login and recovery ceremonies run
+/// before a session exists, so they have no CSRF digest to compare, but they must
+/// still not accept a cross-site write. Reads pass through untouched.
+pub async fn require_origin(
+    State(config): State<AuthConfig>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let request_id = request_id(&request);
+    if !is_write(request.method()) {
+        return next.run(request).await;
+    }
+
+    if !origin_matches(request.headers(), &config.origin) {
+        tracing::debug!(
+            target: "knoted_api::auth",
+            request_id = %request_id.get(),
+            reason = "origin_mismatch",
+            "request rejected"
+        );
+        return csrf_failed(request_id);
+    }
+
+    next.run(request).await
 }
 
 /// Rejects a state-changing request that is cross-site or lacks the CSRF token.
@@ -130,11 +175,7 @@ pub async fn require_csrf(
         return unauthenticated(request_id);
     };
 
-    let origin_ok = request
-        .headers()
-        .get(header::ORIGIN)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|origin| origin == config.origin);
+    let origin_ok = origin_matches(request.headers(), &config.origin);
     let csrf_ok = request
         .headers()
         .get(CSRF_HEADER)
@@ -152,12 +193,7 @@ pub async fn require_csrf(
             csrf_ok,
             "request rejected"
         );
-        return ApiErrorBody::new(
-            CSRF_FAILED,
-            "the request origin or CSRF token is not valid",
-            request_id.get(),
-        )
-        .into_response(StatusCode::FORBIDDEN);
+        return csrf_failed(request_id);
     }
 
     next.run(request).await
@@ -212,6 +248,18 @@ fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// Whether the `Origin` header is exactly the configured origin.
+///
+/// The comparison is verbatim on purpose: scheme, host and port are all part of
+/// what a browser means by its origin, and `AuthConfig` rejects a trailing slash
+/// at load time so the two spellings cannot drift.
+fn origin_matches(headers: &HeaderMap, expected: &str) -> bool {
+    headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|origin| origin == expected)
+}
+
 /// The request id, if the request-id layer already ran.
 fn request_id(request: &Request) -> RequestId {
     request
@@ -244,4 +292,24 @@ fn unauthenticated(request_id: RequestId) -> Response {
         request_id.get(),
     )
     .into_response(StatusCode::UNAUTHORIZED)
+}
+
+/// A 403 in the shared error shape, for both origin- and token-based failures.
+fn csrf_failed(request_id: RequestId) -> Response {
+    ApiErrorBody::new(
+        CSRF_FAILED,
+        "the request origin or CSRF token is not valid",
+        request_id.get(),
+    )
+    .into_response(StatusCode::FORBIDDEN)
+}
+
+/// A 503 in the shared error shape.
+fn unavailable(request_id: RequestId) -> Response {
+    ApiErrorBody::new(
+        DEPENDENCY_UNAVAILABLE,
+        "the session could not be checked",
+        request_id.get(),
+    )
+    .into_response(StatusCode::SERVICE_UNAVAILABLE)
 }

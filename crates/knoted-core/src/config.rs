@@ -327,24 +327,46 @@ fn validate_database(database: &DatabaseConfig) -> Result<(), ConfigError> {
 }
 
 fn validate_auth(auth: &AuthConfig) -> Result<(), ConfigError> {
-    if auth.rp_id.is_empty() || auth.rp_id.contains('/') || auth.rp_id.contains(':') {
+    // A WebAuthn RP ID is a bare host: `localhost` or a registered domain. It
+    // never carries a scheme, a port or a path, and whitespace is always a typo.
+    if auth.rp_id.is_empty()
+        || auth.rp_id.contains('/')
+        || auth.rp_id.contains(':')
+        || auth.rp_id.chars().any(char::is_whitespace)
+    {
         return Err(ConfigError::Invalid {
             field: "auth.rp_id",
-            message: "must be a bare host name without scheme, port or path".to_owned(),
+            message: "must be a bare host name without scheme, port, path or whitespace".to_owned(),
         });
     }
-    // The origin is compared verbatim against the `Origin` header, so a trailing
-    // slash or a missing scheme would silently reject every write request.
-    let well_formed = (auth.origin.starts_with("https://") || auth.origin.starts_with("http://"))
-        && !auth.origin.ends_with('/')
-        && !auth.origin.contains('?');
-    if !well_formed {
-        return Err(ConfigError::Invalid {
-            field: "auth.origin",
-            message: "must be `scheme://host[:port]` without a trailing slash or query".to_owned(),
-        });
+
+    // The origin is compared verbatim against the `Origin` header, so it must be
+    // the canonical `https://host[:port]` form a browser sends: no credentials,
+    // path, query, fragment or trailing slash. Parsing it here turns a typo into
+    // a startup failure instead of silently rejecting every write request.
+    let Ok(origin) = url::Url::parse(&auth.origin) else {
+        return Err(invalid_origin());
+    };
+    let canonical = origin.scheme() == "https"
+        && origin.host_str().is_some_and(|host| !host.is_empty())
+        && origin.path() == "/"
+        && origin.query().is_none()
+        && origin.fragment().is_none()
+        && origin.username().is_empty()
+        && origin.password().is_none();
+    if !canonical || auth.origin.ends_with('/') {
+        return Err(invalid_origin());
     }
     Ok(())
+}
+
+fn invalid_origin() -> ConfigError {
+    ConfigError::Invalid {
+        field: "auth.origin",
+        message: "must be `https://host[:port]` without credentials, path, query, \
+                  fragment or trailing slash"
+            .to_owned(),
+    }
 }
 
 fn load_credentials(path: &Path) -> Result<BTreeMap<String, String>, ConfigError> {

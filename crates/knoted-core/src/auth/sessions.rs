@@ -13,12 +13,18 @@
 //!
 //! Transport details (cookie attributes, CSRF headers) live in
 //! `knoted_api::middleware::auth`; this module is persistence only.
+//!
+//! Every function takes a `&mut PgConnection` instead of a pool, so the caller
+//! owns the transaction boundary. T14 creates the session inside the ceremony's
+//! transaction (Passkey + session commit or roll back together) and T16 replaces a
+//! credential and revokes the old sessions in one transaction; neither needs a
+//! second, nesting transaction from here.
 
 use std::cmp::min;
 use std::fmt;
 
 use chrono::{DateTime, Duration, Utc};
-use sqlx::PgPool;
+use sqlx::PgConnection;
 use uuid::Uuid;
 
 use crate::db::DbError;
@@ -35,6 +41,10 @@ pub const CSRF_HEADER: &str = "x-csrf-token";
 pub const SESSION_IDLE_TTL: Duration = Duration::days(7);
 /// Absolute lifetime: a session never outlives this, however actively used.
 pub const SESSION_ABSOLUTE_TTL: Duration = Duration::days(30);
+/// Rows returned by [`list_sessions`] when the caller passes no limit.
+pub const SESSION_PAGE_DEFAULT_LIMIT: u32 = 50;
+/// Upper bound for [`list_sessions`], so a listing can never scan the table.
+pub const SESSION_PAGE_MAX_LIMIT: u32 = 100;
 
 /// A stored session.
 ///
@@ -149,12 +159,20 @@ fn row_to_session(row: SessionRow) -> Session {
 
 /// Creates a session for `user_id`.
 ///
-/// `verified` records a Passkey verification in the same transaction-free insert
-/// (T14 passes `true` after a login ceremony), which is what lets T16 require a
-/// recent verification before sensitive operations. Only digests are stored; the
+/// Every write in this module takes a `&mut PgConnection` rather than a pool, so
+/// the caller chooses the transaction boundary. T14 finishes a ceremony as one
+/// transaction — consume the ceremony, consume the credential token, insert the
+/// Passkey, create the session, revoke the replaced sessions — and T16 does the
+/// same for recovery. Pass the transaction itself (`&mut tx`) or a pooled
+/// connection (`&mut *pool.acquire().await?`); never open a second transaction
+/// inside these functions.
+///
+/// `verified` records a Passkey verification in the same insert (T14 passes
+/// `true` after a login ceremony), which is what lets T16 require a recent
+/// verification before sensitive operations. Only digests are stored; the
 /// plaintext tokens exist in the returned [`CreatedSession`] and nowhere else.
 pub async fn create_session(
-    pool: &PgPool,
+    executor: &mut PgConnection,
     user_id: Uuid,
     now: DateTime<Utc>,
     user_agent: Option<&str>,
@@ -181,7 +199,7 @@ pub async fn create_session(
     .bind(absolute_expires_at)
     .bind(last_verified_at)
     .bind(user_agent)
-    .execute(pool)
+    .execute(&mut *executor)
     .await?;
 
     tracing::info!(
@@ -218,7 +236,7 @@ pub async fn create_session(
 /// written back; the renewal is capped so activity cannot extend the absolute
 /// limit.
 pub async fn resolve_session(
-    pool: &PgPool,
+    executor: &mut PgConnection,
     token: &str,
     now: DateTime<Utc>,
 ) -> Result<Option<Session>, DbError> {
@@ -227,7 +245,7 @@ pub async fn resolve_session(
         "SELECT {SESSION_COLUMNS} FROM sessions WHERE token_hash = $1"
     ))
     .bind(hash.as_slice())
-    .fetch_optional(pool)
+    .fetch_optional(&mut *executor)
     .await?;
 
     let Some(row) = row else {
@@ -255,7 +273,7 @@ pub async fn resolve_session(
         .bind(session.id)
         .bind(now)
         .bind(idle_expires_at)
-        .execute(pool)
+        .execute(&mut *executor)
         .await?;
     session.last_seen_at = now;
     session.idle_expires_at = idle_expires_at;
@@ -277,53 +295,15 @@ fn rejection_reason(session: &Session, now: DateTime<Utc>) -> Option<&'static st
     None
 }
 
-/// Revokes one session; returns whether it was live before this call.
+/// Revokes one session owned by `user_id`; returns whether it was live.
 ///
-/// Idempotent: logging out twice is not an error, the second call reports
-/// `false`. Other sessions of the same account, including other devices, are
-/// untouched.
-pub async fn logout(pool: &PgPool, session_id: Uuid, now: DateTime<Utc>) -> Result<bool, DbError> {
-    let revoked: Option<(Uuid,)> = sqlx::query_as(
-        "UPDATE sessions SET revoked_at = $2 WHERE id = $1 AND revoked_at IS NULL RETURNING id",
-    )
-    .bind(session_id)
-    .bind(now)
-    .fetch_optional(pool)
-    .await?;
-
-    if revoked.is_some() {
-        tracing::info!(
-            target: "knoted_core::auth",
-            session_id = %session_id,
-            "revoked session"
-        );
-    }
-    Ok(revoked.is_some())
-}
-
-/// Lists the account's live sessions, newest first.
-///
-/// `current` is not decided here: the caller marks the requesting session so
-/// the browser can tell it apart from its other devices.
-pub async fn list_sessions(pool: &PgPool, user_id: Uuid) -> Result<Vec<Session>, DbError> {
-    let rows: Vec<SessionRow> = sqlx::query_as(&format!(
-        "SELECT {SESSION_COLUMNS} FROM sessions \
-         WHERE user_id = $1 AND revoked_at IS NULL \
-         ORDER BY created_at DESC, id"
-    ))
-    .bind(user_id)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows.into_iter().map(row_to_session).collect())
-}
-
-/// Revokes a session belonging to `user_id`; returns whether it changed.
-///
-/// The account id is part of the predicate, so one account cannot revoke
-/// another's session by guessing its id. Already revoked sessions are left as
-/// they are, which makes a repeated delete a no-op instead of an error.
-pub async fn revoke_session(
-    pool: &PgPool,
+/// The account id is part of the predicate, exactly like [`revoke_session`], so a
+/// session id from another account (or from a tampered request) cannot revoke
+/// someone else's session. Idempotent: logging out twice is not an error, the
+/// second call reports `false`. Other sessions of the same account, including
+/// other devices, are untouched.
+pub async fn logout(
+    executor: &mut PgConnection,
     user_id: Uuid,
     session_id: Uuid,
     now: DateTime<Utc>,
@@ -335,7 +315,7 @@ pub async fn revoke_session(
     .bind(session_id)
     .bind(user_id)
     .bind(now)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *executor)
     .await?;
 
     if revoked.is_some() {
@@ -349,29 +329,129 @@ pub async fn revoke_session(
     Ok(revoked.is_some())
 }
 
-/// Records a Passkey verification on the session.
+/// Lists the account's live sessions, newest first.
 ///
+/// Expired sessions (idle or absolute, judged against `now`) and revoked ones are
+/// omitted, so the result is exactly what the browser may still use. `limit` is
+/// clamped to `1..=SESSION_PAGE_MAX_LIMIT` and defaults to
+/// `SESSION_PAGE_DEFAULT_LIMIT`; the ordering is total (`created_at DESC, id
+/// DESC`), which is the stable order a keyset cursor needs.
+///
+/// The contract's `next_cursor` encoding is a DTO concern and belongs to the
+/// route layer (T14); this function guarantees the bounded, deterministically
+/// ordered page that cursor is derived from.
+pub async fn list_sessions(
+    executor: &mut PgConnection,
+    user_id: Uuid,
+    now: DateTime<Utc>,
+    limit: Option<u32>,
+) -> Result<Vec<Session>, DbError> {
+    let limit = i64::from(
+        limit
+            .unwrap_or(SESSION_PAGE_DEFAULT_LIMIT)
+            .clamp(1, SESSION_PAGE_MAX_LIMIT),
+    );
+    let rows: Vec<SessionRow> = sqlx::query_as(&format!(
+        "SELECT {SESSION_COLUMNS} FROM sessions \
+         WHERE user_id = $1 AND revoked_at IS NULL \
+           AND idle_expires_at > $2 AND absolute_expires_at > $2 \
+         ORDER BY created_at DESC, id DESC LIMIT $3"
+    ))
+    .bind(user_id)
+    .bind(now)
+    .bind(limit)
+    .fetch_all(&mut *executor)
+    .await?;
+    Ok(rows.into_iter().map(row_to_session).collect())
+}
+
+/// Revokes a session belonging to `user_id`; returns whether it changed.
+///
+/// The account id is part of the predicate, so one account cannot revoke
+/// another's session by guessing its id. Already revoked sessions are left as
+/// they are, which makes a repeated delete a no-op instead of an error.
+pub async fn revoke_session(
+    executor: &mut PgConnection,
+    user_id: Uuid,
+    session_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<bool, DbError> {
+    let revoked: Option<(Uuid,)> = sqlx::query_as(
+        "UPDATE sessions SET revoked_at = $3 \
+         WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL RETURNING id",
+    )
+    .bind(session_id)
+    .bind(user_id)
+    .bind(now)
+    .fetch_optional(&mut *executor)
+    .await?;
+
+    if revoked.is_some() {
+        tracing::info!(
+            target: "knoted_core::auth",
+            session_id = %session_id,
+            user_id = %user_id,
+            "revoked session"
+        );
+    }
+    Ok(revoked.is_some())
+}
+
+/// Revokes every live session of `user_id`; returns how many changed.
+///
+/// This is the recovery primitive: T16 replaces a lost Passkey and must end every
+/// existing session at the same moment, inside the same transaction that installs
+/// the new credential. Idempotent: a second call changes nothing and reports `0`.
+pub async fn revoke_all_sessions_for_user(
+    executor: &mut PgConnection,
+    user_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<u64, DbError> {
+    let revoked = sqlx::query(
+        "UPDATE sessions SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(user_id)
+    .bind(now)
+    .execute(&mut *executor)
+    .await?
+    .rows_affected();
+
+    tracing::info!(
+        target: "knoted_core::auth",
+        user_id = %user_id,
+        revoked,
+        "revoked every session of the account"
+    );
+    Ok(revoked)
+}
+
+/// Records a Passkey verification on a live session.
+///
+/// Returns `false` when the session is missing or already revoked, so the caller
+/// can tell that the verification was not recorded instead of assuming success.
 /// T14 calls this after a successful login/add-Passkey ceremony; T16 then gates
 /// credential deletion and recovery on [`recently_verified`].
 pub async fn mark_verified(
-    pool: &PgPool,
+    executor: &mut PgConnection,
     session_id: Uuid,
     now: DateTime<Utc>,
-) -> Result<(), DbError> {
-    let updated = sqlx::query("UPDATE sessions SET last_verified_at = $2 WHERE id = $1")
-        .bind(session_id)
-        .bind(now)
-        .execute(pool)
-        .await?
-        .rows_affected();
+) -> Result<bool, DbError> {
+    let updated = sqlx::query(
+        "UPDATE sessions SET last_verified_at = $2 WHERE id = $1 AND revoked_at IS NULL",
+    )
+    .bind(session_id)
+    .bind(now)
+    .execute(&mut *executor)
+    .await?
+    .rows_affected();
     if updated == 0 {
         tracing::warn!(
             target: "knoted_core::auth",
             session_id = %session_id,
-            "cannot mark a missing session as verified"
+            "cannot mark a missing or revoked session as verified"
         );
     }
-    Ok(())
+    Ok(updated > 0)
 }
 
 /// Whether the session verified a Passkey within `window` before `now`.
