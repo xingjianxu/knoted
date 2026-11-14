@@ -15,6 +15,10 @@ dependencies = [
     "onnxruntime==1.32.0",
     "pydantic>=2.9",
     "rapidocr==3.10.0",
+    # T11 dense embedding stack: pinned in embedding/LOCK.md. safetensors is the
+    # snapshot's weight format (the upstream bin was converted losslessly).
+    "safetensors==0.8.0",
+    "sentence-transformers==6.3.0",
     "torch==2.15.0",
     "transformers==5.23.0",
     "uvicorn>=0.32",

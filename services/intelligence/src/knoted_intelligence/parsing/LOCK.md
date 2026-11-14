@@ -68,6 +68,7 @@ fixture 的生成脚本里作为字体示例。
 | OCR 语言 | `lang=["ch"]`（PP-OCRv6 识别器中英共用；fixture 的中英混排是证据） |
 | OCR 模型规模 | `small` |
 | OCR 模式 | `OcrMode.FULL_PAGE`（无文本层的图片/扫描页整页识别） |
+| 推理设备 | `KNOTED_INTELLIGENCE_DOCLING_DEVICE`，**默认 `cpu`**：已装 `onnxruntime` 是 CPU 轮子，且 Docling 自己的默认 `auto` 会在 torch 看到 GPU 时选 `cuda:0`——部署机上 index 0 是 Strata 独占卡（实测 23.04 GiB 已用，曾直接 OOM）。只接受 `cpu`/`cuda`/`cuda:N`，拒绝 `auto`；`cuda:N` 的 N 是进程内 `CUDA_VISIBLE_DEVICES` 的序号，卡由 host 的 UUID 决定 |
 | 版面模型 | layout-heron transformers 引擎（本地 `model.safetensors`） |
 | 页面栅格比例 | `DOCLING_IMAGES_SCALE=1.0`（72 dpi）；PDF 像素检查按此比例计算 |
 | 表格结构 | TableFormer **fast**（`TableFormerMode.FAST`，显式设置；docling 2.150.1 的 pipeline 默认已改为 accurate，本卡不用） |
@@ -105,7 +106,7 @@ parse-v1+docling-2.150.1+layout-8f39ad3c0b4c58e9c2d2c84a38465abf757272d8+tablefo
 
 `input_missing`、`empty_input`、`input_too_large`、`image_too_large`、
 `too_many_pages`、`unsupported_format`、`corrupt_input`、`models_missing`、
-`output_too_large`。
+`output_too_large`、`invalid_device`。
 
 消息**以**锁版组合摘要**开头**（`[locked: …] code: detail`），因此错误本身就是选型报告，
 不会变成“换一个模型试试”，也不会被日志/记录的头截断砍掉版本与 revision：
@@ -154,15 +155,23 @@ Nix store。
 - `t10_4b`：128 MiB 产物上限；用 32 字节的合成上限走真实 `_compute` 路径得到
   `output_too_large`。
 - `t10_1b`：在独立子进程中阻断 socket 并解析 fixture，验证执行子进程口径的离线环境。
+- `t10_5`：默认设备为 `cpu`；`_converter(artifacts, device)` 的
+  `PdfPipelineOptions.accelerator_options.device` 与配置值一致（`cpu` 与 `cuda:0` 都实测
+  透传）；`auto`/`0`/`1`/UUID/`cuda:x` 均以 `invalid_device` 拒绝。在 CUDA 可见
+  （`LD_LIBRARY_PATH=/run/opengl-driver/lib`，不设 `KNOTED_EMBED_GPU_UUID`）时用默认 CPU
+  解析 fixture 成功，这是 Strata 卡 OOM 的回归用例。
 - host 证据（安装、离线 `unshare -rn` 转换、逐 artifact 加载）：见 `/etc/nixos`
   `features/server/knoted.nix` 与 T10-host 交付的部署证据。
 
 ## 9. 已知边界
 
-- 本卡只验证 CPU 路径；`onnxruntime` 为 CPU 轮子，GPU OCR（index 1）留给部署任务。
+- 默认 CPU 路径；`onnxruntime` 为 CPU 轮子，GPU OCR 必须显式设置
+  `KNOTED_INTELLIGENCE_DOCLING_DEVICE=cuda:N`，且 N 只能指向 host 分配给 Python 侧的那张卡。
 - DOCX/XLSX/PPTX 不在本卡范围（按 `unsupported_format` 明确失败），由 T46/T47/T48 承接。
 - `options_revision` 的兼容策略：服务端**接受并记录**请求值，同时在
   `parser.options_revision` 写入锁定值；下游必须比较两者，不一致时按新 revision 重新
   解析，不能把旧产物当成当前解析结果。
 - 版面 onnx 变体已下载但未启用；启用需要改组件选择并产生新的 `OPTIONS_REVISION`。
-- 不改 T09 的账本/状态机语义；`kind=embed` 仍是 T09 占位，等 T11。
+- 不改 T09 的账本/状态机语义；`kind=embed` 由 T11 的
+  `embedding/LOCK.md` 承载。解析与嵌入共用 `KNOTED_INTELLIGENCE_GPU_SLOTS`（默认 1），
+  两类执行不会同时驻留模型。

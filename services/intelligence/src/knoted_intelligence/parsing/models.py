@@ -21,6 +21,7 @@ locked-combination summary.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 #: Environment variable an operator uses to relocate the model tree.
@@ -30,6 +31,19 @@ DEFAULT_MODELS_DIR = Path("/data/knoted-dev/service/models")
 #: Model tree layout: ``<models>/ocr/docling`` is Docling's artifacts root.
 OCR_DIRNAME = "ocr"
 DOCLING_DIRNAME = "docling"
+
+# -- inference device --------------------------------------------------------
+
+#: Docling's inference device, explicitly configured. The default is ``cpu``:
+#: the installed ``onnxruntime`` is the CPU wheel, and Docling's own default
+#: ``auto`` picks ``cuda:0`` whenever torch can see a GPU. On the deployment
+#: host index 0 is Strata's card, so an implicit choice either OOMs or steals
+#: its memory. A GPU must be granted by the host (UUID at the process
+#: boundary); nothing here selects a card by index default.
+DOCLING_DEVICE_ENV = "KNOTED_INTELLIGENCE_DOCLING_DEVICE"
+DEFAULT_DOCLING_DEVICE = "cpu"
+#: Only an explicit ``cpu``/``cuda``/``cuda:N`` is accepted; ``auto`` is refused.
+_DOCLING_DEVICE_PATTERN = re.compile(r"^cuda(?::\d+)?$")
 
 # -- pinned component versions (host-verified) -------------------------------
 
@@ -202,10 +216,34 @@ def parser_summary() -> dict[str, str]:
         "rapidocr_models": f"{RAPIDOCR_REPO}@{RAPIDOCR_REVISION}",
         "ocr": f"{RAPIDOCR_BACKEND}/{RAPIDOCR_MODEL_SIZE}/{'/'.join(RAPIDOCR_LANG)}",
         "onnxruntime": ONNXRUNTIME_VERSION,
+        "docling_device": docling_device(),
         "torch": TORCH_VERSION,
         "transformers": TRANSFORMERS_VERSION,
         "options_revision": OPTIONS_REVISION,
     }
+
+
+def docling_device() -> str:
+    """The explicitly configured Docling device (``cpu`` unless overridden).
+
+    ``auto`` is refused on purpose: with ``LD_LIBRARY_PATH`` set torch can see
+    every card, and Docling would then pick index 0 — Strata's card. A GPU is
+    only used when an operator names it (``KNOTED_INTELLIGENCE_DOCLING_DEVICE``
+    = ``cuda`` or ``cuda:N``, where ``N`` is the index **inside** the process's
+    ``CUDA_VISIBLE_DEVICES``).
+    """
+
+    raw = os.environ.get(DOCLING_DEVICE_ENV, "").strip()
+    if not raw:
+        return DEFAULT_DOCLING_DEVICE
+    if raw == "cpu" or _DOCLING_DEVICE_PATTERN.fullmatch(raw):
+        return raw
+    raise ParseError(
+        "invalid_device",
+        f"{DOCLING_DEVICE_ENV} must be 'cpu', 'cuda' or 'cuda:N' with an explicit "
+        f"device, got {raw!r}; automatic selection is refused because it picks "
+        f"card index 0",
+    )
 
 
 def default_models_dir() -> Path:
