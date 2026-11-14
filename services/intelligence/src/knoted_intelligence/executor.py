@@ -10,16 +10,15 @@ HTTP timeout or a dropped request never releases a slot on its own.
 The compute itself lives in :func:`child_main`, started as
 ``python -c <bootstrap> <json spec>``. Keeping the child entry point in this one
 module means the parent and the child share the handler code and the artifact
-layout, and the placeholder handlers can be replaced by the real parse/embed
-backends without touching the protocol.
+layout; the parse and embed handlers are the revision-locked backends from
+:mod:`parsing` and :mod:`embedding.bge`, and replacing either does not touch the
+protocol.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
-import math
 import os
 import signal
 import subprocess
@@ -34,6 +33,7 @@ from typing import Any
 
 from . import staging
 from .config import Settings
+from .embedding import bge
 from .ledger import (
     IN_FLIGHT_STATES,
     TERMINAL_STATES,
@@ -673,8 +673,10 @@ def _compute(spec: dict[str, Any]) -> dict[str, Any]:
     """Parse and embed handlers.
 
     ``parse`` runs the locked Docling/RapidOCR adapter (:mod:`parsing`).
-    ``embed`` is still a T09 placeholder until T11; the artifact layout and the
-    metadata below are the part the protocol depends on.
+    ``embed`` runs the locked dense BGE-M3 adapter (:mod:`embedding.bge`) on the
+    staged input object, which is UTF-8 text with one text per non-blank line.
+    The artifact layouts and the metadata below are the part the protocol
+    depends on.
     """
 
     base: dict[str, Any] = {
@@ -717,32 +719,53 @@ def _compute(spec: dict[str, Any]) -> dict[str, Any]:
         parsing_models.check_artifact_size(len(json.dumps(payload, sort_keys=True).encode("utf-8")))
         return payload
     if spec["kind"] == "embed":
-        vector = _placeholder_vector(spec["input_sha256"])
+        texts = _read_embed_texts(Path(spec["input_path"]))
+        vectors = bge.embed_dense(texts)
         return {
             **base,
-            "model": "bge-m3",
-            "revision": "placeholder-t09",
-            "dims": len(vector),
-            "normalized": True,
-            "vector": vector,
+            "model": bge.MODEL_REPO,
+            "revision": bge.locked_model_revision(),
+            "dims": bge.HIDDEN_SIZE,
+            "normalized": bge.NORMALIZE_EMBEDDINGS,
+            "dtype": bge.OUTPUT_DTYPE,
+            "device": bge.loaded_device(),
+            "lock": bge.lock_summary(),
+            "text_count": len(texts),
+            "vectors": vectors,
         }
     raise ValueError(f"unsupported execution kind {spec['kind']!r}")
 
 
-def _placeholder_vector(seed_hex: str, dims: int = 1024) -> list[float]:
-    """Deterministic unit vector so T09 can verify an artifact end to end."""
+def _read_embed_texts(path: Path) -> list[str]:
+    """Reads the embed input object: UTF-8 text, one text per non-blank line.
 
-    values: list[float] = []
-    block = bytes.fromhex(seed_hex)
-    while len(values) < dims:
-        block = hashlib.sha256(block).digest()
-        values.extend(
-            int.from_bytes(block[offset : offset + 4], "big") / 2**32 - 0.5
-            for offset in range(0, len(block), 4)
+    T11 defines this provisional wire format; the batch/chunk adapter (T58)
+    owns the final one. Blank lines are separators, surrounding whitespace is
+    trimmed, and an empty object is a stable ``empty_input`` failure instead of
+    an execution that succeeds with zero vectors.
+    """
+
+    size = path.stat().st_size
+    if size > bge.MAX_INPUT_BYTES:
+        raise bge.EmbeddingError(
+            "input_too_large",
+            f"embed input is {size} bytes; the limit is {bge.MAX_INPUT_BYTES} bytes",
         )
-    values = values[:dims]
-    norm = math.sqrt(sum(value * value for value in values)) or 1.0
-    return [round(value / norm, 8) for value in values]
+    try:
+        raw = path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise bge.EmbeddingError("invalid_input", "embed input is not valid UTF-8 text") from exc
+    texts = [line.strip() for line in raw.splitlines()]
+    texts = [line for line in texts if line]
+    if not texts:
+        raise bge.EmbeddingError("empty_input", "embed input contains no non-blank lines")
+    if len(texts) > bge.MAX_BATCH_SIZE:
+        raise bge.EmbeddingError(
+            "batch_too_large",
+            f"embed input has {len(texts)} lines; the limit for one execution is "
+            f"{bge.MAX_BATCH_SIZE}",
+        )
+    return texts
 
 
 def _public_error_message(exc: BaseException) -> str:

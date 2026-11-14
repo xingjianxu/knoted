@@ -22,8 +22,10 @@ under `/data/knoted-dev/service`:
 | `KNOTED_INTELLIGENCE_HOST` | `127.0.0.1` | Bind address. |
 | `KNOTED_INTELLIGENCE_PORT` | `15603` | Bind port. |
 | `KNOTED_INTELLIGENCE_CANCEL_GRACE_SECONDS` | `5` | How long a cancellation lets a child honour SIGTERM before its process group gets SIGKILL. |
-| `KNOTED_INTELLIGENCE_CHILD_HOLD_MS` | `0` | Delay the placeholder child before it computes; it exists so cancellation tests observe a live process group. |
-| `KNOTED_INTELLIGENCE_CHILD_IGNORE_SIGTERM` | `0` | Makes the placeholder child ignore SIGTERM; it exists so the SIGKILL escalation is tested against a genuinely unresponsive child. |
+| `KNOTED_INTELLIGENCE_CHILD_HOLD_MS` | `0` | Delay the child before it computes; it exists so cancellation tests observe a live process group. |
+| `KNOTED_INTELLIGENCE_CHILD_IGNORE_SIGTERM` | `0` | Makes the child ignore SIGTERM; it exists so the SIGKILL escalation is tested against a genuinely unresponsive child. |
+| `KNOTED_INTELLIGENCE_MODELS_DIR` | `/data/knoted-dev/service/models` | Provisioned model tree; `ocr/docling` is `parsing/LOCK.md`, `bge-m3` is `embedding/LOCK.md`. |
+| `KNOTED_EMBED_GPU_UUID` | unset (CPU) | `nvidia-smi -L` UUID copied to `CUDA_VISIBLE_DEVICES` before torch loads; there is no default index. |
 
 Execution semantics, all verified by `tests/test_t09.py`:
 
@@ -50,6 +52,8 @@ A cancel request may spend the whole SIGTERM grace period plus the SIGKILL
 budget before it answers, so the Rust client allows 30 seconds for it and treats
 a timeout as *unconfirmed*, never as cancelled.
 
-The compute handlers are placeholders (`parse` returns the extracted text
-blocks, `embed` a deterministic normalised 1024-dimension vector) so the T10/T11
-backends can replace them without touching the protocol.
+The compute handlers run the revision-locked backends: `parse` uses Docling and
+RapidOCR (`src/knoted_intelligence/parsing/LOCK.md`), `embed` uses the local
+dense BGE-M3 snapshot (`src/knoted_intelligence/embedding/LOCK.md`) and reads
+the staged input as UTF-8 text with one text per non-blank line. Both reject
+invalid output with a stable error code instead of publishing a partial result.

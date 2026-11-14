@@ -60,11 +60,11 @@ class Settings:
     #: How long a cancellation waits for a child to honour SIGTERM before the
     #: process group is killed outright.
     cancel_grace_seconds: float = DEFAULT_CANCEL_GRACE_SECONDS
-    #: Test hook: milliseconds the placeholder child waits before it computes.
+    #: Test hook: milliseconds the child waits before it computes.
     #: It does not change the state machine, only how long a real child process
     #: stays alive, which is what cancellation tests need to observe.
     child_hold_ms: int = 0
-    #: Test hook: makes the placeholder child ignore SIGTERM, so the supervisor's
+    #: Test hook: makes the child ignore SIGTERM, so the supervisor's
     #: SIGKILL escalation is exercised against a genuinely unresponsive child.
     child_ignore_sigterm: bool = False
 

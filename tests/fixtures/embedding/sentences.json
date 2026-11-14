@@ -1,0 +1,26 @@
+{
+  "schema": "knoted-embedding-fixture/1",
+  "description": "Small Chinese/English sample for the dense BGE-M3 smoke test. Semantics only: no throughput, latency or recall claims.",
+  "texts": [
+    {
+      "id": "zh-notes",
+      "language": "zh",
+      "text": "Knoted 的笔记会被切分成小段并生成向量。"
+    },
+    {
+      "id": "zh-search",
+      "language": "zh",
+      "text": "知识库里的笔记先分块，再嵌入为检索用的向量。"
+    },
+    {
+      "id": "en-search",
+      "language": "en",
+      "text": "Knoted stores notes as chunks with dense embeddings for retrieval."
+    },
+    {
+      "id": "mixed-query",
+      "language": "mixed",
+      "text": "混合语言 mixed-language 查询也使用同一条 dense 向量。"
+    }
+  ]
+}
