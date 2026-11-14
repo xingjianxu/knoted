@@ -11,7 +11,7 @@ T01/T02/T09建立以下命令；建立前不得声称可执行。每个任务卡
 - Rust：`cargo test --workspace tXX_`，按任务实际ID小写替换；输出必须至少1测试通过。最终 `cargo fmt --check`、`cargo test --workspace --locked`、`cargo clippy --workspace --all-targets -- -D warnings`。
 - Web/UI：`pnpm exec vitest run tests/tasks/tXX.test.tsx`（对应包目录）；浏览器 `pnpm exec playwright test tests/e2e/tXX.spec.ts`（仓库根）。任务明确哪一入口，不把虚拟WebAuthn当真实设备验收。
 - Python：在services/intelligence运行 `uv run pytest tests/test_tXX.py -q`；静态 `uv run ruff check .`。
-- 契约：T03提供 `pnpm api:check`，验证OpenAPI及样例；T04提供 `pnpm api:generate` 与 `pnpm api:verify`（生成后 `git diff --exit-code -- packages/api-client/src/generated`，用于检查已提交生成文件是否过期，必须从干净工作区运行）。
+- 契约：T03提供 `pnpm api:check`，验证OpenAPI及样例；T04提供 `pnpm api:generate` 与 `pnpm api:verify`（生成后要求 `git status --porcelain -- packages/api-client/src/generated` 为空，既检查过期内容也检查新增未跟踪文件，必须从干净工作区运行）。
 - 部署：host子任务在独立主机工作区执行nix eval/build，测试服务健康和定向功能；实际命令与固定ref写入该卡证据。
 
 根pnpm脚本聚合typecheck/lint/test/build；T02建立Vitest、Testing Library、Playwright基础，Python T09建立pytest入口。集成检查按受影响范围运行，不重复运行无关测试。
