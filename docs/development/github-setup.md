@@ -35,7 +35,7 @@ git push -u origin master
 ```
 
 - 空仓库上**第一个被推送的分支自动成为默认分支**，不需要 `gh repo edit --default-branch`；实测 `defaultBranchRef.name = master`。
-- **实测差异：** REST API `repos/{owner}/{repo}` 在空仓库会把 `default_branch` 返回为 `"master"`（占位值），即使该分支不存在。判断"是否已有主线"必须用 GraphQL `defaultBranchRef` 或 `git ls-remote`，不能依据 REST 字段。
+- **易误判点：** 首次推送**之前**观察到，REST `repos/{owner}/{repo}` 的 `default_branch` **字段**在空仓库返回 `"master"` 占位值，而同时 GraphQL `defaultBranchRef` 为空。该观察发生在首推前的窗口内，现在无法只读复现。结论只针对这一个字段：判断主线请用 GraphQL `defaultBranchRef`、`git ls-remote --heads` 或 `GET /repos/{owner}/{repo}/branches`。
 
 ### 历史重建说明（必须保留的事实）
 
@@ -53,6 +53,8 @@ git push -u origin master
 ## 3. 标签
 
 `docs/development/github-labels.json` 的 19 项中，`bug`、`enhancement` 已由 GitHub 默认存在且配色一致，未覆盖；实际新增 17 项：`feature, tech-debt, refactor, performance, security, agent-found, human-reported, needs-triage, needs-info, agent-ready, in-progress, blocked, human-required, P0, P1, P2, P3`。
+
+在仓库根执行下列脚本（它读取仓库内相对路径，移植时先核对 `repo` 与标签数据）：
 
 ```python
 import json
@@ -105,27 +107,31 @@ for label in labels:
 - **内置 Status 的选项可以脚本化改写**，无需在 UI 手工配置。`gh project` 只有 `field-create` / `field-delete` / `field-list`，没有 `field-edit`，必须走 GraphQL：
 
 ```bash
-# 先读回既有 fieldId、option id；再整表回写，仅新选项省略 id
+# 先读回既有 fieldId、option id 与 description；再整表回写，仅新选项省略 id
 gh api graphql -f query='
 query { viewer { projectV2(number: 1) {
-  field(name: "Status") { ... on ProjectV2SingleSelectField { id options { id name } } } } } }'
+  field(name: "Status") {
+    ... on ProjectV2SingleSelectField { id options { id name color description } } } } } }'
 
+# 实际执行的 mutation 结构；此处把真实 fieldId/option id 换成占位符
 gh api graphql -f query='
 mutation {
   updateProjectV2Field(input: {
     fieldId: "<STATUS_FIELD_ID>"
     singleSelectOptions: [
-      { id: "<EXISTING_ID>", name: "Backlog", color: GRAY }
-      { name: "Ready", color: BLUE }
-      { id: "<EXISTING_ID>", name: "In Progress", color: YELLOW }
-      { name: "Review", color: ORANGE }
-      { id: "<EXISTING_ID>", name: "Done", color: PURPLE }
+      { id: "<EXISTING_ID>" name: "Backlog" color: GRAY description: "待人工分诊与批准" }
+      { name: "Ready" color: BLUE description: "人工已批准，可交由 Agent 实施" }
+      { id: "<EXISTING_ID>" name: "In Progress" color: YELLOW description: "实施或审查中" }
+      { name: "Review" color: ORANGE description: "已提 PR，等待审查与合并" }
+      { id: "<EXISTING_ID>" name: "Done" color: PURPLE description: "已合并到默认分支" }
     ]
   }) { projectV2Field { ... on ProjectV2SingleSelectField { id name options { id name } } } }
 }'
 ```
 
-`singleSelectOptions` 是**覆盖式**写入：必须回写完整列表，并保留既有 option id，否则条目的已有取值会丢失。
+`ProjectV2SingleSelectFieldOptionInput` 的 `name`、`color`、`description` 都是**非空无默认值**字段：每个选项都必须写 `description`（可写空字符串清空说明），缺少任一字段会被 GraphQL 直接拒绝。
+
+`singleSelectOptions` 是**覆盖式**写入 id/name/color/description 四项：必须回写完整列表；保留既有 option id 才能保住条目的已选值；想保留既有说明就必须把原 description 一并回写，省略或留空会静默清空。
 
 - Iteration 未启用；需要排期时在看板设置中配置。Projects 自动化（自动加入看板、写字段）未建立执行引擎，`gh project item-add` / `item-edit` 属写操作，需单独授权。
 
@@ -136,6 +142,8 @@ mutation {
 ```bash
 gh api -X POST repos/xingjianxu/knoted/rulesets --input ruleset.json
 ```
+
+下面是创建时提交的请求体（最小必需集合，未列出的属性取服务端默认值）：
 
 ```json
 {
@@ -160,6 +168,8 @@ gh api -X POST repos/xingjianxu/knoted/rulesets --input ruleset.json
 }
 ```
 
+读回（`GET /repos/{owner}/{repo}/rulesets/{id}`）后可见服务端补全的默认值：`bypass_actors: []`、`current_user_can_bypass: never`、`do_not_enforce_on_create: false`、`required_reviewers: []`、`require_extra_approval_for_unattributed_changes: true`。也就是说本仓库 owner 也没有绕过通道。
+
 - **单维护者约束：** `required_approving_review_count` ≥ 1 时唯一账号无法自我批准，主线会被锁死。当前取 0，配合必需 CI 与禁止强推/删除；具备第二个审查者后再提高，由人工决定。
 - **无 bypass 列表**：规则对仓库 owner 同样生效，`git push` 直推 `master` 会被拒绝，必须走 PR 且检查通过。
 - 合并策略：`allow_squash_merge=false`、`allow_rebase_merge=false`、`delete_branch_on_merge=true`，即仅普通 merge commit。
@@ -171,6 +181,7 @@ gh api -X POST repos/xingjianxu/knoted/rulesets --input ruleset.json
 - Issue Forms 选择页渲染的人工确认（提交一份真实表单 Issue）。
 - 是否建立 Projects 自动化，以及 Iteration 排期。
 - 修订仍引用旧提交哈希的 `docs/development/initialization-report.md`、`docs/plans/2026-11-14-agent-workflow.md`。
+- 修订把本文称为"待授权配置方案"的入向描述：`README.md`、`AGENTS.md`（第 12 条权限段落）与 `docs/development/initialization-report.md`。这属于规则/入口文件的措辞变更，需人工确认后另行处理，本次未改动。
 
 ## 8. 复核命令（只读）
 
