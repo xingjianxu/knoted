@@ -352,12 +352,14 @@ async fn t05_4_refuses_non_test_databases() {
     );
     assert_eq!(
         error.to_string(),
-        "refusing to use `knoted_dev` as a test database: name must contain `test`"
+        "refusing to use `knoted_dev` as a test database: name must end with `_test`"
     );
 
     for url in [
         "postgres:///knoted_prod?host=/run/postgresql",
         "postgres://knoted@127.0.0.1:5432/knoted",
+        "postgres:///knoted_latest?host=/run/postgresql",
+        "postgres:///mytest?host=/run/postgresql",
     ] {
         assert!(
             matches!(

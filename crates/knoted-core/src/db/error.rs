@@ -9,6 +9,6 @@ pub enum DbError {
     Migrate(#[from] sqlx::migrate::MigrateError),
     #[error("unknown source identity type `{0}`")]
     UnknownSourceType(String),
-    #[error("refusing to use `{0}` as a test database: name must contain `test`")]
+    #[error("refusing to use `{0}` as a test database: name must end with `_test`")]
     UnsafeTestTarget(String),
 }
