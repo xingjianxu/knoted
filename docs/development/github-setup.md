@@ -26,7 +26,7 @@ gh auth status   # 实测 scopes: gist, project, read:org, repo, workflow
 
 - 缺 scope 时 `gh project list` 直接失败：`missing required scopes [read:project]`。
 - Git 推送凭据与 gh token **互相独立**（本机 `credential.helper = store --file ${XDG_RUNTIME_DIR}/agenix/git-creds`）；刷新 gh scope 不影响推送凭据，反之亦然。
-- scope 具备不等于授权边界：常规远程写操作按默认授权执行，仓库级设置和规则 12 的边界仍需人工确认。
+- scope 具备不等于放开授权范围：常规远程写操作按默认授权执行，仓库级设置与规则 12 的边界仍需人工确认。
 
 ## 2. 首次推送与默认分支
 

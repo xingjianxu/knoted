@@ -1,6 +1,6 @@
 # Knoted v1 文档与实施任务入口
 
-> 产品实施采用实际可用的 executing-plans 或 subagent-driven-development。当前 T01—T05 已完成、审查并集成到本地主线；T06—T72 仍待领取。
+> 产品实施采用实际可用的 executing-plans 或 subagent-driven-development。当前 T01—T05 已完成、审查并集成到主线（远程 master 见下方「实施进展」）；T06—T72 仍待领取。
 
 ## 阅读顺序
 
@@ -14,7 +14,7 @@
 
 ## 约束与范围
 
-本文档交付的原授权是将会话计划落成Markdown，不执行T01—T72。此后用户单独授权实施 T01—T05（已完成并集成，见下方“实施进展”）；T06—T72 仍按任务卡逐张领取，重大架构实施前按仓库ADR/RFC规则确认，不把本计划误作Accepted ADR。Issue 与远程操作按根 AGENTS.md 规则 6 与「远程操作授权」执行：查重后可直接创建并领取任务 Issue，push 非默认分支、Issue、Labels、Projects、PR 创建与普通 merge 默认授权、不再逐次许可；仓库级设置与规则 12 的边界仍需人工确认，任务卡“远程权限”行与此一致。T01—T05 全部成果此后经分支 `feat/t01-t05-skeleton` 推送，以 PR [#4](https://github.com/xingjianxu/knoted/pull/4) 普通 merge 进入远程 master `795d624`。基线master `6c00202c1a389a4e0e0ae797744c2159654c761d`。
+本文档交付的原授权是将会话计划落成Markdown，不执行T01—T72。此后用户单独授权实施 T01—T05（已完成并集成，见下方“实施进展”）；T06—T72 仍按任务卡串行逐张领取（串行领取不等于逐次授权），重大架构实施前按仓库ADR/RFC规则确认，不把本计划误作Accepted ADR。Issue 与远程操作按根 AGENTS.md 规则 6 与「远程操作授权」执行：查重后可直接创建并领取任务 Issue，push 非默认分支、Issue、Labels、Projects、PR 创建与普通 merge 默认授权、不再逐次许可；仓库级设置与规则 12 的边界仍需人工确认，任务卡“远程权限”行与此一致。T01—T05 全部成果此后经分支 `feat/t01-t05-skeleton` 推送，以 PR [#4](https://github.com/xingjianxu/knoted/pull/4) 普通 merge 进入远程 master `795d624`。计划编写时点的基线master `6c00202c1a389a4e0e0ae797744c2159654c761d`，当前主线 SHA 见「实施进展」。
 
 默认串行按编号推进；直接依赖列用于定位输入，不等于自动授权并行。共享锁文件、API、迁移、主机配置由主Agent串行集成。T10/T11/T12/T21/T70有独立app/host子任务，必须分别领取。除这些明确跨仓库交接外，一张卡一个Agent、一个Worktree、一组可独立验收的结果。
 
