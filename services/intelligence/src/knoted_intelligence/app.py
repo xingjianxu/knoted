@@ -16,7 +16,7 @@ import logging
 import uuid
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
@@ -34,6 +34,9 @@ from .ledger import ExecutionRow, Ledger
 from .staging import StagingError, ensure_object_id
 
 logger = logging.getLogger(__name__)
+
+#: Widest `source_version` the worker's i64 can hold.
+I64_MAX = 2**63 - 1
 
 API_PREFIX = "/internal/v1"
 EXECUTIONS_PATH = f"{API_PREFIX}/executions"
@@ -81,9 +84,20 @@ class ExecutionRequest(BaseModel):
     # (reject `.`/`..` and any `..` substring) through the shared helper.
     input_object_id: str = Field(pattern=r"^[A-Za-z0-9._-]+$")
     input_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
-    source_version: int = Field(ge=0)
+    # The contract says `integer, minimum 0`; the worker stores it in an i64, so
+    # anything wider is refused here instead of overflowing later.
+    source_version: int = Field(ge=0, le=I64_MAX)
     deadline: datetime
     options_revision: str = Field(min_length=1)
+
+    @field_validator("deadline")
+    @classmethod
+    def _absolute_deadline(cls, value: datetime) -> datetime:
+        # A naive timestamp would silently be read as UTC and could expire a
+        # result early or late; the contract format is an absolute instant.
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("deadline must carry a timezone offset")
+        return value.astimezone(UTC)
 
     @field_validator("input_object_id")
     @classmethod
@@ -116,7 +130,9 @@ class ExecutionResult(BaseModel):
     sha256: str
     size: int = Field(ge=0)
     media_type: str = Field(min_length=1)
-    metadata: dict[str, str] | None = None
+    # The contract types this as `{[k: string]: string}`; it is always emitted
+    # as an object so a client never has to special-case a null.
+    metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class HealthState(StrEnum):
@@ -206,7 +222,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             sha256=row.result_sha256,
             size=row.result_size,
             media_type=row.result_media_type or "application/octet-stream",
-            metadata=row.result_metadata,
+            metadata=row.result_metadata or {},
         )
 
     @app.get(f"{API_PREFIX}/health", response_model=HealthStatus)
@@ -305,8 +321,14 @@ def _install_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     def unexpected_handler(_request: Request, exc: Exception) -> JSONResponse:
+        # The log keeps the detail; the body only names the failure class so a
+        # response can never leak a filesystem path or an environment value.
         logger.exception("unhandled intelligence service error")
-        return _error_response(500, "internal_error", str(exc) or exc.__class__.__name__)
+        return _error_response(
+            500,
+            "internal_error",
+            f"the intelligence service failed to handle the request ({type(exc).__name__})",
+        )
 
     @app.exception_handler(StagingError)
     def staging_handler(_request: Request, exc: StagingError) -> JSONResponse:

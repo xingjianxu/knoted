@@ -28,6 +28,8 @@ DEFAULT_MAX_SLOTS = 2
 #: Loopback only: the service is never reachable from outside the worker host.
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 15603
+#: How long a child may take to honour SIGTERM before its group gets SIGKILL.
+DEFAULT_CANCEL_GRACE_SECONDS = 5.0
 
 #: Ledger file name inside :attr:`Settings.state_dir`.
 LEDGER_FILENAME = "executions.db"
@@ -42,6 +44,8 @@ MAX_SLOTS_ENV = "KNOTED_INTELLIGENCE_MAX_SLOTS"
 HOST_ENV = "KNOTED_INTELLIGENCE_HOST"
 PORT_ENV = "KNOTED_INTELLIGENCE_PORT"
 CHILD_HOLD_MS_ENV = "KNOTED_INTELLIGENCE_CHILD_HOLD_MS"
+CANCEL_GRACE_SECONDS_ENV = "KNOTED_INTELLIGENCE_CANCEL_GRACE_SECONDS"
+CHILD_IGNORE_SIGTERM_ENV = "KNOTED_INTELLIGENCE_CHILD_IGNORE_SIGTERM"
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,10 +57,16 @@ class Settings:
     max_slots: int = DEFAULT_MAX_SLOTS
     host: str = DEFAULT_HOST
     port: int = DEFAULT_PORT
+    #: How long a cancellation waits for a child to honour SIGTERM before the
+    #: process group is killed outright.
+    cancel_grace_seconds: float = DEFAULT_CANCEL_GRACE_SECONDS
     #: Test hook: milliseconds the placeholder child waits before it computes.
     #: It does not change the state machine, only how long a real child process
     #: stays alive, which is what cancellation tests need to observe.
     child_hold_ms: int = 0
+    #: Test hook: makes the placeholder child ignore SIGTERM, so the supervisor's
+    #: SIGKILL escalation is exercised against a genuinely unresponsive child.
+    child_ignore_sigterm: bool = False
 
     def __post_init__(self) -> None:
         if self.max_slots < 1:
@@ -65,6 +75,8 @@ class Settings:
             raise ValueError(f"port {self.port} is outside 1..=65535")
         if self.child_hold_ms < 0:
             raise ValueError("child_hold_ms must not be negative")
+        if self.cancel_grace_seconds <= 0:
+            raise ValueError("cancel_grace_seconds must be positive")
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -76,7 +88,9 @@ class Settings:
             max_slots=_int_env(MAX_SLOTS_ENV, DEFAULT_MAX_SLOTS),
             host=_str_env(HOST_ENV, DEFAULT_HOST),
             port=_int_env(PORT_ENV, DEFAULT_PORT),
+            cancel_grace_seconds=_float_env(CANCEL_GRACE_SECONDS_ENV, DEFAULT_CANCEL_GRACE_SECONDS),
             child_hold_ms=_int_env(CHILD_HOLD_MS_ENV, 0),
+            child_ignore_sigterm=_bool_env(CHILD_IGNORE_SIGTERM_ENV, False),
         )
 
     @property
@@ -105,6 +119,23 @@ def _str_env(name: str, default: str) -> str:
 
 def _path_env(name: str, default: Path) -> Path:
     return Path(_str_env(name, str(default))).expanduser()
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:  # pragma: no cover - operator error
+        raise ValueError(f"{name} must be a number, got {raw!r}") from exc
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _int_env(name: str, default: int) -> int:

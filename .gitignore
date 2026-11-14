@@ -16,6 +16,7 @@ test-results/
 .vite/
 
 # Python / uv (services/intelligence)
+.venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/

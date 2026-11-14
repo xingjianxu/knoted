@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import signal
 import sqlite3
 import threading
@@ -29,6 +30,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from knoted_intelligence import staging
 from knoted_intelligence.app import create_app
 from knoted_intelligence.config import Settings
 from knoted_intelligence.executor import CHILD_STATUS_FILE
@@ -188,6 +190,8 @@ class Service:
         "sub/../../escape",
         "a..b",
         "",
+        # 129 bytes: one over the shared limit (see t09_10 for the parity check).
+        "a" * 129,
     ],
 )
 def test_t09_1_path_and_url_object_ids_rejected(tmp_path: Path, object_id: str) -> None:
@@ -198,6 +202,9 @@ def test_t09_1_path_and_url_object_ids_rejected(tmp_path: Path, object_id: str) 
         body = response.json()
         assert body["code"], "the rejection carries a stable code"
         assert body["request_id"], "the rejection carries a request id"
+        # An error body must never describe the deployment layout.
+        assert str(tmp_path) not in response.text
+        assert "/staging" not in response.text
         assert service.execution_count() == 0, "a rejected id must not create an execution"
         assert not service.settings.output_dir.exists() or not any(
             service.settings.output_dir.iterdir()
@@ -259,11 +266,24 @@ def test_t09_3_restart_marks_running_interrupted(tmp_path: Path) -> None:
     with start_service(tmp_path) as service:
         settings = service.settings
         now = datetime.now(UTC)
+        queued_id = str(uuid.uuid4())
         running_id = str(uuid.uuid4())
         cancelling_id = str(uuid.uuid4())
 
         ledger = Ledger(settings.ledger_path)
         ledger.open()
+        # A queued row has no owner left after a restart either: the in-memory
+        # queue is gone and the worker retries with a new execution id.
+        ledger.insert(
+            execution_id=queued_id,
+            kind="parse",
+            input_object_id=INPUT_OBJECT_ID,
+            input_sha256=digest_text(),
+            source_version=1,
+            options_revision=PARSE_OPTIONS,
+            deadline=now + timedelta(minutes=5),
+            now=now,
+        )
         for execution_id in (running_id, cancelling_id):
             ledger.insert(
                 execution_id=execution_id,
@@ -279,12 +299,13 @@ def test_t09_3_restart_marks_running_interrupted(tmp_path: Path) -> None:
         assert ledger.mark_cancel_requested(cancelling_id, now)
         ledger.close()
 
+        assert service.get(queued_id).json()["state"] == "queued"
         assert service.get(running_id).json()["state"] == "running"
         assert service.get(cancelling_id).json()["state"] == "cancel_requested"
 
     # The process that owned those rows is gone; a restart must not resume them.
     with start_service(tmp_path) as restarted:
-        for execution_id in (running_id, cancelling_id):
+        for execution_id in (queued_id, running_id, cancelling_id):
             record = restarted.get(execution_id).json()
             assert record["state"] == "interrupted"
             assert record["finished_at"] is not None
@@ -295,73 +316,130 @@ def test_t09_3_restart_marks_running_interrupted(tmp_path: Path) -> None:
         result = restarted.result(running_id)
         assert result.status_code == 422
         assert result.json()["code"] == "execution_not_succeeded"
+        # Nothing is left in flight, so a restart does not look busy.
+        assert restarted.health().json() == {"status": "ok", "active_executions": 0}
 
 
 def test_t09_4_cancel_kills_process_group_and_waits(tmp_path: Path) -> None:
+    # Four real cancellations in one run. The child installs its SIGTERM handler
+    # before it announces `running`, so `wait_for_child` only ever observes a
+    # child that can already report the signal; repeating the cycle is the
+    # flakiness check for that ordering.
+    attempts = 4
     with start_service(tmp_path, max_slots=1, child_hold_ms=60_000) as service:
+        for attempt in range(attempts):
+            execution_id = str(uuid.uuid4())
+            assert service.create(execution_id=execution_id).status_code == 201
+            service.wait(execution_id, {"running"})
+
+            child = service.wait_for_child(execution_id)
+            pid = child["pid"]
+            assert child["pgid"] == pid, "the execution child must lead its own process group"
+            os.kill(pid, 0)  # still alive before the cancel
+
+            box: dict[str, Any] = {}
+
+            def request_cancel(execution_id: str = execution_id, box: dict = box) -> None:
+                box["response"] = service.cancel(execution_id)
+
+            thread = threading.Thread(target=request_cancel, name=f"t09-cancel-{attempt}")
+            thread.start()
+
+            observed: list[str] = []
+            deadline = time.monotonic() + 20.0
+            while time.monotonic() < deadline:
+                state = service.ledger_state(execution_id)
+                if state and (not observed or observed[-1] != state):
+                    observed.append(state)
+                if state == "cancelled":
+                    break
+                time.sleep(0.01)
+
+            thread.join(timeout=20.0)
+            assert not thread.is_alive(), "cancel must return once the exit is confirmed"
+
+            response = box["response"]
+            assert response.status_code == 200, response.text
+            record = response.json()
+            assert record["state"] == "cancelled"
+            assert record["started_at"] is not None
+            assert record["finished_at"] is not None
+            assert record["error"]["code"] == "cancelled"
+            assert "code 143" in record["error"]["message"], record["error"]["message"]
+
+            assert "cancel_requested" in observed, (attempt, observed)
+            assert observed[-1] == "cancelled", observed
+
+            child_after = service.child_status(execution_id)
+            assert child_after["phase"] == "terminating"
+            assert child_after["signal"] == signal.SIGTERM
+
+            # The supervisor reaped the child, so the pid and its group are gone.
+            with pytest.raises(ProcessLookupError):
+                os.kill(pid, 0)
+            with pytest.raises(ProcessLookupError):
+                os.killpg(pid, 0)
+
+            # A cancelled execution is terminal, so a later cancel is a conflict.
+            # Repeated cancels *while* a cancellation is in flight answer 200: a
+            # duplicate request during the kill must not fail the caller.
+            again = service.cancel(execution_id)
+            assert again.status_code == 409, again.text
+            assert again.json()["code"] == "execution_finished"
+            assert service.result(execution_id).status_code == 422
+
+        assert service.execution_count() == attempts
+
+
+def test_t09_4b_sigkill_escalates_when_child_ignores_sigterm(tmp_path: Path) -> None:
+    # A child that ignores SIGTERM is a real failure mode (a stuck parser, a
+    # hung accelerator call). The supervisor must escalate to SIGKILL, still
+    # wait for the exit, and only then record `cancelled`.
+    with start_service(
+        tmp_path,
+        max_slots=1,
+        child_hold_ms=60_000,
+        child_ignore_sigterm=True,
+        cancel_grace_seconds=0.3,
+    ) as service:
         execution_id = str(uuid.uuid4())
         assert service.create(execution_id=execution_id).status_code == 201
         service.wait(execution_id, {"running"})
-
         child = service.wait_for_child(execution_id)
         pid = child["pid"]
-        assert child["pgid"] == pid, "the execution child must lead its own process group"
-        os.kill(pid, 0)  # still alive before the cancel
 
-        box: dict[str, Any] = {}
-
-        def request_cancel() -> None:
-            box["response"] = service.cancel(execution_id)
-
-        thread = threading.Thread(target=request_cancel, name="t09-cancel")
-        thread.start()
-
-        observed: list[str] = []
-        deadline = time.monotonic() + 20.0
-        while time.monotonic() < deadline:
-            state = service.ledger_state(execution_id)
-            if state and (not observed or observed[-1] != state):
-                observed.append(state)
-            if state == "cancelled":
-                break
-            time.sleep(0.01)
-
-        thread.join(timeout=20.0)
-        assert not thread.is_alive(), "cancel must return once the exit is confirmed"
-
-        response = box["response"]
+        response = service.cancel(execution_id)
         assert response.status_code == 200, response.text
         record = response.json()
         assert record["state"] == "cancelled"
-        assert record["started_at"] is not None
-        assert record["finished_at"] is not None
         assert record["error"]["code"] == "cancelled"
-        assert "code 143" in record["error"]["message"], record["error"]["message"]
+        assert "signal 9" in record["error"]["message"], record["error"]["message"]
 
-        assert "cancel_requested" in observed, observed
-        assert observed[-1] == "cancelled", observed
-
-        child_after = json.loads(
-            (service.output_dir(execution_id) / CHILD_STATUS_FILE).read_text(encoding="utf-8")
-        )
-        assert child_after["phase"] == "terminating"
-        assert child_after["signal"] == signal.SIGTERM
-
-        # The supervisor reaped the child, so the pid and its group are gone.
+        # The child never handled SIGTERM, so its status stays `running`; the
+        # escalation, not a graceful stop, is what ended it.
+        assert service.child_status(execution_id)["phase"] == "running"
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
         with pytest.raises(ProcessLookupError):
             os.killpg(pid, 0)
+        assert service.result(execution_id).status_code == 422
 
-        # A cancelled execution is terminal, so a later cancel is a conflict.
-        # Repeated cancels *while* a cancellation is in flight answer 200: a
-        # duplicate request during the kill must not fail the caller.
-        again = service.cancel(execution_id)
-        assert again.status_code == 409, again.text
-        assert again.json()["code"] == "execution_finished"
-        result = service.result(execution_id)
-        assert result.status_code == 422
-        assert service.execution_count() == 1
+
+def test_t09_4c_symlinked_input_cannot_escape_staging(tmp_path: Path) -> None:
+    if not hasattr(os, "symlink"):  # pragma: no cover - Linux only in CI
+        pytest.skip("symlinks are unavailable on this platform")
+    with start_service(tmp_path) as service:
+        link = service.settings.input_dir / "escape-link"
+        os.symlink("/etc/passwd", link)
+        execution_id = str(uuid.uuid4())
+        created = service.create(execution_id=execution_id, object_id="escape-link")
+        assert created.status_code == 201, created.text
+
+        record = service.wait(execution_id, {"failed"})
+        assert record["error"]["code"] == "input_invalid"
+        assert record["started_at"] is None
+        assert str(service.settings.input_dir) not in record["error"]["message"]
+        assert not service.output_dir(execution_id).exists()
 
 
 def test_t09_5_deadline_and_digest_mismatch_fail_without_running(tmp_path: Path) -> None:
@@ -416,6 +494,13 @@ def test_t09_6_result_is_registered_and_verifiable(tmp_path: Path) -> None:
         assert result["metadata"]["source_version"] == "1"
         assert result["metadata"]["input_sha256"] == digest_text()
         assert result["metadata"]["options_revision"] == PARSE_OPTIONS
+        # The contract types metadata as `{[k: string]: string}`: an object with
+        # string values, never a null or a nested value.
+        assert isinstance(result["metadata"], dict)
+        assert all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in result["metadata"].items()
+        )
 
         document = json.loads(payload)
         assert document["kind"] == "parse"
@@ -453,3 +538,66 @@ def test_t09_7_unknown_execution_and_health(tmp_path: Path) -> None:
         assert finished.status_code == 409
         assert finished.json()["code"] == "execution_finished"
         assert service.health().json()["active_executions"] == 0
+
+
+def test_t09_8_invalid_uuid_is_a_validation_error(tmp_path: Path) -> None:
+    with start_service(tmp_path) as service:
+        bad = "not-a-uuid"
+        responses = [
+            service.client.get(f"{EXECUTIONS_PATH}/{bad}"),
+            service.client.post(f"{EXECUTIONS_PATH}/{bad}/cancel"),
+            service.client.get(f"{EXECUTIONS_PATH}/{bad}/result"),
+            service.client.post(
+                EXECUTIONS_PATH,
+                json={
+                    "execution_id": bad,
+                    "kind": "parse",
+                    "input_object_id": INPUT_OBJECT_ID,
+                    "input_sha256": digest_text(),
+                    "source_version": 1,
+                    "deadline": (datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
+                    "options_revision": PARSE_OPTIONS,
+                },
+            ),
+        ]
+        for response in responses:
+            assert response.status_code == 422, response.text
+            payload = response.json()
+            assert payload["code"] == "validation_failed"
+            assert payload["field_errors"], "the field that failed is named"
+        assert service.execution_count() == 0
+
+
+def test_t09_9_deadline_and_source_version_are_bounded(tmp_path: Path) -> None:
+    with start_service(tmp_path) as service:
+        # A naive timestamp has no absolute meaning; guessing UTC would move the
+        # expiry of a result by the local offset.
+        naive = service.create(deadline=datetime(2026, 1, 2, 3, 4, 5))
+        assert naive.status_code == 422, naive.text
+        assert naive.json()["code"] == "validation_failed"
+        assert any("timezone" in error["message"] for error in naive.json()["field_errors"]), (
+            naive.json()
+        )
+
+        # The worker stores source_version in an i64; wider values cannot round-trip.
+        overflow = service.create(source_version=2**63)
+        assert overflow.status_code == 422, overflow.text
+        assert overflow.json()["code"] == "validation_failed"
+
+        assert service.create(source_version=2**63 - 1).status_code == 201
+        assert service.execution_count() == 1
+
+
+def test_t09_10_object_id_limit_matches_rust() -> None:
+    assert staging.MAX_OBJECT_ID_LEN == 128
+    rust_source = Path(__file__).resolve().parents[3] / "crates/knoted-core/src/files/staging.rs"
+    rust_code = rust_source.read_text(encoding="utf-8")
+    declared = re.search(r"MAX_OBJECT_ID_LEN: usize = (\d+)", rust_code)
+    assert declared, f"{rust_source} no longer declares MAX_OBJECT_ID_LEN"
+    assert int(declared.group(1)) == staging.MAX_OBJECT_ID_LEN, (
+        "the Python and Rust object-id limits diverged"
+    )
+
+    assert staging.ensure_object_id("a" * staging.MAX_OBJECT_ID_LEN)
+    with pytest.raises(staging.StagingError):
+        staging.ensure_object_id("a" * (staging.MAX_OBJECT_ID_LEN + 1))

@@ -19,6 +19,11 @@ from pathlib import Path
 #: Contract pattern for a controlled object id (``api/intelligence.openapi.yaml``).
 OBJECT_ID_PATTERN = re.compile(r"^(?!\.\.?$)[A-Za-z0-9._-]+$")
 
+#: Longest accepted object id, in bytes. Mirrors `MAX_OBJECT_ID_LEN` in
+#: ``crates/knoted-core/src/files/staging.rs``; both sides must agree or a key
+#: accepted by Rust would be unstorable in the staging tree.
+MAX_OBJECT_ID_LEN = 128
+
 #: Characters or sequences that must never appear, even if the pattern allowed them.
 FORBIDDEN_IN_OBJECT_ID = ("/", "\\", "..", "://")
 
@@ -37,20 +42,33 @@ def ensure_object_id(value: str, *, field: str = "object_id") -> str:
     """Returns ``value`` if it is a controlled object id, else raises.
 
     ``field`` only improves the message; the rule is the same everywhere an
-    object id enters the service.
+    object id enters the service. Messages never contain a filesystem path: they
+    name the field, the rule and (bounded) the caller's own value, so an error
+    body cannot leak the deployment layout.
     """
 
     if not isinstance(value, str) or not value:
         raise StagingError(f"{field} must be a non-empty string")
+    if len(value.encode("utf-8")) > MAX_OBJECT_ID_LEN:
+        raise StagingError(
+            f"{field} is {len(value.encode('utf-8'))} bytes; the limit is {MAX_OBJECT_ID_LEN} bytes"
+        )
     if OBJECT_ID_PATTERN.fullmatch(value) is None:
         raise StagingError(
-            f"{field} {value!r} must match {OBJECT_ID_PATTERN.pattern} "
+            f"{field} {preview(value)} must match {OBJECT_ID_PATTERN.pattern} "
             "(letters, digits, dot, dash and underscore only)"
         )
     for forbidden in FORBIDDEN_IN_OBJECT_ID:
         if forbidden in value:
-            raise StagingError(f"{field} {value!r} must not contain {forbidden!r}")
+            raise StagingError(f"{field} {preview(value)} must not contain {forbidden!r}")
     return value
+
+
+def preview(value: str, limit: int = 32) -> str:
+    """Short, quoted form of a caller value for an error message."""
+
+    text = value if len(value) <= limit else f"{value[:limit]}..."
+    return repr(text)
 
 
 def input_path(input_root: Path, object_id: str) -> Path:
@@ -76,7 +94,8 @@ def _contained(root: Path, name: str, *, field: str) -> Path:
     resolved_root = root.resolve()
     candidate = (resolved_root / name).resolve()
     if candidate == resolved_root or not candidate.is_relative_to(resolved_root):
-        raise StagingError(f"{field} {name!r} resolves outside {resolved_root}")
+        # Never echo the root: an error body must not describe the deployment.
+        raise StagingError(f"{field} {preview(name)} leaves the staging root")
     return candidate
 
 

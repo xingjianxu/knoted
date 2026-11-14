@@ -8,9 +8,10 @@ ids and digests the worker verifies.
 
 Every transition is a conditional ``UPDATE ... WHERE state = ...`` so a late
 worker cannot overwrite a cancellation that arrived while it was computing.
-``open()`` also recovers: rows left in ``running``/``cancel_requested`` by a
-previous process become ``interrupted``, a retryable terminal state. The service
-never resumes a half-finished computation.
+``open()`` also recovers: rows left in ``queued``/``running``/
+``cancel_requested`` by a previous process become ``interrupted``, a retryable
+terminal state. The service never resumes a half-finished computation, and a
+queued row is dead as well because its in-memory queue is gone.
 """
 
 from __future__ import annotations
@@ -29,7 +30,11 @@ logger = logging.getLogger(__name__)
 #: States in which the service still owns the execution.
 IN_FLIGHT_STATES: tuple[str, ...] = ("queued", "running", "cancel_requested")
 #: States a restart must turn into ``interrupted``.
-RESTART_STATES: tuple[str, ...] = ("running", "cancel_requested")
+#:
+#: ``queued`` is included on purpose: the in-memory queue does not survive the
+#: process, and the worker creates a new ``execution_id`` to retry, so a queued
+#: row left behind is dead rather than pending.
+RESTART_STATES: tuple[str, ...] = ("queued", "running", "cancel_requested")
 #: States no transition may leave.
 TERMINAL_STATES: tuple[str, ...] = ("succeeded", "failed", "cancelled", "interrupted")
 

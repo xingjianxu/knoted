@@ -56,8 +56,6 @@ INTERRUPTED = "interrupted"
 
 #: Bounded wait while polling for a free slot, so a queued cancellation is seen.
 SLOT_POLL_SECONDS = 0.02
-#: How long a child may take to honour SIGTERM before the group gets SIGKILL.
-CANCEL_GRACE_SECONDS = 5.0
 #: How long the group gets to disappear after SIGKILL.
 SIGKILL_GRACE_SECONDS = 5.0
 #: How long a cancel request waits for the supervisor to confirm the exit.
@@ -217,15 +215,7 @@ class Scheduler:
             process = entry.process
 
         if process is not None:
-            _signal_group(process.pid, signal.SIGTERM)
-            if not entry.confirmed.wait(CANCEL_GRACE_SECONDS):
-                logger.warning(
-                    "execution %s ignored SIGTERM for %.1fs; sending SIGKILL",
-                    execution_id,
-                    CANCEL_GRACE_SECONDS,
-                )
-                _signal_group(process.pid, signal.SIGKILL)
-                entry.confirmed.wait(SIGKILL_GRACE_SECONDS)
+            self._terminate_group(entry)
         else:
             entry.confirmed.wait(CANCEL_CONFIRM_SECONDS)
 
@@ -233,6 +223,30 @@ class Scheduler:
         if row.state == CANCEL_REQUESTED:
             logger.error("execution %s is still cancelling; not reporting success", execution_id)
         return row
+
+    def _terminate_group(self, entry: _Entry) -> None:
+        """SIGTERMs the child group, escalating to SIGKILL when it does not exit.
+
+        The caller has already published ``cancel_requested``. This method only
+        signals and waits for the supervisor's confirmation, so a child that
+        ignores SIGTERM (a stuck parser, a hung CUDA call) is still killed and
+        still reaped before the record may become ``cancelled``.
+        """
+
+        process = entry.process
+        if process is None:
+            return
+        grace = self._settings.cancel_grace_seconds
+        _signal_group(process.pid, signal.SIGTERM)
+        if entry.confirmed.wait(grace):
+            return
+        logger.warning(
+            "execution %s ignored SIGTERM for %.2fs; sending SIGKILL",
+            entry.execution_id,
+            grace,
+        )
+        _signal_group(process.pid, signal.SIGKILL)
+        entry.confirmed.wait(SIGKILL_GRACE_SECONDS)
 
     def result(self, execution_id: str) -> ExecutionRow:
         """Returns the record only when its artifact may be published."""
@@ -298,11 +312,13 @@ class Scheduler:
                 return
             self._execute(execution_id, entry)
         except Exception as exc:  # pragma: no cover - defensive
+            # Log the detail with the path; never copy it into the record, which
+            # the worker reads. The message stays a classification.
             logger.exception("execution %s failed in the supervisor", execution_id)
             self._finish(
                 execution_id,
                 FAILED,
-                error=_failure_error("internal_error", str(exc)),
+                error=_failure_error("internal_error", f"supervisor failed ({type(exc).__name__})"),
             )
         finally:
             if slot_held:
@@ -368,6 +384,7 @@ class Scheduler:
         try:
             output_dir = staging.output_dir(self._settings.output_dir, execution_id)
         except staging.StagingError as exc:  # pragma: no cover - execution ids are uuids
+            # StagingError messages are path-free by construction.
             self._finish(execution_id, FAILED, error=_failure_error("internal_error", str(exc)))
             return
         artifact_object_id = f"{execution_id}-{row.kind}.json"
@@ -382,6 +399,7 @@ class Scheduler:
             "output_dir": str(output_dir),
             "artifact_object_id": artifact_object_id,
             "hold_ms": self._settings.child_hold_ms,
+            "ignore_sigterm": self._settings.child_ignore_sigterm,
         }
 
         try:
@@ -393,10 +411,16 @@ class Scheduler:
                 stderr=subprocess.PIPE,
             )
         except OSError as exc:
+            # `str(OSError)` carries the interpreter path; keep it in the log.
+            logger.exception("execution %s could not start its child", execution_id)
             self._finish(
                 execution_id,
                 FAILED,
-                error=_failure_error("child_start_failed", str(exc)),
+                error=_failure_error(
+                    "child_start_failed",
+                    f"child process could not start ({type(exc).__name__}: "
+                    f"{exc.strerror or 'unknown error'})",
+                ),
             )
             return
 
@@ -416,12 +440,17 @@ class Scheduler:
             return
         if process.returncode != 0:
             tail = stderr.decode("utf-8", errors="replace").strip()[-STDERR_TAIL_BYTES:]
+            if tail:
+                # The traceback names absolute paths; it belongs in the server log,
+                # not in a record the worker reads.
+                logger.warning("execution %s child stderr: %s", execution_id, tail)
+            reason = _child_failure_reason(output_dir)
             self._finish(
                 execution_id,
                 FAILED,
                 error=_failure_error(
                     "execution_failed",
-                    f"child {status}" + (f": {tail}" if tail else ""),
+                    f"child {status}" + (f": compute failed ({reason})" if reason else ""),
                 ),
             )
             return
@@ -515,6 +544,17 @@ def _cancel_error(exit_status: str | None) -> ExecutionErrorDetail:
     return ExecutionErrorDetail(code="cancelled", message=message, request_id=str(uuid.uuid4()))
 
 
+def _child_failure_reason(output_dir: Path) -> str | None:
+    """Exception class the child recorded, if it managed to write one."""
+
+    try:
+        status = json.loads((output_dir / CHILD_STATUS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):  # pragma: no cover - the child died before writing
+        return None
+    reason = status.get("error_class")
+    return reason if isinstance(reason, str) and reason else None
+
+
 def _signal_group(pid: int, signum: int) -> None:
     """Signals the whole child process group, tolerating an already-dead child."""
 
@@ -550,7 +590,6 @@ def child_main(spec_json: str) -> int:
         "pgid": os.getpgrp(),
         "started_at": _utc_iso(),
     }
-    _write_json(status_file, {**identity, "phase": RUNNING})
 
     def on_signal(signum: int, _frame: Any) -> None:
         # Record the signal, then give the supervisor's observer a moment to see
@@ -568,8 +607,17 @@ def child_main(spec_json: str) -> int:
         time.sleep(TERMINATE_NOTICE_SECONDS)
         os._exit(128 + signum)
 
-    signal.signal(signal.SIGTERM, on_signal)
-    signal.signal(signal.SIGINT, on_signal)
+    # Install the handler *before* announcing `running`: a supervisor that reads
+    # `running` and then cancels must never hit the default SIGTERM disposition,
+    # otherwise the child would die silently and the cancellation test (and an
+    # operator) could not tell a graceful stop from a crash.
+    if spec.get("ignore_sigterm"):
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    else:
+        signal.signal(signal.SIGTERM, on_signal)
+        signal.signal(signal.SIGINT, on_signal)
+    _write_json(status_file, {**identity, "phase": RUNNING})
 
     hold_ms = int(spec.get("hold_ms") or 0)
     if hold_ms > 0:
@@ -582,10 +630,17 @@ def child_main(spec_json: str) -> int:
     except Exception as exc:  # noqa: BLE001 - any compute failure ends the child
         import traceback
 
+        # Full traceback for the server log; the status file only carries the
+        # exception class so no absolute path can travel back to the worker.
         traceback.print_exc()
         _write_json(
             status_file,
-            {**identity, "phase": "failed", "error": str(exc), "finished_at": _utc_iso()},
+            {
+                **identity,
+                "phase": "failed",
+                "error_class": type(exc).__name__,
+                "finished_at": _utc_iso(),
+            },
         )
         return 1
 
