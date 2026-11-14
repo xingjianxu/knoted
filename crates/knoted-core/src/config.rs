@@ -429,3 +429,18 @@ fn line_column(contents: &str, offset: usize) -> (usize, usize) {
         + 1;
     (line, column)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::line_column;
+
+    #[test]
+    fn line_column_is_one_based_and_char_aware() {
+        assert_eq!(line_column("abc", 0), (1, 1));
+        assert_eq!(line_column("abc", 3), (1, 4));
+        // A byte offset inside multibyte text must still count characters.
+        assert_eq!(line_column("中文信息", 3), (1, 2));
+        assert_eq!(line_column("中\nabc", 5), (2, 2));
+        assert_eq!(line_column("abc", 99), (1, 4), "offsets clamp to the end");
+    }
+}

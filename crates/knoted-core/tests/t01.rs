@@ -319,8 +319,15 @@ fn t01_7_parse_errors_do_not_echo_source() {
     let ConfigError::Parse { line, column, .. } = &error else {
         panic!("expected a parse error, got {error:?}");
     };
-    assert!(*line >= 1, "the error must carry a line");
-    assert!(*column >= 1, "the error must carry a column");
+    assert_eq!(
+        (*line, *column),
+        (2, 40),
+        "the error must point at the unterminated string on line 2"
+    );
+    assert!(
+        error.to_string().contains("line 2 column 40"),
+        "the location must appear in the message: {error}"
+    );
     let display = error.to_string();
     let debug = format!("{error:?}");
     assert!(
