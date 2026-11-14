@@ -13,7 +13,7 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 use chrono::Utc;
-use knoted_core::auth::{IssuedToken, TokenPurpose, issue_token};
+use knoted_core::auth::{DomainAuthError, IssuedToken, TokenPurpose, issue_token};
 use knoted_core::config::{AppConfig, ConfigError};
 use knoted_core::db::{self, DbError};
 use thiserror::Error;
@@ -33,8 +33,8 @@ pub struct TokenCommand {
 
 /// Failures of an admin command.
 ///
-/// `Usage` is the only variant that can quote user input, and that input is a
-/// purpose or a flag name; the token itself never appears in any error.
+/// `Usage` messages are fixed strings as well: argument values are never echoed,
+/// because a token pasted into the wrong position must not end up on stderr.
 #[derive(Debug, Error)]
 pub enum AdminError {
     /// The command line was incomplete or contained an unknown argument.
@@ -46,9 +46,12 @@ pub enum AdminError {
     /// The loaded configuration has no `[database]` section.
     #[error("configuration is missing required `database` settings")]
     MissingDatabase,
-    /// Issuing the token failed, including a refused bootstrap.
+    /// Reading the database failed before a token could be issued.
     #[error(transparent)]
     Database(#[from] DbError),
+    /// Issuing the token failed, including a refused bootstrap.
+    #[error(transparent)]
+    Auth(#[from] DomainAuthError),
     /// Writing to stdout failed (for example a closed pipe).
     #[error("cannot write the credential token to stdout: {0}")]
     Output(#[from] io::Error),
@@ -77,10 +80,12 @@ impl TokenCommand {
                         ));
                     };
                     let value = value.as_ref();
+                    // The value is not echoed: it may be a token pasted into the
+                    // wrong argument slot.
                     purpose = Some(TokenPurpose::parse(value).ok_or_else(|| {
-                        AdminError::Usage(format!(
-                            "unknown token purpose `{value}`: expected `bootstrap` or `recovery`"
-                        ))
+                        AdminError::Usage(
+                            "unknown token purpose: expected `bootstrap` or `recovery`".to_owned(),
+                        )
                     })?);
                 }
                 "--config" => {
@@ -89,8 +94,11 @@ impl TokenCommand {
                     };
                     config = Some(PathBuf::from(value.as_ref()));
                 }
-                other => {
-                    return Err(AdminError::Usage(format!("unknown argument `{other}`")));
+                _ => {
+                    // Argument values are not echoed either; see above.
+                    return Err(AdminError::Usage(
+                        "unknown argument: expected --purpose and --config".to_owned(),
+                    ));
                 }
             }
         }

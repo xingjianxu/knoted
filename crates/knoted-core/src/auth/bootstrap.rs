@@ -8,6 +8,10 @@
 //! sessions are T14/T15, which is why the tables for them already exist in
 //! `migrations/0003_t13_auth.sql` but no code here reads them.
 //!
+//! Only the newest token per purpose is live: issuing supersedes the previous
+//! unconsumed token of the same purpose, so running the CLI twice leaves exactly
+//! one usable token and an earlier printed token cannot be replayed.
+//!
 //! Secrets never leave this module: [`IssuedToken`] exposes the plaintext only
 //! through [`IssuedToken::plaintext`] for the CLI to print, its `Debug` output
 //! is redacted, and every error carries a fixed message instead of the token.
@@ -130,6 +134,29 @@ pub struct User {
     pub created_at: DateTime<Utc>,
 }
 
+/// Result of [`ensure_owner`].
+///
+/// `created` tells the caller whether this call inserted the account or reused
+/// an existing one. The bootstrap flow needs that distinction so T14 can refuse
+/// `bootstrap/finish` when an owner with Passkeys already exists instead of
+/// letting a stale token add a Passkey to the existing account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OwnerAccount {
+    /// The one owner account.
+    pub user: User,
+    /// True when this call inserted the owner row.
+    pub created: bool,
+}
+
+/// Result of [`consume_bootstrap`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BootstrapOutcome {
+    /// The owner account the token resolved to.
+    pub user: User,
+    /// True when this call created the owner; false when it reused one.
+    pub owner_created: bool,
+}
+
 /// Why a token was rejected or an account operation failed.
 ///
 /// Every message is fixed: none contains the token, its digest or any database
@@ -180,19 +207,56 @@ fn generate_token() -> String {
 
 /// Issues a new one-time token valid for [`TOKEN_TTL`].
 ///
-/// A bootstrap token is refused with [`DbError::OwnerAlreadyExists`] once the
+/// At most one token per purpose is live: issuing a token consumes every
+/// earlier unconsumed, unexpired token of the same purpose in the same
+/// transaction. Running the CLI twice therefore leaves exactly one usable
+/// token, so a token printed earlier cannot be replayed by someone who saw it.
+/// Expired rows are left untouched; they are already unusable and keep their
+/// truthful "expired, not consumed" state.
+///
+/// A bootstrap token is refused with [`DomainAuthError::Conflict`] once the
 /// owner exists, which is what keeps the CLI from offering a second way to
 /// create the account. The check runs inside the same `INSERT`, so two
 /// concurrent CLI invocations cannot both slip past a read-then-write race.
+///
+/// Business-time decisions (expiry) use `now`, the injected clock; the row's
+/// `created_at` is also written from `now`, while `users.created_at` uses the
+/// database default because the account row is not created here.
 pub async fn issue_token(
     pool: &PgPool,
     purpose: TokenPurpose,
     now: DateTime<Utc>,
-) -> Result<IssuedToken, DbError> {
+) -> Result<IssuedToken, DomainAuthError> {
     let id = Uuid::new_v4();
     let token = generate_token();
     let hash = hash_token(&token);
     let expires_at = now + TOKEN_TTL;
+
+    let mut tx = pool.begin().await.map_err(DbError::from)?;
+
+    // Serialise issuance per purpose. The supersede below only sees committed
+    // rows, so without a lock two concurrent CLI runs could each leave a live
+    // token. The advisory lock is transaction-scoped, released on commit or
+    // rollback, and never blocks a different purpose (a hash collision only
+    // adds harmless serialisation).
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('knoted.credential_tokens'), hashtext($1))")
+        .bind(purpose.as_str())
+        .execute(&mut *tx)
+        .await
+        .map_err(DbError::from)?;
+
+    // Supersede the previous live token of the same purpose. The UPDATE and the
+    // INSERT share a transaction, so a refused bootstrap does not invalidate the
+    // caller's existing token either.
+    sqlx::query(
+        "UPDATE credential_tokens SET consumed_at = $2 \
+         WHERE purpose = $1 AND consumed_at IS NULL AND expires_at > $2",
+    )
+    .bind(purpose.as_str())
+    .bind(now)
+    .execute(&mut *tx)
+    .await
+    .map_err(DbError::from)?;
 
     let row: Option<(DateTime<Utc>,)> = sqlx::query_as(
         "INSERT INTO credential_tokens (id, purpose, token_hash, created_at, expires_at) \
@@ -205,14 +269,19 @@ pub async fn issue_token(
     .bind(hash.as_slice())
     .bind(now)
     .bind(expires_at)
-    .fetch_optional(pool)
-    .await?;
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(DbError::from)?;
 
     let Some((created_at,)) = row else {
         // The insert was filtered out, which for a bootstrap token means an
-        // owner exists. Nothing was written, so no second token remains.
-        return Err(DbError::OwnerAlreadyExists);
+        // owner exists. Roll back so the supersede above is undone and the
+        // operator keeps the token it already has.
+        tx.rollback().await.map_err(DbError::from)?;
+        return Err(DomainAuthError::Conflict);
     };
+
+    tx.commit().await.map_err(DbError::from)?;
 
     tracing::info!(
         purpose = purpose.as_str(),
@@ -301,7 +370,7 @@ pub async fn consume_bootstrap(
     tx: &mut Transaction<'_, Postgres>,
     plaintext: &str,
     now: DateTime<Utc>,
-) -> Result<User, DomainAuthError> {
+) -> Result<BootstrapOutcome, DomainAuthError> {
     let hash = hash_token(plaintext);
     // Single statement, single consumption: the predicate re-checks both the
     // expiration and `consumed_at` under the row lock, so two concurrent
@@ -328,7 +397,13 @@ pub async fn consume_bootstrap(
         return Err(error);
     }
 
-    ensure_owner(tx).await.map_err(DomainAuthError::from)
+    ensure_owner(tx)
+        .await
+        .map(|owner| BootstrapOutcome {
+            user: owner.user,
+            owner_created: owner.created,
+        })
+        .map_err(DomainAuthError::from)
 }
 
 /// Finds out why the conditional `UPDATE` matched nothing.
@@ -366,15 +441,35 @@ async fn classify_bootstrap_rejection(
 /// two transactions race, and `UNIQUE (singleton)`/`CHECK (singleton)` in the
 /// migration make a second row impossible. The follow-up `SELECT` is therefore
 /// guaranteed to see exactly the one owner.
-pub async fn ensure_owner(tx: &mut Transaction<'_, Postgres>) -> Result<User, DbError> {
-    sqlx::query("INSERT INTO users (id) VALUES ($1) ON CONFLICT (singleton) DO NOTHING")
-        .bind(Uuid::new_v4())
-        .execute(&mut **tx)
-        .await?;
+///
+/// `created_at` is the database clock (`DEFAULT now()`), not the injected
+/// clock: the account row is infrastructure state and the injectable clock only
+/// decides business expiry (which token is still valid). Tests that need a
+/// deterministic account timestamp assert on relationships, not the instant.
+pub async fn ensure_owner(tx: &mut Transaction<'_, Postgres>) -> Result<OwnerAccount, DbError> {
+    let inserted: Option<(Uuid, DateTime<Utc>)> = sqlx::query_as(
+        "INSERT INTO users (id) VALUES ($1) ON CONFLICT (singleton) DO NOTHING \
+             RETURNING id, created_at",
+    )
+    .bind(Uuid::new_v4())
+    .fetch_optional(&mut **tx)
+    .await?;
 
+    if let Some((id, created_at)) = inserted {
+        return Ok(OwnerAccount {
+            user: User { id, created_at },
+            created: true,
+        });
+    }
+
+    // The insert conflicted: another transaction (or an earlier call) owns the
+    // row, so reuse it instead of creating a second account.
     let (id, created_at): (Uuid, DateTime<Utc>) =
         sqlx::query_as("SELECT id, created_at FROM users")
             .fetch_one(&mut **tx)
             .await?;
-    Ok(User { id, created_at })
+    Ok(OwnerAccount {
+        user: User { id, created_at },
+        created: false,
+    })
 }

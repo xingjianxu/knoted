@@ -66,6 +66,15 @@ CREATE TABLE ceremonies (
     consumed_at timestamptz NULL,
     CONSTRAINT ceremonies_purpose_check CHECK (
         purpose IN ('bootstrap', 'login', 'add_passkey', 'recovery')
+    ),
+    -- A recovery ceremony only exists because a credential token authorised it,
+    -- while the other ceremonies are started from an authenticated session (or
+    -- from the bootstrap flow's own token). Binding the token here is what lets
+    -- `recovery/finish` re-check the same token inside its transaction instead
+    -- of trusting a claim from the request body.
+    CONSTRAINT ceremonies_credential_token_binding_check CHECK (
+        (purpose IN ('bootstrap', 'recovery') AND credential_token_id IS NOT NULL)
+        OR (purpose IN ('login', 'add_passkey') AND credential_token_id IS NULL)
     )
 );
 

@@ -8,6 +8,6 @@
 mod bootstrap;
 
 pub use bootstrap::{
-    DomainAuthError, IssuedToken, TOKEN_TTL, TokenPurpose, TokenRecord, User, consume_bootstrap,
-    ensure_owner, hash_token, issue_token, verify_token,
+    BootstrapOutcome, DomainAuthError, IssuedToken, OwnerAccount, TOKEN_TTL, TokenPurpose,
+    TokenRecord, User, consume_bootstrap, ensure_owner, hash_token, issue_token, verify_token,
 };
