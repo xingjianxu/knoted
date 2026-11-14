@@ -71,6 +71,11 @@ STDERR_TAIL_BYTES = 600
 #: Name of the child's self-reported status file inside the output directory.
 CHILD_STATUS_FILE = "child-status.json"
 
+#: Execution kinds that use the Python GPU slot. Parse (OCR) and embed share one
+#: card; both acquire the same semaphore before a child starts, so the two
+#: model families are never resident at the same time.
+GPU_KINDS = frozenset({"parse", "embed"})
+
 _CHILD_BOOTSTRAP = (
     "import sys;"
     "from knoted_intelligence.executor import child_main;"
@@ -135,6 +140,10 @@ class Scheduler:
         self._ledger = ledger
         self._settings = settings
         self._slots = threading.BoundedSemaphore(settings.max_slots)
+        # Separate from `_slots`: `max_slots` bounds all children, while this
+        # one bounds GPU-class children (parse + embed) to the configured card
+        # budget. A thread always takes `_slots` first, then this one.
+        self._gpu_slots = threading.BoundedSemaphore(settings.gpu_slots)
         self._lock = threading.RLock()
         self._entries: dict[str, _Entry] = {}
         self._closed = False
@@ -176,7 +185,7 @@ class Scheduler:
             self._entries[spec.execution_id] = entry
             thread = threading.Thread(
                 target=self._run,
-                args=(spec.execution_id,),
+                args=(spec.execution_id, spec.kind),
                 name=f"execution-{spec.execution_id}",
                 daemon=True,
             )
@@ -298,12 +307,19 @@ class Scheduler:
             )
         return row, False
 
-    def _run(self, execution_id: str) -> None:
-        """Waits for a slot, then executes, and always releases the slot."""
+    def _run(self, execution_id: str, kind: str) -> None:
+        """Waits for a general and (for GPU kinds) a GPU slot, then executes.
+
+        Both waits poll the cancel event, so a queued cancellation never holds a
+        slot or waits for a model load. Slots are released in reverse order in
+        the `finally`; an execution that is cancelled while waiting for the GPU
+        slot ends `cancelled` without ever spawning a child.
+        """
 
         with self._lock:
             entry = self._entries[execution_id]
         slot_held = False
+        gpu_slot_held = False
         try:
             while not entry.cancel_event.is_set():
                 if self._slots.acquire(timeout=SLOT_POLL_SECONDS):
@@ -312,6 +328,14 @@ class Scheduler:
             if entry.cancel_event.is_set():
                 self._finish(execution_id, CANCELLED, error=_cancel_error(None))
                 return
+            if kind in GPU_KINDS:
+                while not entry.cancel_event.is_set():
+                    if self._gpu_slots.acquire(timeout=SLOT_POLL_SECONDS):
+                        gpu_slot_held = True
+                        break
+                if entry.cancel_event.is_set():
+                    self._finish(execution_id, CANCELLED, error=_cancel_error(None))
+                    return
             self._execute(execution_id, entry)
         except Exception as exc:  # pragma: no cover - defensive
             # Log the detail with the path; never copy it into the record, which
@@ -323,6 +347,8 @@ class Scheduler:
                 error=_failure_error("internal_error", f"supervisor failed ({type(exc).__name__})"),
             )
         finally:
+            if gpu_slot_held:
+                self._gpu_slots.release()
             if slot_held:
                 self._slots.release()
             with self._lock:

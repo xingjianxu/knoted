@@ -42,6 +42,7 @@ from knoted_intelligence.embedding import bge
 
 FIXTURE_DIR = Path(__file__).resolve().parents[3] / "tests/fixtures/embedding"
 SENTENCES = FIXTURE_DIR / "sentences.json"
+OCR_SAMPLE = Path(__file__).resolve().parents[3] / "tests/fixtures/ocr/sample_zh_en.png"
 LOCK = Path(bge.__file__).with_name("LOCK.md")
 EXECUTIONS_PATH = "/internal/v1/executions"
 INPUT_OBJECT_ID = "t11-embed-input"
@@ -398,15 +399,102 @@ def test_t11_4_offline_load_without_network() -> None:
     )
 
 
+# -- t11_5 -------------------------------------------------------------------
+
+
+def test_t11_5_gpu_slots_serialize_parse_and_embed(tmp_path: Path) -> None:
+    """One GPU slot: a parse and an embed execution never run together.
+
+    The parser is pinned to the CPU here, but the deployment rule is about the
+    Python *slot*: OCR and embeddings share card index 1 and must not resident
+    both models at once. ``KNOTED_INTELLIGENCE_GPU_SLOTS`` defaults to 1 and is
+    acquired by every parse/embed execution before its child starts. The two
+    executions are submitted back-to-back while the first is still running; the
+    ledger's ``started_at``/``finished_at`` intervals must therefore not
+    overlap. Without the shared slot they start within milliseconds and overlap.
+    """
+
+    require_model()
+    assert OCR_SAMPLE.is_file(), OCR_SAMPLE
+    texts = fixture_texts()[:2]
+
+    with running_service(tmp_path, max_slots=2, child_hold_ms=1_500) as (client, settings):
+        assert settings.gpu_slots == 1
+        parse_object = "t11-5-parse"
+        embed_object = "t11-5-embed"
+        (settings.input_dir / parse_object).write_bytes(OCR_SAMPLE.read_bytes())
+        embed_input = settings.input_dir / embed_object
+        embed_input.write_text("\n".join(texts) + "\n", encoding="utf-8")
+
+        parse_id = str(uuid.uuid4())
+        created_parse = client.post(
+            EXECUTIONS_PATH,
+            json={
+                "execution_id": parse_id,
+                "kind": "parse",
+                "input_object_id": parse_object,
+                "input_sha256": hashlib.sha256(OCR_SAMPLE.read_bytes()).hexdigest(),
+                "source_version": 1,
+                "deadline": (datetime.now(UTC) + timedelta(minutes=10)).isoformat(),
+                "options_revision": "parse-t11-5",
+            },
+        )
+        assert created_parse.status_code == 201, created_parse.text
+
+        embed_id = str(uuid.uuid4())
+        created_embed = client.post(
+            EXECUTIONS_PATH,
+            json={
+                "execution_id": embed_id,
+                "kind": "embed",
+                "input_object_id": embed_object,
+                "input_sha256": hashlib.sha256(embed_input.read_bytes()).hexdigest(),
+                "source_version": 1,
+                "deadline": (datetime.now(UTC) + timedelta(minutes=10)).isoformat(),
+                "options_revision": bge.OPTIONS_REVISION,
+            },
+        )
+        assert created_embed.status_code == 201, created_embed.text
+
+        parse_record = wait_for_state(client, parse_id, {"succeeded", "failed"}, timeout=300.0)
+        embed_record = wait_for_state(client, embed_id, {"succeeded", "failed"}, timeout=300.0)
+
+    assert parse_record["state"] == "succeeded", parse_record
+    assert embed_record["state"] == "succeeded", embed_record
+
+    def interval(record: dict[str, Any]) -> tuple[datetime, datetime, datetime]:
+        created = datetime.fromisoformat(record["created_at"])
+        started = datetime.fromisoformat(record["started_at"])
+        finished = datetime.fromisoformat(record["finished_at"])
+        assert started <= finished, record
+        return created, started, finished
+
+    parse_created, parse_started, parse_finished = interval(parse_record)
+    embed_created, embed_started, embed_finished = interval(embed_record)
+
+    # Each request was accepted while the other was still in flight, so an
+    # overlap would be observed, not merely possible.
+    assert embed_created < parse_finished, (embed_created, parse_finished)
+    assert parse_created < embed_finished, (parse_created, embed_finished)
+
+    overlap = parse_started <= embed_finished and embed_started <= parse_finished
+    assert not overlap, (
+        "parse and embed overlapped while the GPU slot is 1: "
+        f"parse={parse_started.isoformat()}..{parse_finished.isoformat()} "
+        f"embed={embed_started.isoformat()}..{embed_finished.isoformat()}"
+    )
+
+
 # -- helpers -----------------------------------------------------------------
 
 
 @contextmanager
-def running_service(tmp_path: Path) -> Iterator[tuple[TestClient, Settings]]:
+def running_service(tmp_path: Path, **overrides: Any) -> Iterator[tuple[TestClient, Settings]]:
+    options: dict[str, Any] = {"max_slots": 1, **overrides}
     settings = Settings(
         state_dir=tmp_path / "state",
         staging_dir=tmp_path / "staging",
-        max_slots=1,
+        **options,
     )
     settings.prepare()
     with TestClient(create_app(settings)) as client:

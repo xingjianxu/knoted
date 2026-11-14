@@ -40,6 +40,7 @@ from . import models, offline
 # `import knoted_intelligence.parsing.docling_adapter` also cannot download.
 offline.enforce_offline()
 
+from docling.datamodel.accelerator_options import AcceleratorOptions  # noqa: E402
 from docling.datamodel.base_models import ConversionStatus, InputFormat  # noqa: E402
 from docling.datamodel.pipeline_options import (  # noqa: E402
     OcrMode,
@@ -149,7 +150,7 @@ def parse_document(
         page_count = _pdf_page_count(source)
 
     artifacts = models.require_artifacts(root)
-    converter = _converter(str(artifacts))
+    converter = _converter(str(artifacts), models.docling_device())
     try:
         result = converter.convert(str(source))
     except models.ParseError:  # pragma: no cover - nothing inside raises it yet
@@ -171,12 +172,13 @@ def parse_document(
 
 
 @lru_cache(maxsize=2)
-def _converter(artifacts_path: str) -> DocumentConverter:
-    """Builds (and reuses) the converter for one artifacts tree.
+def _converter(artifacts_path: str, device: str) -> DocumentConverter:
+    """Builds (and reuses) the converter for one artifacts tree and device.
 
     The cache is per process; every execution runs in its own child process, so
-    it only saves the model load when a caller parses twice. The key is the
-    artifacts path, so two model trees never share a converter.
+    it only saves the model load when a caller parses twice. The key includes
+    the explicitly configured device, so a changed setting never reuses a
+    converter built for another accelerator.
     """
 
     if models.TABLEFORMER_MODE != "fast":  # pragma: no cover - guarded by LOCK.md
@@ -191,6 +193,10 @@ def _converter(artifacts_path: str) -> DocumentConverter:
     )
     pipeline_options = PdfPipelineOptions(
         artifacts_path=Path(artifacts_path),
+        # Docling's default is `auto`, which selects cuda:0 as soon as torch
+        # sees a GPU. The device is therefore always passed explicitly; the
+        # locked default is cpu (see models.docling_device).
+        accelerator_options=AcceleratorOptions(device=device),
         do_ocr=True,
         ocr_options=ocr_options,
         do_table_structure=True,
@@ -205,8 +211,9 @@ def _converter(artifacts_path: str) -> DocumentConverter:
         generate_picture_images=False,
     )
     logger.info(
-        "loading the locked parser: artifacts=%s docling=%s rapidocr=%s",
+        "loading the locked parser: artifacts=%s device=%s docling=%s rapidocr=%s",
         artifacts_path,
+        device,
         models.DOCLING_VERSION,
         models.RAPIDOCR_VERSION,
     )

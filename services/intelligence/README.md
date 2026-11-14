@@ -26,6 +26,8 @@ under `/data/knoted-dev/service`:
 | `KNOTED_INTELLIGENCE_CHILD_IGNORE_SIGTERM` | `0` | Makes the child ignore SIGTERM; it exists so the SIGKILL escalation is tested against a genuinely unresponsive child. |
 | `KNOTED_INTELLIGENCE_MODELS_DIR` | `/data/knoted-dev/service/models` | Provisioned model tree; `ocr/docling` is `parsing/LOCK.md`, `bge-m3` is `embedding/LOCK.md`. |
 | `KNOTED_EMBED_GPU_UUID` | unset (CPU) | `nvidia-smi -L` UUID copied to `CUDA_VISIBLE_DEVICES` before torch loads; there is no default index. |
+| `KNOTED_INTELLIGENCE_GPU_SLOTS` | `1` | Slots for parse + embed work. Both kinds acquire it before a child starts, so OCR and embeddings never resident together. |
+| `KNOTED_INTELLIGENCE_DOCLING_DEVICE` | `cpu` | Explicit Docling device (`cpu`, `cuda`, `cuda:N`). `auto` is refused: it would pick index 0, Strata's card. |
 
 Execution semantics, all verified by `tests/test_t09.py`:
 
@@ -57,3 +59,5 @@ RapidOCR (`src/knoted_intelligence/parsing/LOCK.md`), `embed` uses the local
 dense BGE-M3 snapshot (`src/knoted_intelligence/embedding/LOCK.md`) and reads
 the staged input as UTF-8 text with one text per non-blank line. Both reject
 invalid output with a stable error code instead of publishing a partial result.
+Parse and embed share `KNOTED_INTELLIGENCE_GPU_SLOTS` (default 1), so the two
+model families are serialised on the one Python card.

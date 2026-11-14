@@ -19,6 +19,7 @@ tokenizer revision、推理依赖版本、`model_revision` 配置键、GPU UUID 
 | tokenizer revision | 与模型同一 commit：`5617a9f61b028005a4858fdac845db406aefb181`（tokenizer 文件在本快照内，不二次下载） |
 | GPU 选择 | `KNOTED_EMBED_GPU_UUID` 必须是 `nvidia-smi -L` 的 UUID（形如 `GPU-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`），由 `bge.py` 在导入 torch 前复制到 `CUDA_VISIBLE_DEVICES`；**不设默认 0/1**，未设置时用 CPU，非法 UUID 或配置了 GPU 但 torch 看不到卡都是明确错误（`invalid_gpu_uuid` / `cuda_unavailable`），不静默降级 |
 | NixOS CUDA 前置 | `LD_LIBRARY_PATH=/run/opengl-driver/lib`（否则 torch 看不到卡；host 证据 §6/§7） |
+| 共享 GPU 槽 | `KNOTED_INTELLIGENCE_GPU_SLOTS`，默认 `1`。`kind=parse` 与 `kind=embed` 都在子进程启动前获取该槽，OCR 与嵌入不会同时驻留；`max_slots` 仍限制全部并发，`gpu_slots` 只限制 GPU 类执行 |
 
 部署主机上 Python 侧（OCR + 嵌入串行）使用 `GPU-9e2b6db5-acef-fa85-a28a-7214d1f4c6c0`
 （index 1）；index 0 的 `GPU-6bc31459-…` 由 Strata 独占。UUID 由 host 侧
@@ -149,6 +150,9 @@ max_seq_length/runtime 版本/`gpu_uuid_env`/`options_revision`），消费方�
 - `t11_3`：`LOCK.md`、`MANIFEST.json`、`bge.MODEL_REVISION`、`lock_summary()` 与
   实际加载契约（`hidden_size`/`max_seq_length`/`device`）一致；13 个文件的 size/sha256
   三方一致；安装的 4 个库版本等于锁定值；UUID 环境变量的映射被实际检查。
+- `t11_5`：`max_slots=2` 下同时提交一个 parse 与一个 embed，两者在账本里的
+  `started_at..finished_at` 区间不重叠（`gpu_slots` 默认 1）；两个请求都在对方结束前
+  被接受，因此重叠是可观测的而不是理论上的。修复前该用例实测重叠（同机复跑）。
 - `t11_4`：新解释器在最顶部封锁 `socket.socket.connect`/`socket.create_connection`，
   `HF_HOME`/`SENTENCE_TRANSFORMERS_HOME` 指向空目录，仍从本地快照加载并输出
   2×1024 归一化向量；事后 hub cache 目录为空（没有偷偷回填）。
@@ -162,5 +166,7 @@ max_seq_length/runtime 版本/`gpu_uuid_env`/`options_revision`），消费方�
 - 输入行格式是 T11 临时约定，T58 负责 `ChunkSet → EmbeddingSet` 的最终批处理契约。
 - 模型不参与备份/迁移、不进 Nix store；换机器或删目录后重跑 `fetch-model.sh --check`。
 - 本卡不改 T09 的账本/状态机语义，只把 `kind=embed` 的占位计算替换为真实 dense 模型。
+- OCR 设备由 `KNOTED_INTELLIGENCE_DOCLING_DEVICE` 显式控制（默认 `cpu`，见
+  `parsing/LOCK.md`）；嵌入仍按 `KNOTED_EMBED_GPU_UUID` 选卡，两者共用 `gpu_slots`。
 - `CUDA_VISIBLE_DEVICES` 由本模块按 UUID 覆盖设置；同一进程内没有第二张卡的并发嵌入，
   GPU 槽位串行由调度器/T58 决定。

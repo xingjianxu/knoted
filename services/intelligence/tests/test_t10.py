@@ -499,6 +499,53 @@ def minimal_pdf(*, width: int, height: int) -> bytes:
     return bytes(payload)
 
 
+def test_t10_5_docling_device_is_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CUDA being visible must never move the parser onto an unassigned card.
+
+    Docling's default is ``auto``, which picks ``cuda:0`` when torch can see a
+    GPU. On the deployment host index 0 is Strata's card, so an unpinned parser
+    either OOMs against Strata or steals its memory. The lock therefore pins the
+    parser to ``cpu`` by default (the installed onnxruntime backend is the CPU
+    wheel) and only an explicit ``KNOTED_INTELLIGENCE_DOCLING_DEVICE`` may move
+    it.
+    """
+
+    artifacts = require_artifacts()
+    from docling.datamodel.base_models import InputFormat
+
+    from knoted_intelligence.parsing import docling_adapter
+
+    assert locked.DEFAULT_DOCLING_DEVICE == "cpu"
+    monkeypatch.delenv(locked.DOCLING_DEVICE_ENV, raising=False)
+    assert locked.docling_device() == "cpu"
+
+    def configured_device(device: str) -> object:
+        converter = docling_adapter._converter(str(artifacts), device)
+        options = converter.format_to_options[InputFormat.PDF].pipeline_options
+        return options.accelerator_options.device
+
+    # The value read from the environment is the value Docling receives; the
+    # override is passed through without initialising CUDA.
+    assert configured_device(locked.docling_device()) == "cpu"
+    assert configured_device("cuda:0") == "cuda:0"
+
+    # Automatic selection and per-index shortcuts are refused: a card is chosen
+    # by the host (UUID at the process boundary), never by a library default.
+    for invalid in ("auto", "0", "1", "GPU-9e2b6db5-acef-fa85-a28a-7214d1f4c6c0", "cuda:x"):
+        monkeypatch.setenv(locked.DOCLING_DEVICE_ENV, invalid)
+        with pytest.raises(ParseError) as refused:
+            locked.docling_device()
+        assert refused.value.code == "invalid_device", refused.value
+        assert str(refused.value).startswith("[locked: "), str(refused.value)
+
+    # The OOM regression: with CUDA visible (LD_LIBRARY_PATH set on NixOS), the
+    # default CPU parser still parses the fixture successfully.
+    monkeypatch.delenv(locked.DOCLING_DEVICE_ENV, raising=False)
+    document = parse_sample()
+    assert document.full_text.strip()
+    assert configured_device(locked.docling_device()) == "cpu"
+
+
 @contextmanager
 def running_service(tmp_path: Path) -> Iterator[tuple[TestClient, Settings]]:
     settings = Settings(
