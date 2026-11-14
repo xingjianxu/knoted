@@ -15,17 +15,113 @@ pub use middleware::RequestId;
 
 use axum::Router;
 use knoted_core::context::AppContext;
-use tower_http::catch_panic::CatchPanicLayer;
 
-/// Builds the complete router: health probes, the fallback and the shared
-/// middleware.
+/// Wraps a router with the transport layer stack shared by the binary and the
+/// tests.
 ///
-/// Layer order matters. The request id layer is outermost so every response,
-/// including a 404 or a 500 produced by the panic guard, carries
-/// `X-Request-Id`. The panic guard is inside it so a handler panic becomes a
-/// 500 response instead of dropping the connection.
-pub fn build_router(ctx: AppContext) -> Router {
-    routes::router(ctx)
-        .layer(CatchPanicLayer::new())
+/// Layer order matters. The request id layer is outermost, so every response,
+/// including a 404, a 405 or a 500 produced by the panic guard, carries
+/// `X-Request-Id`. The panic guard sits inside it and converts an unwind into
+/// the shared JSON 500 body.
+pub fn with_transport_layers<S>(router: Router<S>) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    router
+        .layer(axum::middleware::from_fn(middleware::catch_panic))
         .layer(axum::middleware::from_fn(middleware::request_id))
+}
+
+/// Builds the complete router: health probes, the fallbacks and the shared
+/// middleware.
+pub fn build_router(ctx: AppContext) -> Router {
+    with_transport_layers(routes::router(ctx))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::OnceLock;
+
+    use axum::Router;
+    use axum::body::{Body, to_bytes};
+    use axum::http::{Request, StatusCode};
+    use axum::routing::get;
+    use knoted_core::config::{LogFormat, LogLevel};
+    use serde_json::Value;
+    use tower::ServiceExt;
+    use uuid::Uuid;
+
+    use crate::logging::{self, LogBuffer};
+    use crate::with_transport_layers;
+
+    async fn panicking_handler() -> StatusCode {
+        panic!("PANICPAYLOADSECRET")
+    }
+
+    static LOG_BUFFER: OnceLock<LogBuffer> = OnceLock::new();
+
+    fn captured_logs() -> &'static LogBuffer {
+        LOG_BUFFER.get_or_init(|| {
+            let buffer = LogBuffer::new();
+            let sink = buffer.clone();
+            logging::init_with_writer(move || sink.clone(), LogLevel::Info, LogFormat::Text)
+                .expect("the test logging subscriber must install cleanly");
+            buffer
+        })
+    }
+
+    #[tokio::test]
+    async fn t06_4_panic_500_uses_shared_error_body() {
+        let logs = captured_logs();
+        // The same stack `build_router` uses, so the test cannot drift from
+        // production layer ordering.
+        let app = with_transport_layers(Router::new().route("/panic", get(panicking_handler)));
+
+        let supplied = Uuid::new_v4();
+        let response = app
+            .oneshot(
+                Request::get("/panic")
+                    .header("x-request-id", supplied.to_string())
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("a panicking handler must still answer");
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-request-id")
+                .expect("a 500 response must carry X-Request-Id")
+                .to_str()
+                .expect("X-Request-Id must be ASCII"),
+            supplied.to_string(),
+            "the 500 must keep the request's own id"
+        );
+
+        let request_id = supplied;
+        let bytes = to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("the 500 body must be readable");
+        let body: Value = serde_json::from_slice(&bytes).expect("the 500 body must be JSON");
+        assert_eq!(body["code"], "internal_error");
+        assert!(
+            body["message"]
+                .as_str()
+                .is_some_and(|message| !message.is_empty()),
+            "the error message must explain the failure: {body}"
+        );
+        assert_eq!(
+            body["request_id"],
+            request_id.to_string(),
+            "the 500 body must carry the same request id as the header"
+        );
+
+        let logs = logs.contents();
+        assert!(
+            !logs.contains("PANICPAYLOADSECRET"),
+            "the panic payload may contain user content and must never be logged: {logs}"
+        );
+    }
 }

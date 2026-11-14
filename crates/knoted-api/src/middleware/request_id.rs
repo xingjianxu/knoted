@@ -120,39 +120,3 @@ pub async fn request_id(mut request: Request, next: Next) -> Response {
 
     response
 }
-
-#[cfg(test)]
-mod tests {
-    use axum::Router;
-    use axum::body::Body;
-    use axum::http::{Request, StatusCode};
-    use axum::routing::get;
-    use tower::ServiceExt;
-
-    use super::{X_REQUEST_ID_HEADER, request_id};
-
-    async fn panicking_handler() -> StatusCode {
-        panic!("synthetic handler panic")
-    }
-
-    #[tokio::test]
-    async fn t06_4_panic_500_keeps_request_id() {
-        // A panic escaping a handler becomes a 500, and the outer request id
-        // layer still labels it, so operators can find the failing request.
-        let app: Router = Router::new()
-            .route("/panic", get(panicking_handler))
-            .layer(tower_http::catch_panic::CatchPanicLayer::new())
-            .layer(axum::middleware::from_fn(request_id));
-
-        let response = app
-            .oneshot(Request::get("/panic").body(Body::empty()).expect("request"))
-            .await
-            .expect("a panicking handler must still answer with a 500");
-
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        assert!(
-            response.headers().contains_key(X_REQUEST_ID_HEADER),
-            "a 500 response must carry X-Request-Id"
-        );
-    }
-}

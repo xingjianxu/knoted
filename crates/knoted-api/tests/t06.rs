@@ -6,10 +6,12 @@
 //! exercised against applied migrations. A missing database is a test failure,
 //! never a skip.
 
-use axum::body::{Body, to_bytes};
+use std::sync::OnceLock;
+
+use axum::body::{Body, Bytes, to_bytes};
 use axum::http::{HeaderMap, Request, StatusCode, header};
-use knoted_api::build_router;
 use knoted_api::logging::{self, LogBuffer};
+use knoted_api::{build_router, with_transport_layers};
 use knoted_core::config::{LogFormat, LogLevel};
 use knoted_core::context::AppContext;
 use knoted_core::db::testing::TestDb;
@@ -19,6 +21,25 @@ use uuid::Uuid;
 
 const UNREACHABLE_HINT: &str = "the local PostgreSQL test database must be running \
      (KNOTED_TEST_DATABASE_URL, default postgres:///knoted_test?host=/run/postgresql)";
+
+/// Process-wide log sink, installed at most once so adding more logging tests
+/// cannot make the suite order-dependent.
+static LOG_BUFFER: OnceLock<LogBuffer> = OnceLock::new();
+
+fn captured_logs() -> &'static LogBuffer {
+    LOG_BUFFER.get_or_init(|| {
+        let buffer = LogBuffer::new();
+        let sink = buffer.clone();
+        logging::init_with_writer(move || sink.clone(), LogLevel::Info, LogFormat::Text)
+            .expect("the test logging subscriber must install cleanly");
+        buffer
+    })
+}
+
+/// Echoes the exact request body back, proving a handler received it.
+async fn echo_body(body: Bytes) -> Bytes {
+    body
+}
 
 async fn call(app: axum::Router, request: Request<Body>) -> (StatusCode, HeaderMap, Value) {
     let response = app
@@ -186,30 +207,32 @@ async fn t06_2_error_response_carries_request_id() {
 
 #[tokio::test]
 async fn t06_3_logs_exclude_body_and_cookies() {
-    let db = TestDb::create()
-        .await
-        .unwrap_or_else(|error| panic!("test schema setup failed: {error}; {UNREACHABLE_HINT}"));
+    let buffer = captured_logs();
 
-    // The subscriber is process-wide, so it is installed once here. Requests
-    // from the other tests may interleave, but only this test sends secrets.
-    let buffer = LogBuffer::new();
-    let sink = buffer.clone();
-    logging::init_with_writer(move || sink.clone(), LogLevel::Info, LogFormat::Text)
-        .expect("the test logging subscriber must install cleanly");
-
-    let app = build_router(AppContext::new(db.pool.clone()));
-    let request = Request::post("/health/live")
+    // A test route on the same transport stack as production. The handler
+    // echoes the body, so the response proves the payload really reached the
+    // server while the captured logs must not contain it.
+    let app =
+        with_transport_layers(axum::Router::new().route("/echo", axum::routing::post(echo_body)));
+    let payload = r#"{"note":"SUPERSECRETBODY"}"#;
+    let request = Request::post("/echo")
         .header(header::COOKIE, "knoted_session=SECRETVALUE")
         .header(header::AUTHORIZATION, "Bearer SECRETVALUE")
         .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(r#"{"note":"SUPERSECRETBODY"}"#))
+        .body(Body::from(payload))
         .expect("request");
 
     let response = app.oneshot(request).await.expect("the router must answer");
-    // `/health/live` is GET-only; the rejection is still a logged request that
-    // carries a request id.
-    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(response.status(), StatusCode::OK);
     let request_id = header_request_id(response.headers());
+    let bytes = to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .expect("the echoed body must be readable");
+    assert_eq!(
+        String::from_utf8_lossy(&bytes),
+        payload,
+        "the handler must receive the exact request body"
+    );
 
     let logs = buffer.contents();
     assert!(!logs.is_empty(), "the request must produce a log line");
@@ -222,16 +245,63 @@ async fn t06_3_logs_exclude_body_and_cookies() {
         "the logged request id must match the response header: {logs}"
     );
     assert!(
-        logs.contains("/health/live"),
+        logs.contains("/echo"),
         "the request path must be logged: {logs}"
+    );
+    assert!(
+        logs.contains("status=200"),
+        "the response status must be logged: {logs}"
     );
     assert!(
         !logs.contains("SECRETVALUE"),
         "cookies and authorization headers must never be logged: {logs}"
     );
     assert!(
+        !logs.contains("knoted_session"),
+        "cookie names must never be logged: {logs}"
+    );
+    assert!(
         !logs.contains("SUPERSECRETBODY"),
         "request bodies must never be logged: {logs}"
+    );
+}
+
+#[tokio::test]
+async fn t06_5_method_not_allowed_uses_shared_error_body() {
+    let db = TestDb::create()
+        .await
+        .unwrap_or_else(|error| panic!("test schema setup failed: {error}; {UNREACHABLE_HINT}"));
+    let app = build_router(AppContext::new(db.pool.clone()));
+
+    // `/health/live` exists but only for GET: a POST must answer with the same
+    // JSON error envelope as every other failure, not an empty body.
+    let response = app
+        .oneshot(
+            Request::post("/health/live")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("the router must answer");
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+
+    let request_id = header_request_id(response.headers());
+    let bytes = to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .expect("the 405 body must be readable");
+    let body: Value = serde_json::from_slice(&bytes).expect("the 405 body must be JSON");
+    assert_eq!(body["code"], "method_not_allowed");
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|message| !message.is_empty()),
+        "the error message must explain the failure: {body}"
+    );
+    assert_eq!(
+        body["request_id"],
+        request_id.to_string(),
+        "405 body and header must share one request id"
     );
 
     db.drop().await;

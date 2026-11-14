@@ -25,7 +25,7 @@ axum = { version = "0.8", features = [
     "form",
 ] }
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["trace", "request-id", "catch-panic"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 http = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
