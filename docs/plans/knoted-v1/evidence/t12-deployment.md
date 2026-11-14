@@ -43,14 +43,15 @@
 
 ```sh
 cd <上游只读快照>
+export PROBE_KEY=$(python3 -c 'import secrets; print(secrets.token_hex(12))')  # 一次性 mock 值
 TMPDIR=/data/knoted-dev/tasks/t12/tmp \
   /data/knoted-dev/tasks/t12/probe-venv/bin/python -m serve.server \
-  --engine mock --host 127.0.0.1 --port 19095 --api-key t12-probe-key \
+  --engine mock --host 127.0.0.1 --port 19095 --api-key "$PROBE_KEY" \
   --script "probe ok"
 ```
 
-`t12-probe-key` 是本次临时 mock 服务的一次性探测值（已在探测后废弃），不是任何真实凭据；
-真实 key 只存在于 host 创建的运行凭据文件。
+`PROBE_KEY` 只在本次 mock 探测中生成、探测后丢弃，不是任何真实凭据；真实 key 只存在于 host
+创建的运行凭据文件。下方命令统一用 `$PROBE_KEY` 占位，避免把任何字面量密钥写进证据或触发扫描器。
 
 ### 2.1 认证与错误体
 
@@ -74,7 +75,7 @@ Knoted 统一使用 `Authorization: Bearer`，key 从运行凭据文件读取，
 ### 2.2 模型列表
 
 ```sh
-curl -sS -H 'Authorization: Bearer t12-probe-key' http://127.0.0.1:19095/v1/models
+curl -sS -H "Authorization: Bearer $PROBE_KEY" http://127.0.0.1:19095/v1/models
 ```
 
 ```json
@@ -182,7 +183,8 @@ data: [DONE]
 ```sh
 ss -ltnp | grep 19095
 # LISTEN 0 256 127.0.0.1:19095 0.0.0.0:* users:(("python",pid=…,fd=6))
-curl --max-time 2 http://<本机非回环地址>:19095/health
+LAN_IP=$(ip -4 route get 1.1.1.1 | awk '{print $7; exit}')
+curl --max-time 2 "http://$LAN_IP:19095/health"
 # curl: (7) Failed to connect …; HTTP 000
 ```
 
@@ -191,12 +193,31 @@ curl --max-time 2 http://<本机非回环地址>:19095/health
 ### 2.6 断连取消（mock 实测）
 
 方法：mock 脚本 120 个 token、`--script-delay 0.05`（单个请求约 6 秒）；客户端流式读取 0.6 秒后关闭连接。
+先重启 mock（保留 `$PROBE_KEY`）：
 
 ```sh
-timeout 0.6 curl -sS -N -H 'Authorization: Bearer t12-probe-key' \
+kill "$(cat mock-server.pid)"
+LONG=$(python3 -c "print(' '.join(['alpha']*120))")
+TMPDIR=/data/knoted-dev/tasks/t12/tmp \
+  /data/knoted-dev/tasks/t12/probe-venv/bin/python -m serve.server \
+  --engine mock --host 127.0.0.1 --port 19095 --api-key "$PROBE_KEY" \
+  --script-delay 0.05 --script "$LONG" --script "short second answer" \
+  > mock-server-cancel.log 2>&1 &
+echo $! > mock-server.pid
+```
+
+```sh
+timeout 0.6 curl -sS -N -H "Authorization: Bearer $PROBE_KEY" \
   -H 'Content-Type: application/json' \
   -d '{"model":"qwen3.8-flash-next-iq3_s","messages":[{"role":"user","content":"long"}],"max_tokens":200,"stream":true}' \
-  http://127.0.0.1:19095/v1/chat/completions > stream-disconnect.partial.sse
+  http://127.0.0.1:19095/v1/chat/completions > stream-disconnect.partial.sse || true
+curl -sS -H "Authorization: Bearer $PROBE_KEY" http://127.0.0.1:19095/v1/status
+start=$(date +%s%3N)
+curl -sS -H "Authorization: Bearer $PROBE_KEY" -H 'Content-Type: application/json' \
+  -d '{"model":"qwen3.8-flash-next-iq3_s","messages":[{"role":"user","content":"short"}],"max_tokens":16,"stream":false}' \
+  http://127.0.0.1:19095/v1/chat/completions > after-cancel.json
+end=$(date +%s%3N)
+echo "second request elapsed_ms=$((end-start))"
 ```
 
 观测：
@@ -235,17 +256,69 @@ host 必须实测：长生成进行中 `systemctl stop knoted-strata`，然后
 `/v1/models` 的 `id`、响应 `model` 字段和配置别名三者不一致时，provider 配置视为无效，报依赖不可用，
 不得静默改用服务端报告的名字。
 
+**别名唯一权威**：`nix/strata-client.nix` 的 `knoted.strata.model.alias` 是唯一默认值；T61 不得在应用配置里
+另写一份默认别名。服务启动前的 preflight 会读取 run config 的 `model_name` 并拒绝与别名不一致的启动，
+所以别名漂移会在部署时失败，而不是运行时静默改变模型身份。
+
+### 3.1 GPU 分配（计划约束）
+
+`requirements.md` R30 与 `indexing-and-rag.md` 规定应用最多使用两张 GPU：一张 Strata、一张 Python。
+wks-lab 有 3 张 3090，默认分配如下：
+
+| nvidia-smi 序号 | UUID | 用途 |
+| --- | --- | --- |
+| 0 | `GPU-6bc31459-053f-60ef-0615-3aec9593c9e7` | Strata（`knoted.strata.gpus` 的唯一默认项） |
+| 1 | `GPU-9e2b6db5-acef-fa85-a28a-7214d1f4c6c0` | Python（由 Python 服务按 UUID 配置，不在本模块） |
+| 2 | `GPU-bf8d2065-6d30-4a83-d9a7-efb41ab26cef` | 不使用 |
+
+`knoted.strata.gpus` 接受 1—2 条 UUID，默认 1 条；列 2 条必须同时有 R30/计划变更记录。断言拒绝 0 条、
+3 条和数字索引；UUID 只归一化十六进制部分，`GPU-` 前缀保持大写。模块用 `CUDA_VISIBLE_DEVICES` 把 UUID
+重编号为 0..n-1，Strata 的 `gpu` 字段仍按进程内索引工作，不依赖主机上的永久 0/1。
+
+### 3.2 若 host 采用 llama.cpp 承载（等价映射，未验证）
+
+同一批 IQ3_S 文件是标准 GGUF（上游未对 llama.cpp 承载这一组合作出承诺）。如果 host 选择用 nixpkgs 的
+llama.cpp 而不是 Strata 承载它们，必须保持下列等价映射，否则 Knoted 契约失效：
+
+| 契约项 | Strata 实现 | llama.cpp 等价参数 |
+| --- | --- | --- |
+| 监听 | `strata serve --host 127.0.0.1 --port 15604` | `--host 127.0.0.1 --port 15604` |
+| 模型别名 | run config `model_name` | `--alias qwen3.8-flash-next-iq3_s` |
+| 凭据 | systemd LoadCredential → `STRATA_API_KEY` | `--api-key-file /run/knoted/strata-api-key` |
+| GPU | `CUDA_VISIBLE_DEVICES=<UUID>` | 同值；UUID 而非 0/1 索引 |
+| 流式 | `/v1/chat/completions` SSE | 同端点、同 SSE 形状 |
+
+`t12_1`/`t12_2` 的命令与断言完全不变：只监听 `127.0.0.1:15604`，`/v1/models` 的 `id` 与响应 `model`
+字段必须等于别名。此承载方式本任务**未验证**；host 若采用，必须记录 llama.cpp 版本与构建摘要，并重跑
+同一套验收命令，不能引用 Strata 的验证结果。
+
 ## 4. host 子任务接口约定（安装/启用时需要对齐）
 
-1. 安装 Strata `0.2.13.1`（记录实际 build/组件版本）到 `/data/llm/strata`；Knoted 不 fetch 二进制。
-2. 安装第 5 节的 IQ3_S 文件到 `/data/llm/strata/models/IQ3_S/`，实测每个文件的 size/sha256。
-3. 生成 `/data/llm/strata/config/iq3_s.json`，必须包含 `"model_name": "qwen3.8-flash-next-iq3_s"`；
+以下任一项缺失都视为部署失败，不得把服务标为“可用”；模块的 preflight 也会拒绝启动。
+
+1. **账号**：创建 `knoted` 系统用户/组（与 API、Python 服务共用）；模块的 tmpfiles 规则假设该组已存在。
+2. **目录**：`install -d -o root -g root -m 0755 /data/llm/strata`，以及 model/config 子目录；
+   `install -d -o knoted -g knoted -m 0750 /data/llm/strata/state`（`/data` 为独立挂载，tmpfiles 在
+   `local-fs.target` 之后重设为 0750 knoted:knoted）。
+3. **程序**：安装 Strata `0.2.13.1`（记录实际 build/组件版本）到 `/data/llm/strata`；Knoted 不 fetch 二进制。
+4. **模型**：安装第 5 节的 IQ3_S 文件到 `/data/llm/strata/models/IQ3_S/`，实测每个文件的 size/sha256。
+5. **run config**：生成 `/data/llm/strata/config/iq3_s.json`，必须包含
+   `"model_name": "qwen3.8-flash-next-iq3_s"`（模块 preflight 用 jq 校验，不一致拒绝启动）；
    建议 `vision:false`（Knoted 只用文本），并记录实际下载的 MTP drafter 组件与摘要。
-4. 创建 `/run/knoted`（0750 root:knoted）和 `/run/knoted/strata-api-key`（root:knoted 0440）；
-   密钥不得进入 nix store、git、日志或 Issue。
-5. 用 `nix/strata-client.nix` 的 `knoted.strata` 选项启用 `knoted-strata.service`；单元以
-   `CUDA_VISIBLE_DEVICES=<两张 3090 UUID>` 运行，`strata serve` 只绑定 `127.0.0.1:15604`。
-6. 安装后回报：host 提交 SHA、实际 `strata --version`、组件版本、实测模型摘要、`/v1/models` 的 `id`、
+6. **运行凭据**：
+   ```sh
+   install -d -o root -g knoted -m 0750 /run/knoted
+   install -o root -g knoted -m 0440 /dev/null /run/knoted/strata-api-key   # 内容由 host 写入真实 key
+   { printf 'Authorization: Bearer '; cat /run/knoted/strata-api-key; printf '\n'; } \
+     > /run/knoted/strata-auth-header
+   chown knoted:knoted /run/knoted/strata-auth-header
+   chmod 0600 /run/knoted/strata-auth-header
+   ```
+   密钥不得进入 nix store、git、日志、Issue 或命令行参数；验证命令用 `-H @<头文件>` 读取。
+7. **单元**：用 `nix/strata-client.nix` 的 `knoted.strata` 选项启用 `knoted-strata.service`；默认
+   `CUDA_VISIBLE_DEVICES=GPU-6bc31459-…`（单卡 Strata，Python 用另一张，第三张不用），
+   `strata serve` 只绑定 `127.0.0.1:15604`。
+8. **回报**：host 提交 SHA、实际 `strata --version`、组件版本、实测模型摘要、`/v1/models` 的 `id`、
    `ss -ltnp` 的 15604 行、一次流式调用记录与断连取消记录。
 
 ## 5. 固定模型记录表（实测值待 host 填充）
@@ -273,29 +346,37 @@ host 必须实测：长生成进行中 `systemctl stop knoted-strata`，然后
 | 场景 | 要求 | 当前状态 | 部署后必须执行的命令 |
 | --- | --- | --- | --- |
 | `t12_1` | 服务仅回环 | **未通过（未部署）**；仅在 mock 19095 上预检过 `--host 127.0.0.1` | `ss -ltnp \| grep ':15604'` 必须只有 `127.0.0.1:15604`；从非回环地址连接必须失败 |
-| `t12_2` | 记录模型与上游摘要 | **未通过（未验证）**；第 5 节表已建立，实测列全为“未验证” | `sha256sum /data/llm/strata/models/IQ3_S/*.gguf`；`curl -H "Authorization: Bearer $(cat /run/knoted/strata-api-key)" http://127.0.0.1:15604/v1/models` |
+| `t12_2` | 记录模型与上游摘要 | **未通过（未验证）**；第 5 节表已建立，实测列全为“未验证” | `sha256sum /data/llm/strata/models/IQ3_S/*.gguf`；`curl -sS -H @/run/knoted/strata-auth-header http://127.0.0.1:15604/v1/models` |
 | `t12_3` | 未完成部署不写通过 | **满足约束**：全文未把任何部署/运行项写成通过 | 本文件与 T12 卡状态保持 pending，直到 host 证据补齐 |
 
-host 安装后的最小功能验证（必须真实执行并回填命令/退出码/输出）：
+host 安装后的最小功能验证（必须真实执行并回填命令/退出码/输出）。所有 curl 用
+`-H @/run/knoted/strata-auth-header`（该文件 0600，内容 `Authorization: Bearer <key>`）读取凭据，
+**不要把 key 放进 curl argv**：本机其他用户可读 `/proc/*/cmdline`。`curl -H @file` 需要 curl ≥ 7.55；
+更旧的版本可用 `--config` 把 header 写在 0600 配置文件里。
 
 ```sh
+# 0) 前置：host 已按第 4 节创建账号/目录/凭据；头文件供验证使用
+#    （见第 4 节第 6 条；key 本身不要出现在此处）
+
 # 1) 回环与健康
-ss -ltnp | grep ':15604'
+ss -ltnp | grep ':15604'            # 必须只有 127.0.0.1:15604
 curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:15604/health
 
-# 2) 模型身份
-curl -sS -H "Authorization: Bearer $(cat /run/knoted/strata-api-key)" \
-  http://127.0.0.1:15604/v1/models
+# 2) 模型身份（id 必须等于 qwen3.8-flash-next-iq3_s）
+curl -sS -H @/run/knoted/strata-auth-header http://127.0.0.1:15604/v1/models
 
 # 3) 小样本流式（记录完整 SSE，确认 content 与 [DONE]）
-curl -sS -N -H "Authorization: Bearer $(cat /run/knoted/strata-api-key)" \
+curl -sS -N -H @/run/knoted/strata-auth-header \
   -H 'Content-Type: application/json' \
   -d '{"model":"qwen3.8-flash-next-iq3_s","messages":[{"role":"user","content":"Reply with: ok"}],"max_tokens":16,"temperature":0,"stream":true,"stream_options":{"include_usage":true}}' \
   http://127.0.0.1:15604/v1/chat/completions
 
-# 4) 断连取消（长输出，读 1 秒后关闭；随后查 /v1/status 与 GPU 进程）
-timeout 1 curl -sS -N ...（同上，max_tokens 较大）> partial.sse
-curl -sS -H "Authorization: Bearer $(cat /run/knoted/strata-api-key)" http://127.0.0.1:15604/v1/status
+# 4) 断连取消：长输出读 1 秒后关闭，再查状态与 GPU 进程
+timeout 1 curl -sS -N -H @/run/knoted/strata-auth-header \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"qwen3.8-flash-next-iq3_s","messages":[{"role":"user","content":"Count slowly to 200."}],"max_tokens":512,"temperature":0,"stream":true}' \
+  http://127.0.0.1:15604/v1/chat/completions > /tmp/t12-partial.sse || true
+curl -sS -H @/run/knoted/strata-auth-header http://127.0.0.1:15604/v1/status
 nvidia-smi --query-compute-apps=pid,process_name,gpu_uuid --format=csv
 
 # 5) 单元停止不残留引擎
@@ -303,26 +384,71 @@ systemctl stop knoted-strata
 nvidia-smi --query-compute-apps=pid,process_name,gpu_uuid --format=csv
 ```
 
-任一步失败即 t12 未通过，不得以“接口能连”替代模型加载/生成/停止的实测。
+以上 host 命令均为**未执行**，部署后必须把真实退出码/输出回填；任一步失败即 t12 未通过，
+不得以“接口能连”替代模型加载/生成/停止的实测。
 
 ## 7. Nix 模块验证（已实际执行）
 
 文件：`nix/strata-client.nix`。它是标准 NixOS module（`options.knoted.strata`），host 可 `imports` 后启用，
-不 fetch 二进制、不写密钥。
+不 fetch 二进制、不写密钥。以下命令均在仓库根目录执行（`$(pwd)` 换成实际 worktree 根即可复现）。
 
 ```sh
 nix-instantiate --parse nix/strata-client.nix
-# exit 0，输出完整 AST（带模块函数头，约 11 KB）
-
-nix eval --impure --raw --expr '<nixpkgs> 完整 NixOS 求值，读取 config.knoted.strata.provider 等>'
-# exit 0；关键值：
-# baseUrl=http://127.0.0.1:15604
-# model=qwen3.8-flash-next-iq3_s
-# credentialFile=/run/knoted/strata-api-key
-# CUDA_VISIBLE_DEVICES=GPU-6bc31459-…,GPU-9e2b6db5-…
-# LoadCredential=strata-api-key:/run/knoted/strata-api-key
-# ExecStart=/nix/store/…-knoted-strata-serve
+# exit 0，输出完整 AST，13,574 bytes
 ```
+
+完整可复制的求值命令（本任务实际执行；`--impure` 只为允许 `<nixpkgs>` 与 `$(pwd)`）：
+
+```sh
+nix eval --impure --raw --expr "
+let sys = import <nixpkgs/nixos> { configuration = {
+  imports = [ $(pwd)/nix/strata-client.nix ];
+  nixpkgs.hostPlatform = \"x86_64-linux\"; system.stateVersion = \"24.11\";
+  knoted.strata.enable = true; }; };
+in builtins.toJSON {
+  baseUrl = sys.config.knoted.strata.provider.baseUrl;
+  model = sys.config.knoted.strata.provider.model;
+  package = sys.config.knoted.strata.package;
+  runConfig = sys.config.knoted.strata.runConfig;
+  modelPath = sys.config.knoted.strata.model.path;
+  stateDir = sys.config.knoted.strata.stateDir;
+  device = sys.config.systemd.services.knoted-strata.environment.CUDA_VISIBLE_DEVICES;
+  tmpfiles = builtins.filter (r: builtins.match \".*knoted.*\" r != null)
+    sys.config.systemd.tmpfiles.rules;
+}"
+```
+
+实际输出（exit 0；JSON 的换行只为展示，字段值与原始单行一致）：
+
+```json
+{"baseUrl":"http://127.0.0.1:15604",
+ "device":"GPU-6bc31459-053f-60ef-0615-3aec9593c9e7",
+ "model":"qwen3.8-flash-next-iq3_s",
+ "modelPath":"/data/llm/strata/models/IQ3_S",
+ "package":"/data/llm/strata/bin/strata",
+ "runConfig":"/data/llm/strata/config/iq3_s.json",
+ "stateDir":"/data/llm/strata/state",
+ "tmpfiles":["d /run/knoted 0750 root knoted -",
+             "d /data/llm/strata/state 0750 knoted knoted -"]}
+```
+
+完整系统求值（会触发所有断言；需要最小 `fileSystems`/grub 才能过 NixOS 自身断言）：
+
+```sh
+nix eval --impure --raw --expr "
+let sys = import <nixpkgs/nixos> { configuration = {
+  imports = [ $(pwd)/nix/strata-client.nix ];
+  nixpkgs.hostPlatform = \"x86_64-linux\"; system.stateVersion = \"24.11\";
+  knoted.strata.enable = true;
+  fileSystems.\"/\" = { device = \"/dev/vda1\"; fsType = \"ext4\"; };
+  boot.loader.grub.devices = [ \"/dev/vda\" ]; }; };
+in sys.config.system.build.toplevel.drvPath"
+# exit 0；输出 /nix/store/…-nixos-system-nixos-…drv（只求值，未 build）
+```
+
+模块还在服务启动前做两项运行时校验（eval 不会触发；host 启动时由 preflight 实际执行）：
+run config 的 `model_name` 必须等于别名（`jq -e`），`model.files` 每个文件的 `stat -c %s` 必须等于期望
+size；任一不符即拒绝启动。sha256 留给 host 证据（t12_2）。
 
 反向断言（应失败，实际失败）：
 
@@ -330,7 +456,12 @@ nix eval --impure --raw --expr '<nixpkgs> 完整 NixOS 求值，读取 config.kn
 | --- | --- | --- |
 | `listen.address = "0.0.0.0"` | exit 1 | `the provider must listen on 127.0.0.1 only` |
 | `gpus = [ "0" "1" ]` | exit 1 | `every entry must be a GPU UUID from nvidia-smi (GPU-…), not a numeric index` |
+| `gpus = [ <3 张真实 UUID> ]` | exit 1 | `1-2 cards only. The plan caps the application at two GPUs (one Strata, one Python)…` |
+| `listen.port = 15605` | exit 1 | `The option 'knoted.strata.listen.port' is read-only, but it's set multiple times` |
 | `extraArgs = [ "--api-key=leak" ]` | exit 1 | `never pass an API key on the command line; use apiKeyFile` |
+| `gpus = [ "GPU-6BC31459-…" ]`（大写） | exit 0 | 归一化为小写十六进制、`GPU-` 前缀保留，`CUDA_VISIBLE_DEVICES=GPU-6bc31459-…` |
+
+`git diff --check` / `git diff --cached --check` 均为 exit 0。
 
 限制：只做了 parse + NixOS 求值 + 断言，**没有** `nix build`、没有主机激活、没有修改 `/etc/nixos`；
 host 仍需在自己的 flake 中实际构建并启用。
@@ -343,5 +474,11 @@ host 仍需在自己的 flake 中实际构建并启用。
   不提交到仓库，本文已内联关键原文。
 - `/v1/models` 在 mock 下报 `qwen3.8-flash-next` 而非别名，这是 run config `model_name` 缺失的预期现象；
   host 必须让 IQ3_S run config 显式带别名，t12_2 以此验收。
+- GPU 默认只给 Strata 一张 3090（R30/计划最多两卡：Strata + Python）；第二张 3090 留给 Python，第三张
+  不使用。把 `gpus` 扩到两张需要计划变更，模块断言只允许 1—2 条 UUID。
+- llama.cpp 等价承载（§3.2）只是接口映射，未安装、未运行、未验证；不能把 Strata 的 mock 预检结果
+  移作 llama.cpp 的证据。
+- 验证命令统一用 `-H @/run/knoted/strata-auth-header`，避免 key 出现在 argv/`/proc/*/cmdline`；头文件
+  本身只由 host 以 0600 创建，不提交。
 - 本任务未修改 T12 任务卡状态；由主 Agent 在 host 证据齐全后更新。
 - 未执行任何 GitHub / 远程操作；只做本地提交。
