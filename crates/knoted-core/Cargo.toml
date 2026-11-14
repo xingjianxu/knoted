@@ -5,8 +5,10 @@ edition.workspace = true
 
 [dependencies]
 chrono.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 toml.workspace = true
@@ -17,3 +19,6 @@ uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# Stubs the internal HTTP protocol in `tests/t09.rs`; the Python service has its
+# own real-process tests and neither side replaces the other.
+wiremock = "0.6"
