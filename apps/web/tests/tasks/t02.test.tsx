@@ -37,10 +37,22 @@ describe("t02 web scaffold", () => {
     ).toBeInTheDocument();
   });
 
+  it("t02_1_cleanup_between_tests", () => {
+    // The previous test rendered <App />; afterEach(cleanup) in tests/setup.ts
+    // must have removed it, otherwise DOM nodes leak between tests.
+    expect(document.querySelectorAll("h1")).toHaveLength(0);
+
+    render(<App />);
+    render(<App />);
+
+    expect(
+      screen.getAllByRole("heading", { level: 1, name: /knoted/i }),
+    ).toHaveLength(2);
+  });
+
   it("t02_1_build_uses_no_remote_fonts", () => {
     const sources = [
       { file: path.join(webRoot, "index.html"), text: read("index.html") },
-      { file: path.join(webRoot, "src/styles.css"), text: read("src/styles.css") },
       ...readSources(path.join(webRoot, "src")),
       ...readSources(path.join(repoRoot, "packages/ui/src")),
     ];
@@ -61,7 +73,12 @@ describe("t02 web scaffold", () => {
       }
     }
 
-    expect(read("src/styles.css")).toMatch(/system-ui/);
+    const stylesEntry = sources.find(
+      (source) => source.file === path.join(webRoot, "src/styles.css"),
+    );
+
+    expect(stylesEntry, "src/styles.css was not read").toBeDefined();
+    expect(stylesEntry?.text).toMatch(/system-ui/);
   });
 
   it("t02_1_strict_typescript_enabled", () => {
