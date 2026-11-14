@@ -15,4 +15,6 @@ pub enum DbError {
     InvalidMaxAttempts(i32),
     #[error("refusing to use `{0}` as a test database: name must end with `_test`")]
     UnsafeTestTarget(String),
+    #[error("the owner account already exists; issue a recovery token instead")]
+    OwnerAlreadyExists,
 }
