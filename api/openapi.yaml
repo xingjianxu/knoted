@@ -1,0 +1,4785 @@
+openapi: 3.1.0
+info:
+  title: Knoted API
+  version: 1.0.0
+  description: Knoted 浏览器同源 HTTP 契约。所有业务路径位于 /api/v1 之下，路径模板不重复该前缀。ID 为 UUID，绝对时间为 UTC RFC3339；业务日期使用 DateValue。
+servers:
+  - url: /api/v1
+tags:
+  - name: Auth
+    description: Passkey、会话与恢复。
+  - name: Notes
+    description: 笔记树、历史快照与回收站。
+  - name: Assets
+    description: 图片资产。
+  - name: Tags
+    description: 标签。
+  - name: Links
+    description: 跨实体关联。
+  - name: Projects
+    description: 项目、归档与恢复。
+  - name: Tasks
+    description: 事项、跟进记录与归档。
+  - name: Dashboard
+    description: 聚合概览。
+  - name: Trash
+    description: 回收站。
+  - name: Files
+    description: 只读文件来源与预览。
+  - name: Search
+    description: 统一全文搜索。
+  - name: Jobs
+    description: 后台任务与扫描。
+  - name: Chat
+    description: 聊天、生成运行与引用。
+paths:
+  /auth/bootstrap/options:
+    post:
+      tags:
+        - Auth
+      summary: 创建一次性 bootstrap 注册 challenge
+      operationId: createBootstrapOptions
+      description: 校验 CLI 签发的 bootstrap token，建立 5 分钟单次 ceremony。token 过期或已消费返回 409。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BootstrapOptionsRequest"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CeremonyOptions"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /auth/bootstrap/finish:
+    post:
+      tags:
+        - Auth
+      summary: 完成 bootstrap 注册并建立会话
+      operationId: finishBootstrap
+      description: 事务内单次消费 bootstrap token，保存 Passkey 后建立 session；失败不产生新凭据。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BootstrapFinishRequest"
+      responses:
+        "201":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthenticationResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /auth/recovery/options:
+    post:
+      tags:
+        - Auth
+      summary: 创建恢复注册 challenge
+      operationId: createRecoveryOptions
+      description: 校验未过期的 recovery token 并建立 5 分钟 ceremony；不要求已有 session。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecoveryOptionsRequest"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CeremonyOptions"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /auth/recovery/finish:
+    post:
+      tags:
+        - Auth
+      summary: 完成账号恢复并撤销旧凭据与会话
+      operationId: finishRecovery
+      description: 单次消费 recovery token；保存新凭据后再撤销旧凭据和 session，成功后建立新 session。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecoveryFinishRequest"
+      responses:
+        "201":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthenticationResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /auth/login/options:
+    post:
+      tags:
+        - Auth
+      summary: 创建登录 challenge
+      operationId: createLoginOptions
+      description: 唯一账号无公开注册；challenge 5 分钟有效且单次消费。
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CeremonyOptions"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /auth/login/finish:
+    post:
+      tags:
+        - Auth
+      summary: 完成 Passkey 登录
+      operationId: finishLogin
+      description: 校验 challenge 与签名，建立 session 并返回 CSRF token；写请求还需 Origin 校验。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginFinishRequest"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthenticationResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /auth/session:
+    get:
+      tags:
+        - Auth
+      summary: 读取当前会话
+      operationId: getSession
+      description: 返回当前 session 与 CSRF token；滑动闲置过期时间受绝对过期上限约束。
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthenticationResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /auth/logout:
+    post:
+      tags:
+        - Auth
+      summary: 退出当前会话
+      operationId: logout
+      description: 撤销当前 session；不撤销其他设备上的会话。
+      responses:
+        "204":
+          description: 已退出。
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /auth/sessions:
+    get:
+      tags:
+        - Auth
+      summary: 列出当前账号会话
+      operationId: listSessions
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSessionPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /auth/sessions/{sessionId}:
+    delete:
+      tags:
+        - Auth
+      summary: 撤销指定会话
+      operationId: deleteSession
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "204":
+          description: 会话已撤销。
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /auth/passkeys:
+    get:
+      tags:
+        - Auth
+      summary: 列出 Passkey 凭据
+      operationId: listPasskeys
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PasskeyPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /auth/passkeys/options:
+    post:
+      tags:
+        - Auth
+      summary: 创建新增 Passkey 的注册 challenge
+      operationId: createPasskeyOptions
+      description: 敏感凭据操作要求最近 5 分钟内完成过 Passkey 验证。
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CeremonyOptions"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /auth/passkeys/finish:
+    post:
+      tags:
+        - Auth
+      summary: 完成新增 Passkey 注册
+      operationId: finishPasskeyRegistration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasskeyFinishRequest"
+      responses:
+        "201":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Passkey"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /auth/passkeys/{passkeyId}:
+    delete:
+      tags:
+        - Auth
+      summary: 删除 Passkey 凭据
+      operationId: deletePasskey
+      description: 禁止删除最后一个 Passkey；账号恢复流程允许先替换再撤销旧凭据。
+      parameters:
+        - $ref: "#/components/parameters/PasskeyId"
+      responses:
+        "204":
+          description: 凭据已删除。
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /notes:
+    get:
+      tags:
+        - Notes
+      summary: 列出笔记
+      operationId: listNotes
+      description: 按同级 position 排序；不含已删除笔记。
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/ParentIdFilter"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotePage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    post:
+      tags:
+        - Notes
+      summary: 创建笔记
+      operationId: createNote
+      description: 父节点必须存在且未删除；服务端事务检测循环并维护同级 position。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NoteCreate"
+      responses:
+        "201":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Note"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /notes/{noteId}:
+    get:
+      tags:
+        - Notes
+      summary: 读取笔记详情
+      operationId: getNote
+      parameters:
+        - $ref: "#/components/parameters/NoteId"
+      responses:
+        "200":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Note"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    patch:
+      tags:
+        - Notes
+      summary: 更新笔记内容
+      operationId: updateNote
+      description: 必须携带 expected_version；SQL 条件同时匹配 ID/version/可写状态，零行区分 404 与 409。
+      parameters:
+        - $ref: "#/components/parameters/NoteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NoteUpdate"
+      responses:
+        "200":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Note"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    delete:
+      tags:
+        - Notes
+      summary: 软删除笔记
+      operationId: deleteNote
+      description: 进入 30 天回收站；删除父节点要求没有未删除子节点。
+      parameters:
+        - $ref: "#/components/parameters/NoteId"
+        - $ref: "#/components/parameters/ExpectedVersionQuery"
+      responses:
+        "204":
+          description: 笔记已移入回收站。
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /notes/{noteId}/move:
+    post:
+      tags:
+        - Notes
+      summary: 移动笔记
+      operationId: moveNote
+      description: 事务重排同级 position；成环或父节点无效时拒绝且原结构不变。
+      parameters:
+        - $ref: "#/components/parameters/NoteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NoteMoveRequest"
+      responses:
+        "200":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Note"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /notes/{noteId}/restore:
+    post:
+      tags:
+        - Notes
+      summary: 从回收站恢复笔记
+      operationId: restoreNote
+      description: 省略 restore_parent 时保留原父；显式 parent_id=null 移到根；原父缺失返回 409。
+      parameters:
+        - $ref: "#/components/parameters/NoteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NoteRestoreRequest"
+      responses:
+        "200":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Note"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /notes/{noteId}/snapshots:
+    get:
+      tags:
+        - Notes
+      summary: 列出笔记历史快照
+      operationId: listNoteSnapshots
+      parameters:
+        - $ref: "#/components/parameters/NoteId"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnapshotPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    post:
+      tags:
+        - Notes
+      summary: 显式 flush 当前内容为快照
+      operationId: createNoteSnapshot
+      description: 离开编辑器或显式请求时生成快照；到期清理不删除当前正文。
+      parameters:
+        - $ref: "#/components/parameters/NoteId"
+      responses:
+        "201":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snapshot"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /notes/{noteId}/snapshots/{snapshotId}/restore:
+    post:
+      tags:
+        - Notes
+      summary: 恢复历史快照
+      operationId: restoreNoteSnapshot
+      description: 先保存当前版本再写入恢复内容，产生新的 content_version；不覆盖历史记录。
+      parameters:
+        - $ref: "#/components/parameters/NoteId"
+        - $ref: "#/components/parameters/SnapshotId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SnapshotRestoreRequest"
+      responses:
+        "200":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Note"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /assets:
+    post:
+      tags:
+        - Assets
+      summary: 上传并登记图片资产
+      operationId: createAsset
+      description: multipart 上传完成后登记资产；Idempotency-Key 防止重复登记。图片只以 asset_id 被笔记引用。
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                sha256:
+                  type: string
+                  pattern: ^[a-f0-9]{64}$
+      responses:
+        "201":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Asset"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /assets/{assetId}/content:
+    get:
+      tags:
+        - Assets
+      summary: 读取已授权图片内容
+      operationId: getAssetContent
+      parameters:
+        - $ref: "#/components/parameters/AssetId"
+      responses:
+        "200":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /tags:
+    get:
+      tags:
+        - Tags
+      summary: 列出标签
+      operationId: listTags
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TagPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    post:
+      tags:
+        - Tags
+      summary: 创建标签
+      operationId: createTag
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TagCreate"
+      responses:
+        "201":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tag"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /tags/{tagId}:
+    patch:
+      tags:
+        - Tags
+      summary: 重命名标签
+      operationId: updateTag
+      parameters:
+        - $ref: "#/components/parameters/TagId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TagUpdate"
+      responses:
+        "200":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tag"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    delete:
+      tags:
+        - Tags
+      summary: 删除标签
+      operationId: deleteTag
+      parameters:
+        - $ref: "#/components/parameters/TagId"
+        - $ref: "#/components/parameters/ExpectedVersionQuery"
+      responses:
+        "204":
+          description: 标签已删除。
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /links:
+    post:
+      tags:
+        - Links
+      summary: 建立实体关联
+      operationId: createLink
+      description: 两端类型限定 note/file/project/task，服务层校验两端存在与可见性；删除目标保留失效信息。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EntityLinkCreate"
+      responses:
+        "201":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EntityLink"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /links/{linkId}:
+    delete:
+      tags:
+        - Links
+      summary: 删除实体关联
+      operationId: deleteLink
+      parameters:
+        - $ref: "#/components/parameters/LinkId"
+        - $ref: "#/components/parameters/ExpectedVersionQuery"
+      responses:
+        "204":
+          description: 关联已删除。
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /projects:
+    get:
+      tags:
+        - Projects
+      summary: 列出项目
+      operationId: listProjects
+      description: 默认不包含已删除项目；archived 过滤归档状态。
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/ArchivedFilter"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    post:
+      tags:
+        - Projects
+      summary: 创建项目
+      operationId: createProject
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectCreate"
+      responses:
+        "201":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /projects/{projectId}:
+    get:
+      tags:
+        - Projects
+      summary: 读取项目详情
+      operationId: getProject
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    patch:
+      tags:
+        - Projects
+      summary: 更新项目
+      operationId: updateProject
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectUpdate"
+      responses:
+        "200":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    delete:
+      tags:
+        - Projects
+      summary: 软删除项目
+      operationId: deleteProject
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ExpectedVersionQuery"
+      responses:
+        "204":
+          description: 项目已移入回收站。
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /projects/{projectId}/archive:
+    post:
+      tags:
+        - Projects
+      summary: 归档项目
+      operationId: archiveProject
+      description: 连带归档本项目尚未归档的终态事项并记录 archive_batch_id；归档后写入拒绝。
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectVersionRequest"
+      responses:
+        "200":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /projects/{projectId}/restore:
+    post:
+      tags:
+        - Projects
+      summary: 从回收站恢复项目
+      operationId: restoreProject
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectVersionRequest"
+      responses:
+        "200":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /projects/{projectId}/unarchive:
+    post:
+      tags:
+        - Projects
+      summary: 取消项目归档
+      operationId: unarchiveProject
+      description: 仅恢复本归档批次内被连带归档的事项。
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectVersionRequest"
+      responses:
+        "200":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /tasks:
+    get:
+      tags:
+        - Tasks
+      summary: 列出事项
+      operationId: listTasks
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/ProjectIdFilter"
+        - $ref: "#/components/parameters/StatusFilter"
+        - $ref: "#/components/parameters/PriorityFilter"
+        - $ref: "#/components/parameters/ParentIdFilter"
+        - $ref: "#/components/parameters/ArchivedFilter"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    post:
+      tags:
+        - Tasks
+      summary: 创建事项
+      operationId: createTask
+      description: parent 只能指向顶层事项且不能是自身；project 必须继承父事项的项目。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskCreate"
+      responses:
+        "201":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /tasks/{taskId}:
+    get:
+      tags:
+        - Tasks
+      summary: 读取事项详情
+      operationId: getTask
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+      responses:
+        "200":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    patch:
+      tags:
+        - Tasks
+      summary: 更新事项
+      operationId: updateTask
+      description: 支持 project、parent、status、priority 和日期字段；开始不得晚于截止。
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskUpdate"
+      responses:
+        "200":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    delete:
+      tags:
+        - Tasks
+      summary: 软删除事项
+      operationId: deleteTask
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/ExpectedVersionQuery"
+      responses:
+        "204":
+          description: 事项已移入回收站。
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /tasks/{taskId}/activities:
+    get:
+      tags:
+        - Tasks
+      summary: 列出事项跟进记录
+      operationId: listTaskActivities
+      description: 包含人工备注与系统状态事件；系统事件 append-only。
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActivityPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    post:
+      tags:
+        - Tasks
+      summary: 创建人工跟进记录
+      operationId: createTaskActivity
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ActivityCreate"
+      responses:
+        "201":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Activity"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /tasks/{taskId}/activities/{activityId}:
+    patch:
+      tags:
+        - Tasks
+      summary: 修订人工跟进记录
+      operationId: updateTaskActivity
+      description: 仅 manual 记录可改；每次修订保留旧内容于 revisions。
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/ActivityId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ActivityUpdate"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Activity"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    delete:
+      tags:
+        - Tasks
+      summary: 删除人工跟进记录
+      operationId: deleteTaskActivity
+      description: 仅保留删除标记；旧内容只供历史查看，不再检索。
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/ActivityId"
+        - $ref: "#/components/parameters/ExpectedVersionQuery"
+      responses:
+        "204":
+          description: 记录已删除。
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /tasks/{taskId}/activities/{activityId}/revisions:
+    get:
+      tags:
+        - Tasks
+      summary: 列出跟进记录修订历史
+      operationId: listTaskActivityRevisions
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/ActivityId"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActivityRevisionPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /tasks/{taskId}/archive:
+    post:
+      tags:
+        - Tasks
+      summary: 归档事项
+      operationId: archiveTask
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskVersionRequest"
+      responses:
+        "200":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /tasks/{taskId}/unarchive:
+    post:
+      tags:
+        - Tasks
+      summary: 取消事项归档
+      operationId: unarchiveTask
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskVersionRequest"
+      responses:
+        "200":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /tasks/{taskId}/restore:
+    post:
+      tags:
+        - Tasks
+      summary: 从回收站恢复事项
+      operationId: restoreTask
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskVersionRequest"
+      responses:
+        "200":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /dashboard:
+    get:
+      tags:
+        - Dashboard
+      summary: 读取聚合概览
+      operationId: getDashboard
+      description: 只聚合当前账号可见对象；不返回已删除内容。
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /trash:
+    get:
+      tags:
+        - Trash
+      summary: 列出回收站对象
+      operationId: getTrash
+      description: 只列当前账号对象；30 天保留原有关联。
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrashPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /files:
+    get:
+      tags:
+        - Files
+      summary: 浏览文件来源
+      operationId: listFiles
+      description: relative_path 只是当前定位，不是永久身份；不跟随 symlink 或打开根外文件。
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileSourcePage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /files/{fileId}:
+    get:
+      tags:
+        - Files
+      summary: 读取文件来源详情
+      operationId: getFile
+      parameters:
+        - $ref: "#/components/parameters/FileId"
+      responses:
+        "200":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileSource"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    patch:
+      tags:
+        - Files
+      summary: 更新文件备注与标签
+      operationId: updateFile
+      description: PATCH 仅允许备注和标签；不修改源文件内容。
+      parameters:
+        - $ref: "#/components/parameters/FileId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FileSourceUpdate"
+      responses:
+        "200":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileSource"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /files/{fileId}/content:
+    get:
+      tags:
+        - Files
+      summary: 读取已授权文件内容
+      operationId: getFileContent
+      parameters:
+        - $ref: "#/components/parameters/FileId"
+      responses:
+        "200":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /files/{fileId}/relink:
+    post:
+      tags:
+        - Files
+      summary: 将文件来源重新关联到新来源
+      operationId: relinkFile
+      description: 移动标签/备注/关联到新来源；旧引用快照保持原版本。歧义未确认时 409。
+      parameters:
+        - $ref: "#/components/parameters/FileId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FileRelinkRequest"
+      responses:
+        "200":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileSource"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /files/{fileId}/office-preview:
+    post:
+      tags:
+        - Files
+      summary: 生成 Office 短时只读预览配置
+      operationId: createOfficePreview
+      description: 只读且短时有效；源变化或授权过期后不能获取新源或扩大目录访问。
+      parameters:
+        - $ref: "#/components/parameters/FileId"
+      responses:
+        "201":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OfficePreview"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    delete:
+      tags:
+        - Files
+      summary: 撤销 Office 预览配置
+      operationId: deleteOfficePreview
+      parameters:
+        - $ref: "#/components/parameters/FileId"
+      responses:
+        "204":
+          description: 预览配置已撤销。
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /search:
+    get:
+      tags:
+        - Search
+      summary: 统一全文搜索
+      operationId: search
+      description: 全文与向量分别可用；每条结果由 PG 验证当前 content_version 与 deleted 状态。游标固定上限 10000 条。
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/SearchQuery"
+        - $ref: "#/components/parameters/SearchTypeParam"
+        - $ref: "#/components/parameters/SearchTagsParam"
+        - $ref: "#/components/parameters/SearchProjectParam"
+        - $ref: "#/components/parameters/SearchUpdatedFromParam"
+        - $ref: "#/components/parameters/SearchUpdatedToParam"
+        - $ref: "#/components/parameters/SearchArchivedParam"
+        - $ref: "#/components/parameters/SearchPathParam"
+        - $ref: "#/components/parameters/SearchFormatParam"
+        - $ref: "#/components/parameters/SearchSortParam"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /jobs:
+    get:
+      tags:
+        - Jobs
+      summary: 列出后台任务
+      operationId: listJobs
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/JobStateFilter"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /jobs/{jobId}/retry:
+    post:
+      tags:
+        - Jobs
+      summary: 人工重试后台任务
+      operationId: retryJob
+      description: 创建新 job 并指向原 job；不复用原租约。
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "201":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /jobs/{jobId}/cancel:
+    post:
+      tags:
+        - Jobs
+      summary: 取消后台任务
+      operationId: cancelJob
+      description: 没有取消确认不能释放资源并发配额；终态任务返回 409。
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /jobs/scan:
+    post:
+      tags:
+        - Jobs
+      summary: 触发文件扫描
+      operationId: scanJobs
+      description: 幂等提交扫描任务；只有完整成功扫描才能据缺失判定来源消失。
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JobScanRequest"
+      responses:
+        "201":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /chat/sessions:
+    get:
+      tags:
+        - Chat
+      summary: 列出聊天会话
+      operationId: listChatSessions
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/ProviderFilter"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatSessionPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    post:
+      tags:
+        - Chat
+      summary: 创建聊天会话
+      operationId: createChatSession
+      description: provider 默认 local，可显式选择已配置的外部服务；禁止自动 fallback。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatSessionCreate"
+      responses:
+        "201":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatSession"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /chat/sessions/{sessionId}:
+    get:
+      tags:
+        - Chat
+      summary: 读取聊天会话详情
+      operationId: getChatSession
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatSession"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    patch:
+      tags:
+        - Chat
+      summary: 更新聊天会话
+      operationId: updateChatSession
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatSessionUpdate"
+      responses:
+        "200":
+          description: 成功
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatSession"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    delete:
+      tags:
+        - Chat
+      summary: 删除聊天会话
+      operationId: deleteChatSession
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+        - $ref: "#/components/parameters/ExpectedVersionQuery"
+      responses:
+        "204":
+          description: 会话已删除。
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /chat/sessions/{sessionId}/messages:
+    post:
+      tags:
+        - Chat
+      summary: 发送问题并创建生成运行
+      operationId: createChatMessage
+      description: Idempotency-Key 防止重复生成；返回待执行 message 与 run。最终消息持久化后才发送 completed。
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatPostMessageRequest"
+      responses:
+        "201":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatPostMessageResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /chat/runs/{runId}:
+    get:
+      tags:
+        - Chat
+      summary: 读取生成运行状态
+      operationId: getChatRun
+      description: 断连客户端用此接口查询状态，不自动重发生成。
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatRun"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /chat/runs/{runId}/events:
+    post:
+      tags:
+        - Chat
+      summary: 流式读取生成事件
+      operationId: streamChatRunEvents
+      description: SSE 事件类型为 queued/started/delta/citation/completed/failed/cancelled；每条含 run_id 与递增 seq。响应体每行是 ChatEvent JSON。
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: 成功
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE 事件流。
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /chat/runs/{runId}/cancel:
+    post:
+      tags:
+        - Chat
+      summary: 取消生成运行
+      operationId: cancelChatRun
+      description: 显式取消；断连不会隐式增加任务。失败/取消保留 partial 标记。
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatRun"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /chat/runs/{runId}/retry:
+    post:
+      tags:
+        - Chat
+      summary: 重试生成运行
+      operationId: retryChatRun
+      description: 创建新的 run，不把 interrupted/断流视为成功。
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "201":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatRun"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /chat/messages/{messageId}/citations:
+    get:
+      tags:
+        - Chat
+      summary: 列出回答引用
+      operationId: listChatMessageCitations
+      description: 固定快照与当前来源状态；来源删除后历史页面仍展示快照并提示。
+      parameters:
+        - $ref: "#/components/parameters/MessageId"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CitationPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /chat/messages/{messageId}/save-note:
+    post:
+      tags:
+        - Chat
+      summary: 将回答保存为独立笔记
+      operationId: saveChatMessageAsNote
+      description: 显式创建独立内容并保留 provenance；不随原来源删除，也不静默级联删除用户笔记。
+      parameters:
+        - $ref: "#/components/parameters/MessageId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SaveNoteRequest"
+      responses:
+        "201":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SaveNoteResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+components:
+  schemas:
+    ApiError:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - message
+        - request_id
+      properties:
+        code:
+          type: string
+          minLength: 1
+          description: 稳定错误码；客户端按 code 分支，不解析 message。
+        message:
+          type: string
+          minLength: 1
+        request_id:
+          type: string
+          format: uuid
+        field_errors:
+          type: array
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/FieldError"
+        current_version:
+          type: integer
+          minimum: 1
+          description: 409 版本冲突时返回的当前版本。
+    FieldError:
+      type: object
+      additionalProperties: false
+      required:
+        - field
+        - message
+      properties:
+        field:
+          type: string
+          minLength: 1
+        message:
+          type: string
+          minLength: 1
+    DateValue:
+      type: object
+      additionalProperties: false
+      required:
+        - date
+        - time
+        - timezone
+      description: 业务日期。不转换为 UTC 午夜；time 为 null 表示仅有日期。无截止不算逾期，跨日比较按 Asia/Shanghai 的下一日 00:00。
+      properties:
+        date:
+          type: string
+          pattern: ^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$
+          description: YYYY-MM-DD。
+        time:
+          type:
+            - string
+            - "null"
+          pattern: ^([01][0-9]|2[0-3]):[0-5][0-9]$
+          description: HH:mm；null 表示纯日期，该键必须存在。
+        timezone:
+          type: string
+          const: Asia/Shanghai
+    BlockType:
+      type: string
+      enum:
+        - heading
+        - paragraph
+        - bulletListItem
+        - numberedListItem
+        - checkListItem
+        - image
+        - codeBlock
+    InlineMark:
+      type: string
+      enum:
+        - bold
+        - italic
+        - underline
+        - strike
+        - code
+    InlineNode:
+      type: object
+      additionalProperties: false
+      required:
+        - type
+        - text
+      properties:
+        type:
+          type: string
+          enum:
+            - text
+            - link
+        text:
+          type: string
+        href:
+          type: string
+          format: uri
+        marks:
+          type: array
+          items:
+            $ref: "#/components/schemas/InlineMark"
+    NoteBlock:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - type
+      description: 白名单笔记块。块 ID 在文档内唯一；最多 5000 块、嵌套 8 层；拒绝可执行 HTML 与任意协议。
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 64
+        type:
+          $ref: "#/components/schemas/BlockType"
+        level:
+          type: integer
+          minimum: 1
+          maximum: 3
+        content:
+          type: array
+          items:
+            $ref: "#/components/schemas/InlineNode"
+        asset_id:
+          type: string
+          format: uuid
+        language:
+          type: string
+        checked:
+          type: boolean
+        children:
+          type: array
+          items:
+            $ref: "#/components/schemas/NoteBlock"
+          description: 嵌套子块；服务端限制总深度不超过 8 层。
+    NoteDocument:
+      type: object
+      additionalProperties: false
+      required:
+        - blocks
+      description: 保存格式 JSON，最大 2 MiB；仅接受白名单块与 inline 节点，服务端按 fixture 校验而非信任编辑器。
+      properties:
+        blocks:
+          type: array
+          maxItems: 5000
+          items:
+            $ref: "#/components/schemas/NoteBlock"
+    Note:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - parent_id
+        - title
+        - document
+        - format_version
+        - content_version
+        - created_at
+        - updated_at
+        - deleted_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        parent_id:
+          anyOf:
+            - type: string
+              format: uuid
+            - type: "null"
+        title:
+          type: string
+        document:
+          $ref: "#/components/schemas/NoteDocument"
+        format_version:
+          type: integer
+          const: 1
+        content_version:
+          type: integer
+          minimum: 1
+          description: 语义内容版本，同时作为 ETag 与 expected_version；每次内容变化递增。
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        deleted_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: "null"
+    NoteCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - title
+        - document
+      properties:
+        title:
+          type: string
+          maxLength: 500
+        parent_id:
+          anyOf:
+            - type: string
+              format: uuid
+            - type: "null"
+          description: 省略或 null 表示根节点。
+        document:
+          $ref: "#/components/schemas/NoteDocument"
+    NoteUpdate:
+      type: object
+      additionalProperties: false
+      required:
+        - expected_version
+      minProperties: 2
+      properties:
+        expected_version:
+          type: integer
+          minimum: 1
+        title:
+          type: string
+          maxLength: 500
+        document:
+          $ref: "#/components/schemas/NoteDocument"
+    NotePage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Note"
+        next_cursor:
+          type:
+            - string
+            - "null"
+    NoteMoveRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - parent_id
+        - position
+        - expected_version
+      properties:
+        parent_id:
+          anyOf:
+            - type: string
+              format: uuid
+            - type: "null"
+          description: null 表示移动到根层级。
+        position:
+          type: integer
+          minimum: 0
+        expected_version:
+          type: integer
+          minimum: 1
+    RestoreParent:
+      type: object
+      additionalProperties: false
+      required:
+        - parent_id
+      properties:
+        parent_id:
+          anyOf:
+            - type: string
+              format: uuid
+            - type: "null"
+    NoteRestoreRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - expected_version
+      properties:
+        expected_version:
+          type: integer
+          minimum: 1
+        restore_parent:
+          $ref: "#/components/schemas/RestoreParent"
+          description: 省略时保留原父；显式 null 的 parent_id 表示移根。
+    Snapshot:
+      type: object
+      additionalProperties: false
+      required:
+        - snapshot_id
+        - note_id
+        - content_version
+        - title
+        - document
+        - reason
+        - created_at
+      properties:
+        snapshot_id:
+          type: string
+          format: uuid
+        note_id:
+          type: string
+          format: uuid
+        content_version:
+          type: integer
+          minimum: 1
+        title:
+          type: string
+        document:
+          $ref: "#/components/schemas/NoteDocument"
+        reason:
+          type: string
+          minLength: 1
+          description: 生成原因，例如定时历史、离开 flush 或恢复前保存。
+        created_at:
+          type: string
+          format: date-time
+    SnapshotPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Snapshot"
+        next_cursor:
+          type:
+            - string
+            - "null"
+    SnapshotRestoreRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - expected_version
+      properties:
+        expected_version:
+          type: integer
+          minimum: 1
+    WebAuthnOptions:
+      type: object
+      additionalProperties: true
+      description: webauthn-rs 生成的浏览器 WebAuthn JSON；字段集合随规范演进，本契约不重复定义。
+    WebAuthnCredential:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - rawId
+        - type
+        - response
+      properties:
+        id:
+          type: string
+          minLength: 1
+        rawId:
+          type: string
+          minLength: 1
+        type:
+          type: string
+          enum:
+            - public-key
+        response:
+          type: object
+          additionalProperties: true
+          description: 注册或断言响应体，由浏览器 WebAuthn 规范定义。
+    CeremonyOptions:
+      type: object
+      additionalProperties: false
+      required:
+        - ceremony_id
+        - options
+      properties:
+        ceremony_id:
+          type: string
+          format: uuid
+        options:
+          $ref: "#/components/schemas/WebAuthnOptions"
+    AuthSession:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - user_id
+        - created_at
+        - last_seen_at
+        - idle_expires_at
+        - absolute_expires_at
+        - current
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+        idle_expires_at:
+          type: string
+          format: date-time
+        absolute_expires_at:
+          type: string
+          format: date-time
+        current:
+          type: boolean
+    AuthSessionPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthSession"
+        next_cursor:
+          type:
+            - string
+            - "null"
+    AuthenticationResult:
+      type: object
+      additionalProperties: false
+      required:
+        - session
+        - csrf_token
+      properties:
+        session:
+          $ref: "#/components/schemas/AuthSession"
+        csrf_token:
+          type: string
+          minLength: 16
+    PasskeyTransport:
+      type: string
+      enum:
+        - usb
+        - nfc
+        - ble
+        - hybrid
+        - internal
+    Passkey:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - credential_id
+        - transports
+        - created_at
+        - last_used_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        credential_id:
+          type: string
+          minLength: 1
+        transports:
+          type: array
+          items:
+            $ref: "#/components/schemas/PasskeyTransport"
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: "null"
+    PasskeyPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Passkey"
+        next_cursor:
+          type:
+            - string
+            - "null"
+    BootstrapOptionsRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - bootstrap_token
+      properties:
+        bootstrap_token:
+          type: string
+          minLength: 1
+    BootstrapFinishRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - ceremony_id
+        - credential
+      properties:
+        ceremony_id:
+          type: string
+          format: uuid
+        credential:
+          $ref: "#/components/schemas/WebAuthnCredential"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+    RecoveryOptionsRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - recovery_token
+      properties:
+        recovery_token:
+          type: string
+          minLength: 1
+    RecoveryFinishRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - recovery_token
+        - ceremony_id
+        - credential
+      properties:
+        recovery_token:
+          type: string
+          minLength: 1
+        ceremony_id:
+          type: string
+          format: uuid
+        credential:
+          $ref: "#/components/schemas/WebAuthnCredential"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+    LoginFinishRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - ceremony_id
+        - credential
+      properties:
+        ceremony_id:
+          type: string
+          format: uuid
+        credential:
+          $ref: "#/components/schemas/WebAuthnCredential"
+    PasskeyFinishRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - ceremony_id
+        - credential
+      properties:
+        ceremony_id:
+          type: string
+          format: uuid
+        credential:
+          $ref: "#/components/schemas/WebAuthnCredential"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+    AssetState:
+      type: string
+      enum:
+        - pending
+        - ready
+        - deleted
+    Asset:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - mime
+        - size
+        - sha256
+        - state
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        mime:
+          type: string
+          minLength: 1
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        sha256:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        state:
+          $ref: "#/components/schemas/AssetState"
+        created_at:
+          type: string
+          format: date-time
+    Tag:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - version
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        version:
+          type: integer
+          minimum: 1
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    TagCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+    TagUpdate:
+      type: object
+      additionalProperties: false
+      required:
+        - expected_version
+        - name
+      properties:
+        expected_version:
+          type: integer
+          minimum: 1
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+    TagPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Tag"
+        next_cursor:
+          type:
+            - string
+            - "null"
+    EntityEndType:
+      type: string
+      enum:
+        - note
+        - file
+        - project
+        - task
+    EntityLink:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - source_type
+        - source_id
+        - target_type
+        - target_id
+        - version
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        source_type:
+          $ref: "#/components/schemas/EntityEndType"
+        source_id:
+          type: string
+          format: uuid
+        target_type:
+          $ref: "#/components/schemas/EntityEndType"
+        target_id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        created_at:
+          type: string
+          format: date-time
+    EntityLinkCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - source_type
+        - source_id
+        - target_type
+        - target_id
+      properties:
+        source_type:
+          $ref: "#/components/schemas/EntityEndType"
+        source_id:
+          type: string
+          format: uuid
+        target_type:
+          $ref: "#/components/schemas/EntityEndType"
+        target_id:
+          type: string
+          format: uuid
+    Project:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - title
+        - description
+        - version
+        - archived_at
+        - deleted_at
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          maxLength: 500
+        description:
+          type:
+            - string
+            - "null"
+        version:
+          type: integer
+          minimum: 1
+        archived_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: "null"
+        deleted_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: "null"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ProjectCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - title
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 500
+        description:
+          type:
+            - string
+            - "null"
+    ProjectUpdate:
+      type: object
+      additionalProperties: false
+      required:
+        - expected_version
+      minProperties: 2
+      properties:
+        expected_version:
+          type: integer
+          minimum: 1
+        title:
+          type: string
+          minLength: 1
+          maxLength: 500
+        description:
+          type:
+            - string
+            - "null"
+    ProjectPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Project"
+        next_cursor:
+          type:
+            - string
+            - "null"
+    ProjectVersionRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - expected_version
+      properties:
+        expected_version:
+          type: integer
+          minimum: 1
+    TaskStatus:
+      type: string
+      enum:
+        - todo
+        - in_progress
+        - done
+        - cancelled
+    TaskPriority:
+      type: string
+      enum:
+        - none
+        - low
+        - medium
+        - high
+    Task:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - project_id
+        - parent_id
+        - title
+        - description
+        - status
+        - priority
+        - start
+        - due
+        - version
+        - archived_at
+        - deleted_at
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          anyOf:
+            - type: string
+              format: uuid
+            - type: "null"
+        parent_id:
+          anyOf:
+            - type: string
+              format: uuid
+            - type: "null"
+        title:
+          type: string
+          maxLength: 500
+        description:
+          type:
+            - string
+            - "null"
+        status:
+          $ref: "#/components/schemas/TaskStatus"
+        priority:
+          $ref: "#/components/schemas/TaskPriority"
+        start:
+          anyOf:
+            - $ref: "#/components/schemas/DateValue"
+            - type: "null"
+        due:
+          anyOf:
+            - $ref: "#/components/schemas/DateValue"
+            - type: "null"
+        version:
+          type: integer
+          minimum: 1
+        archived_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: "null"
+        deleted_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: "null"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    TaskCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - title
+      properties:
+        project_id:
+          anyOf:
+            - type: string
+              format: uuid
+            - type: "null"
+        parent_id:
+          anyOf:
+            - type: string
+              format: uuid
+            - type: "null"
+        title:
+          type: string
+          minLength: 1
+          maxLength: 500
+        description:
+          type:
+            - string
+            - "null"
+        status:
+          $ref: "#/components/schemas/TaskStatus"
+        priority:
+          $ref: "#/components/schemas/TaskPriority"
+        start:
+          anyOf:
+            - $ref: "#/components/schemas/DateValue"
+            - type: "null"
+        due:
+          anyOf:
+            - $ref: "#/components/schemas/DateValue"
+            - type: "null"
+    TaskUpdate:
+      type: object
+      additionalProperties: false
+      required:
+        - expected_version
+      minProperties: 2
+      properties:
+        expected_version:
+          type: integer
+          minimum: 1
+        project_id:
+          anyOf:
+            - type: string
+              format: uuid
+            - type: "null"
+        parent_id:
+          anyOf:
+            - type: string
+              format: uuid
+            - type: "null"
+        title:
+          type: string
+          minLength: 1
+          maxLength: 500
+        description:
+          type:
+            - string
+            - "null"
+        status:
+          $ref: "#/components/schemas/TaskStatus"
+        priority:
+          $ref: "#/components/schemas/TaskPriority"
+        start:
+          anyOf:
+            - $ref: "#/components/schemas/DateValue"
+            - type: "null"
+        due:
+          anyOf:
+            - $ref: "#/components/schemas/DateValue"
+            - type: "null"
+    TaskPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Task"
+        next_cursor:
+          type:
+            - string
+            - "null"
+    TaskVersionRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - expected_version
+      properties:
+        expected_version:
+          type: integer
+          minimum: 1
+    ActivityAuthorKind:
+      type: string
+      enum:
+        - manual
+        - system
+    Activity:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - task_id
+        - author_kind
+        - body
+        - version
+        - created_at
+        - updated_at
+        - deleted_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        task_id:
+          type: string
+          format: uuid
+        author_kind:
+          $ref: "#/components/schemas/ActivityAuthorKind"
+        body:
+          type: string
+        version:
+          type: integer
+          minimum: 1
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        deleted_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: "null"
+    ActivityCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - body
+      properties:
+        body:
+          type: string
+          minLength: 1
+          maxLength: 10000
+    ActivityUpdate:
+      type: object
+      additionalProperties: false
+      required:
+        - expected_version
+        - body
+      properties:
+        expected_version:
+          type: integer
+          minimum: 1
+        body:
+          type: string
+          minLength: 1
+          maxLength: 10000
+    ActivityPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Activity"
+        next_cursor:
+          type:
+            - string
+            - "null"
+    ActivityRevision:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - activity_id
+        - version
+        - author_kind
+        - body
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        activity_id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        author_kind:
+          $ref: "#/components/schemas/ActivityAuthorKind"
+        body:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    ActivityRevisionPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ActivityRevision"
+        next_cursor:
+          type:
+            - string
+            - "null"
+    DashboardCounts:
+      type: object
+      additionalProperties: false
+      required:
+        - notes
+        - tasks_open
+        - tasks_due_today
+        - projects_active
+        - files
+      properties:
+        notes:
+          type: integer
+          minimum: 0
+        tasks_open:
+          type: integer
+          minimum: 0
+        tasks_due_today:
+          type: integer
+          minimum: 0
+        projects_active:
+          type: integer
+          minimum: 0
+        files:
+          type: integer
+          minimum: 0
+    DashboardTasksByStatus:
+      type: object
+      additionalProperties: false
+      required:
+        - todo
+        - in_progress
+        - done
+        - cancelled
+      properties:
+        todo:
+          type: integer
+          minimum: 0
+        in_progress:
+          type: integer
+          minimum: 0
+        done:
+          type: integer
+          minimum: 0
+        cancelled:
+          type: integer
+          minimum: 0
+    DashboardSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - counts
+        - tasks_by_status
+        - recent_tasks
+      properties:
+        counts:
+          $ref: "#/components/schemas/DashboardCounts"
+        tasks_by_status:
+          $ref: "#/components/schemas/DashboardTasksByStatus"
+        recent_tasks:
+          type: array
+          items:
+            $ref: "#/components/schemas/Task"
+    TrashEntityType:
+      type: string
+      enum:
+        - note
+        - project
+        - task
+    TrashItem:
+      type: object
+      additionalProperties: false
+      required:
+        - entity_type
+        - id
+        - title
+        - deleted_at
+        - parent_id
+      properties:
+        entity_type:
+          $ref: "#/components/schemas/TrashEntityType"
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        deleted_at:
+          type: string
+          format: date-time
+        parent_id:
+          anyOf:
+            - type: string
+              format: uuid
+            - type: "null"
+    TrashPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/TrashItem"
+        next_cursor:
+          type:
+            - string
+            - "null"
+    FileStatus:
+      type: string
+      enum:
+        - present
+        - missing
+    FileSource:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - relative_path
+        - name
+        - size
+        - sha256
+        - content_version
+        - status
+        - mime
+        - note
+        - tag_ids
+        - created_at
+        - updated_at
+        - last_seen_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        relative_path:
+          type: string
+          description: 相对于只读根的当前定位，不是永久身份。
+        name:
+          type: string
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        sha256:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        content_version:
+          type: integer
+          minimum: 1
+        status:
+          $ref: "#/components/schemas/FileStatus"
+        mime:
+          type:
+            - string
+            - "null"
+        note:
+          type:
+            - string
+            - "null"
+        tag_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: "null"
+    FileSourcePage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/FileSource"
+        next_cursor:
+          type:
+            - string
+            - "null"
+    FileSourceUpdate:
+      type: object
+      additionalProperties: false
+      required:
+        - expected_version
+      minProperties: 2
+      properties:
+        expected_version:
+          type: integer
+          minimum: 1
+        note:
+          type:
+            - string
+            - "null"
+        tag_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+    FileRelinkRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - new_source_id
+        - expected_version
+      properties:
+        new_source_id:
+          type: string
+          format: uuid
+        expected_version:
+          type: integer
+          minimum: 1
+    OfficePreview:
+      type: object
+      additionalProperties: false
+      required:
+        - url
+        - expires_at
+      properties:
+        url:
+          type: string
+          format: uri
+        expires_at:
+          type: string
+          format: date-time
+    SearchType:
+      type: string
+      enum:
+        - note
+        - file
+        - task
+        - project
+        - chat
+    SearchSort:
+      type: string
+      enum:
+        - relevance
+        - updated_desc
+        - updated_asc
+    SearchHit:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - entity_type
+        - title
+        - snippet
+        - updated_at
+        - path
+        - score
+      properties:
+        id:
+          type: string
+          format: uuid
+        entity_type:
+          $ref: "#/components/schemas/SearchType"
+        title:
+          type: string
+        snippet:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+        path:
+          type:
+            - string
+            - "null"
+        score:
+          type:
+            - number
+            - "null"
+    SearchResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchHit"
+        next_cursor:
+          type:
+            - string
+            - "null"
+    JobState:
+      type: string
+      enum:
+        - queued
+        - running
+        - retry_wait
+        - succeeded
+        - failed
+        - cancel_requested
+        - cancelled
+    Job:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - kind
+        - state
+        - attempts
+        - max_attempts
+        - error
+        - created_at
+        - updated_at
+        - started_at
+        - finished_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          minLength: 1
+        state:
+          $ref: "#/components/schemas/JobState"
+        attempts:
+          type: integer
+          minimum: 0
+        max_attempts:
+          type: integer
+          minimum: 1
+        error:
+          type:
+            - string
+            - "null"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        started_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: "null"
+        finished_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: "null"
+    JobPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Job"
+        next_cursor:
+          type:
+            - string
+            - "null"
+    JobScanRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        force:
+          type: boolean
+          description: 请求完整补扫而非合并通知。
+    ChatSession:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - title
+        - version
+        - provider
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        version:
+          type: integer
+          minimum: 1
+        provider:
+          type: string
+          minLength: 1
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_-]*$
+          description: local，或显式配置的外部服务名；禁止自动 fallback。
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ChatSessionCreate:
+      type: object
+      additionalProperties: false
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        provider:
+          type: string
+          minLength: 1
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_-]*$
+    ChatSessionUpdate:
+      type: object
+      additionalProperties: false
+      required:
+        - expected_version
+      minProperties: 2
+      properties:
+        expected_version:
+          type: integer
+          minimum: 1
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+    ChatSessionPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatSession"
+        next_cursor:
+          type:
+            - string
+            - "null"
+    ChatMessageRole:
+      type: string
+      enum:
+        - user
+        - assistant
+    ChatMessage:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - session_id
+        - role
+        - body
+        - incomplete
+        - run_id
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        session_id:
+          type: string
+          format: uuid
+        role:
+          $ref: "#/components/schemas/ChatMessageRole"
+        body:
+          type: string
+        incomplete:
+          type: boolean
+        run_id:
+          anyOf:
+            - type: string
+              format: uuid
+            - type: "null"
+        created_at:
+          type: string
+          format: date-time
+    ChatRunState:
+      type: string
+      enum:
+        - queued
+        - started
+        - completed
+        - failed
+        - cancelled
+    ChatRun:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - session_id
+        - message_id
+        - state
+        - partial
+        - error
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        session_id:
+          type: string
+          format: uuid
+        message_id:
+          type: string
+          format: uuid
+        state:
+          $ref: "#/components/schemas/ChatRunState"
+        partial:
+          type: boolean
+        error:
+          type:
+            - string
+            - "null"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ChatScopeType:
+      type: string
+      enum:
+        - note
+        - file
+        - task
+        - project
+    ChatScope:
+      type: object
+      additionalProperties: false
+      properties:
+        types:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatScopeType"
+        project_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        tag_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+    ChatPostMessageRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - content
+      properties:
+        content:
+          type: string
+          minLength: 1
+          maxLength: 20000
+        scope:
+          $ref: "#/components/schemas/ChatScope"
+    ChatPostMessageResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - message
+        - run
+      properties:
+        message:
+          $ref: "#/components/schemas/ChatMessage"
+        run:
+          $ref: "#/components/schemas/ChatRun"
+    CitationSourceState:
+      type: string
+      enum:
+        - current
+        - deleted
+        - archived
+        - missing
+    Citation:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - message_id
+        - source_type
+        - source_id
+        - title
+        - location
+        - snippet
+        - source_state
+      properties:
+        id:
+          type: string
+          format: uuid
+        message_id:
+          type: string
+          format: uuid
+        source_type:
+          type: string
+          enum:
+            - note
+            - file
+            - task
+        source_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        location:
+          type:
+            - string
+            - "null"
+        snippet:
+          type: string
+        source_state:
+          $ref: "#/components/schemas/CitationSourceState"
+    CitationPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Citation"
+        next_cursor:
+          type:
+            - string
+            - "null"
+    ChatEventType:
+      type: string
+      enum:
+        - queued
+        - started
+        - delta
+        - citation
+        - completed
+        - failed
+        - cancelled
+    ChatEvent:
+      type: object
+      additionalProperties: false
+      required:
+        - type
+        - run_id
+        - seq
+      properties:
+        type:
+          $ref: "#/components/schemas/ChatEventType"
+        run_id:
+          type: string
+          format: uuid
+        seq:
+          type: integer
+          minimum: 1
+        delta:
+          type:
+            - string
+            - "null"
+        citation:
+          anyOf:
+            - $ref: "#/components/schemas/Citation"
+            - type: "null"
+        error:
+          anyOf:
+            - $ref: "#/components/schemas/ApiError"
+            - type: "null"
+    SaveNoteRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - title
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 500
+        parent_id:
+          anyOf:
+            - type: string
+              format: uuid
+            - type: "null"
+    SaveNoteResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - note_id
+      properties:
+        note_id:
+          type: string
+          format: uuid
+  parameters:
+    NoteId:
+      name: noteId
+      in: path
+      required: true
+      description: 笔记 ID。
+      schema:
+        type: string
+        format: uuid
+    SnapshotId:
+      name: snapshotId
+      in: path
+      required: true
+      description: 笔记快照 ID。
+      schema:
+        type: string
+        format: uuid
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      description: 事项 ID。
+      schema:
+        type: string
+        format: uuid
+    ActivityId:
+      name: activityId
+      in: path
+      required: true
+      description: 人工跟进记录 ID。
+      schema:
+        type: string
+        format: uuid
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      description: 项目 ID。
+      schema:
+        type: string
+        format: uuid
+    TagId:
+      name: tagId
+      in: path
+      required: true
+      description: 标签 ID。
+      schema:
+        type: string
+        format: uuid
+    LinkId:
+      name: linkId
+      in: path
+      required: true
+      description: 实体关联 ID。
+      schema:
+        type: string
+        format: uuid
+    FileId:
+      name: fileId
+      in: path
+      required: true
+      description: 文件来源 ID。
+      schema:
+        type: string
+        format: uuid
+    AssetId:
+      name: assetId
+      in: path
+      required: true
+      description: 资产 ID。
+      schema:
+        type: string
+        format: uuid
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      description: 后台任务 ID。
+      schema:
+        type: string
+        format: uuid
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      description: 会话 ID。
+      schema:
+        type: string
+        format: uuid
+    RunId:
+      name: runId
+      in: path
+      required: true
+      description: 生成运行 ID。
+      schema:
+        type: string
+        format: uuid
+    MessageId:
+      name: messageId
+      in: path
+      required: true
+      description: 聊天消息 ID。
+      schema:
+        type: string
+        format: uuid
+    PasskeyId:
+      name: passkeyId
+      in: path
+      required: true
+      description: Passkey 凭据 ID。
+      schema:
+        type: string
+        format: uuid
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: 不透明游标；服务端完整验证类型、排序键和过滤摘要，不是授权凭据。
+      schema:
+        type: string
+        minLength: 1
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: 每页数量，默认 50，最大 100。
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 50
+    ExpectedVersionQuery:
+      name: expected_version
+      in: query
+      required: true
+      description: CAS 期望版本；不匹配返回 409 并带 current_version。
+      schema:
+        type: integer
+        minimum: 1
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: 按账号+操作+键保存请求摘要与结果，7 天过期；同键不同请求返回 409。
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+    ParentIdFilter:
+      name: parent_id
+      in: query
+      required: false
+      description: 按父节点过滤；省略表示不过滤。
+      schema:
+        type: string
+        format: uuid
+    ArchivedFilter:
+      name: archived
+      in: query
+      required: false
+      schema:
+        type: boolean
+    StatusFilter:
+      name: status
+      in: query
+      required: false
+      schema:
+        $ref: "#/components/schemas/TaskStatus"
+    PriorityFilter:
+      name: priority
+      in: query
+      required: false
+      schema:
+        $ref: "#/components/schemas/TaskPriority"
+    ProjectIdFilter:
+      name: project_id
+      in: query
+      required: false
+      schema:
+        type: string
+        format: uuid
+    JobStateFilter:
+      name: state
+      in: query
+      required: false
+      schema:
+        $ref: "#/components/schemas/JobState"
+    ProviderFilter:
+      name: provider
+      in: query
+      required: false
+      schema:
+        type: string
+        minLength: 1
+    SearchQuery:
+      name: q
+      in: query
+      required: true
+      description: 查询词；变化时重置游标。
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 500
+    SearchTypeParam:
+      name: type
+      in: query
+      required: false
+      schema:
+        $ref: "#/components/schemas/SearchType"
+    SearchTagsParam:
+      name: tags
+      in: query
+      required: false
+      description: 标签 ID，可重复。
+      style: form
+      explode: true
+      schema:
+        type: array
+        items:
+          type: string
+          format: uuid
+    SearchProjectParam:
+      name: project
+      in: query
+      required: false
+      schema:
+        type: string
+        format: uuid
+    SearchUpdatedFromParam:
+      name: updated_from
+      in: query
+      required: false
+      schema:
+        type: string
+        format: date-time
+    SearchUpdatedToParam:
+      name: updated_to
+      in: query
+      required: false
+      schema:
+        type: string
+        format: date-time
+    SearchArchivedParam:
+      name: archived
+      in: query
+      required: false
+      schema:
+        type: boolean
+    SearchPathParam:
+      name: path
+      in: query
+      required: false
+      schema:
+        type: string
+    SearchFormatParam:
+      name: format
+      in: query
+      required: false
+      schema:
+        type: string
+    SearchSortParam:
+      name: sort
+      in: query
+      required: false
+      schema:
+        $ref: "#/components/schemas/SearchSort"
+  headers:
+    ETag:
+      description: 实体当前版本，形如 `"3"`；与响应体版本字段一致。
+      schema:
+        type: string
+        pattern: ^"[0-9]+"$
+  responses:
+    BadRequest:
+      description: 请求语法或参数无效。
+      headers: {}
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    Unauthorized:
+      description: 未登录或会话已失效。
+      headers: {}
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    Forbidden:
+      description: 授权失败或 CSRF/Origin 校验失败。
+      headers: {}
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    NotFound:
+      description: 对象不存在。
+      headers: {}
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    Conflict:
+      description: 版本或状态冲突；version 冲突时带 current_version。
+      headers: {}
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    PayloadTooLarge:
+      description: 请求或文件超过大小/页数/像素限额。
+      headers: {}
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    UnprocessableEntity:
+      description: 业务字段无效，详见 field_errors。
+      headers: {}
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    TooManyRequests:
+      description: 准入受限。
+      headers:
+        Retry-After:
+          description: 建议重试等待秒数。
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    ServiceUnavailable:
+      description: 依赖不可用。
+      headers:
+        Retry-After:
+          description: 建议重试等待秒数。
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"

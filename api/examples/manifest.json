@@ -1,0 +1,98 @@
+{
+  "documents": [
+    "openapi.yaml",
+    "intelligence.openapi.yaml"
+  ],
+  "examples": [
+    {
+      "document": "openapi.yaml",
+      "schema": "TaskStatus",
+      "file": "valid/task-status-in-progress.json",
+      "valid": true
+    },
+    {
+      "document": "openapi.yaml",
+      "schema": "TaskStatus",
+      "file": "invalid/task-status-blocked.json",
+      "valid": false
+    },
+    {
+      "document": "openapi.yaml",
+      "schema": "DateValue",
+      "file": "valid/date-value-date-only.json",
+      "valid": true
+    },
+    {
+      "document": "openapi.yaml",
+      "schema": "DateValue",
+      "file": "valid/date-value-with-time.json",
+      "valid": true
+    },
+    {
+      "document": "openapi.yaml",
+      "schema": "DateValue",
+      "file": "invalid/date-value-bad-time.json",
+      "valid": false
+    },
+    {
+      "document": "openapi.yaml",
+      "schema": "DateValue",
+      "file": "invalid/date-value-missing-date.json",
+      "valid": false
+    },
+    {
+      "document": "openapi.yaml",
+      "schema": "NoteUpdate",
+      "file": "valid/note-update.json",
+      "valid": true
+    },
+    {
+      "document": "openapi.yaml",
+      "schema": "NoteUpdate",
+      "file": "invalid/note-update-missing-expected-version.json",
+      "valid": false
+    },
+    {
+      "document": "openapi.yaml",
+      "schema": "TaskCreate",
+      "file": "valid/task-create.json",
+      "valid": true
+    },
+    {
+      "document": "openapi.yaml",
+      "schema": "TaskCreate",
+      "file": "invalid/task-create-bad-priority.json",
+      "valid": false
+    },
+    {
+      "document": "openapi.yaml",
+      "schema": "ApiError",
+      "file": "valid/api-error.json",
+      "valid": true
+    },
+    {
+      "document": "openapi.yaml",
+      "schema": "ApiError",
+      "file": "invalid/api-error-missing-request-id.json",
+      "valid": false
+    },
+    {
+      "document": "intelligence.openapi.yaml",
+      "schema": "ExecutionRequest",
+      "file": "valid/execution-request-parse.json",
+      "valid": true
+    },
+    {
+      "document": "intelligence.openapi.yaml",
+      "schema": "ExecutionRequest",
+      "file": "invalid/execution-request-bad-kind.json",
+      "valid": false
+    },
+    {
+      "document": "intelligence.openapi.yaml",
+      "schema": "ExecutionState",
+      "file": "valid/execution-state-interrupted.json",
+      "valid": true
+    }
+  ]
+}

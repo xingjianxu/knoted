@@ -9,14 +9,18 @@
     "typecheck": "pnpm -r --if-present run typecheck",
     "lint": "pnpm -r --if-present run lint",
     "test": "pnpm -r --if-present run test",
-    "build": "pnpm -r --if-present run build"
+    "build": "pnpm -r --if-present run build",
+    "api:check": "node api/examples/check.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@playwright/test": "1.65.0",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
     "eslint": "10.14.0",
     "eslint-plugin-react-hooks": "7.1.1",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.72.2"
+    "typescript-eslint": "8.72.2",
+    "yaml": "2.9.1"
   }
 }
