@@ -1,18 +1,22 @@
 # Knoted
 
-当前代码为 Rust 2024 初始骨架，无外部依赖。项目功能尚未定义；开发管理规范可移植到其他语言和 Agent。
+已完成 T01—T05 基础骨架：Rust 2024 workspace（`crates/knoted-core`、`knoted-api`、`knoted-worker`）、React/TypeScript 前端骨架（`apps/web`、`packages/ui`、`packages/api-client`）、OpenAPI 契约（`api/`）与 SQLx 迁移（`migrations/`）。产品功能仍按 [Knoted v1 计划](docs/plans/knoted-v1/README.md) 逐卡实施。
 
 ## 开始使用
 
 1. 阅读 [AGENTS.md](AGENTS.md) 和 [Agent 工作流](docs/development/agent-workflow.md)。
 2. 检查 Superpowers、git-commit 的实际安装与加载；参照 [Agent 适配](docs/development/agent-adapters.md)。
 3. 选择已由人工批准的任务，按 [Worktree 指南](docs/development/git-worktree.md) 在 `.worktrees/` 隔离开发。
-4. 在任务 Worktree 执行：
+4. 在任务 Worktree 执行本地门禁（仓库不使用 GitHub CI，这些检查是合并前的唯一门禁）：
 
    ```bash
    cargo fmt --check
-   cargo test
-   cargo clippy --all-targets -- -D warnings
+   cargo test --workspace --locked
+   cargo clippy --workspace --all-targets -- -D warnings
+   pnpm install --frozen-lockfile
+   pnpm api:check          # OpenAPI 契约与样例
+   pnpm api:verify         # 生成客户端是否与契约同步（需干净工作区）
+   pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run build
    ```
 
 ## 流程入口

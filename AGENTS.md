@@ -2,7 +2,7 @@
 
 ## 项目与入口
 
-Knoted 当前为 Rust 2024 单二进制骨架：`Cargo.toml` 定义包，`src/main.rs` 是入口；尚无业务模块、数据库或部署契约。不要根据项目名称推断产品需求。见 [架构现状](docs/architecture/README.md)。管理体系采用语言无关的 Git、gh、Markdown 和标准 Agent Skills。
+Knoted 当前为 Rust 2024 workspace（`crates/knoted-core`、`knoted-api`、`knoted-worker`）加 pnpm workspace（`apps/web`、`packages/ui`、`packages/api-client`）的骨架：已有配置装载、SQLx 迁移与实体注册表、浏览器/内部 OpenAPI 契约及生成客户端，尚无认证、笔记、文件、搜索或 RAG 业务实现。任务状态见 [Knoted v1 计划](docs/plans/knoted-v1/README.md)，目录职责见 [架构现状](docs/architecture/README.md)。不要根据项目名称推断产品需求。管理体系采用语言无关的 Git、gh、Markdown 和标准 Agent Skills。
 
 - `.agents/skills/`：项目管理流程；`docs/development/`：操作指南和平台适配。
 - `docs/decisions/`：ADR；`docs/rfcs/`：重大方案讨论；`docs/plans/`：复杂任务计划。

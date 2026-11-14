@@ -1,0 +1,12 @@
+{
+  "code": "version_conflict",
+  "message": "笔记已被更新，请刷新后重试。",
+  "request_id": "7b1d2f0e-4f6a-4f0e-9a6e-2d3b4c5d6e7f",
+  "field_errors": [
+    {
+      "field": "expected_version",
+      "message": "期望版本已过期。"
+    }
+  ],
+  "current_version": 4
+}
