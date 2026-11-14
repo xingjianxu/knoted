@@ -1203,6 +1203,41 @@ function runChecks() {
     }
   }
 
+  // A sample SSE frame must actually be valid for the documented ChatEvent schema:
+  // substring checks alone would let a malformed frame pass.
+  const sseFrameExample = sseMedia?.example;
+  if (typeof sseFrameExample === "string") {
+    const dataLines = sseFrameExample
+      .split("\n")
+      .filter((line) => line.startsWith("data: "))
+      .map((line) => line.slice("data: ".length));
+    check(
+      dataLines.length > 0,
+      "streamChatRunEvents: SSE 示例帧缺少 data 行",
+    );
+    let validateChatEvent;
+    try {
+      validateChatEvent = ajv.compile({
+        components: browser.components,
+        $ref: "#/components/schemas/ChatEvent",
+      });
+    } catch (error) {
+      fail(`streamChatRunEvents: Ajv 编译 ChatEvent 失败：${error.message}`);
+    }
+    for (const line of dataLines) {
+      let frame;
+      try {
+        frame = JSON.parse(line);
+      } catch {
+        fail(`streamChatRunEvents: SSE data 示例不是合法 JSON：${line}`);
+      }
+      check(
+        validateChatEvent(frame),
+        `streamChatRunEvents: SSE data 示例不符合 ChatEvent：\n${ajv.errorsText(validateChatEvent.errors, { separator: "\n" })}`,
+      );
+    }
+  }
+
   for (const directory of ["valid", "invalid"]) {
     const directoryPath = join(EXAMPLES_DIR, directory);
     let entries;
