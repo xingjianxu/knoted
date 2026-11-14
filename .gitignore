@@ -5,3 +5,12 @@
 
 # Agent execution scratch (plans belong in docs/plans/)
 .superpowers/
+
+# Node / web toolchain
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+.vite/
