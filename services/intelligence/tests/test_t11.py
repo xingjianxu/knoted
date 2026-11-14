@@ -20,6 +20,7 @@ import hashlib
 import json
 import math
 import os
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -111,12 +112,14 @@ def test_t11_1_dimension_and_normalization() -> None:
     difference = max(abs(a - b) for a, b in zip(repeated[0], repeated[1], strict=True))
     assert difference <= 1e-5, difference
 
-    # Semantic smoke test (fixture README): the two related Chinese sentences
-    # must be closer than the unrelated English one. No absolute value is
-    # asserted, so a model revision update does not re-calibrate the test.
+    # Semantic smoke test (fixture README). Measured on this locked revision:
+    # cos(zh-notes, zh-search) = 0.7548, cos(zh-notes, the unrelated English
+    # sentence) = 0.3351, so the 0.1 gap keeps more than 4x margin. The pair is
+    # deliberately not a translation of the Chinese sentence; an absolute
+    # similarity value is never asserted.
     related = cosine(vectors[0], vectors[1])
     unrelated = cosine(vectors[0], vectors[2])
-    assert related > unrelated, (related, unrelated)
+    assert related - unrelated >= 0.1, (related, unrelated)
 
 
 def test_t11_1b_embed_execution_uses_the_locked_model(tmp_path: Path) -> None:
@@ -287,6 +290,9 @@ def test_t11_3_model_revision_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
         assert candidate.stat().st_size == size, relative
         assert relative in lock and sha256 in lock, relative
 
+    # The required files' digests are also actually recomputed from disk.
+    assert bge.artifact_problems() == []
+
     # The tokenizer revision lives in the same snapshot; there is no second
     # download that could drift.
     assert bge.TOKENIZER_REVISION == bge.MODEL_REVISION
@@ -399,6 +405,32 @@ def test_t11_4_offline_load_without_network() -> None:
     )
 
 
+def test_t11_3b_model_digest_checked(tmp_path: Path) -> None:
+    """The runtime digest check is real: same size, different bytes is refused."""
+
+    require_model()
+    root = bge.model_dir()
+    candidate = tmp_path / "bge-m3"
+    candidate.mkdir()
+    for relative in bge.REQUIRED_FILES:
+        source = root / relative
+        destination = candidate / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if relative == "model.safetensors":
+            # A symlink avoids copying 2.2 GiB; the digest still reads the bytes.
+            destination.symlink_to(source)
+        else:
+            shutil.copyfile(source, destination)
+
+    assert bge.artifact_problems(candidate) == []
+
+    target = candidate / "config.json"
+    original = target.read_bytes()
+    target.write_bytes(bytes([original[0] ^ 0xFF]) + original[1:])
+    problems = bge.artifact_problems(candidate)
+    assert any("config.json" in problem and "sha256" in problem for problem in problems), problems
+
+
 # -- t11_5 -------------------------------------------------------------------
 
 
@@ -483,6 +515,51 @@ def test_t11_5_gpu_slots_serialize_parse_and_embed(tmp_path: Path) -> None:
         f"parse={parse_started.isoformat()}..{parse_finished.isoformat()} "
         f"embed={embed_started.isoformat()}..{embed_finished.isoformat()}"
     )
+
+
+def test_t11_6_embed_input_admission(tmp_path: Path) -> None:
+    """The execution protocol turns bad embed input into a stable failed record.
+
+    All four refusals happen before the model is loaded, so this is an execution
+    level admission test, not an embedding result.
+    """
+
+    oversized = bge.MAX_INPUT_BYTES + 1
+    cases = {
+        "t11-6-empty": (b"", "empty_input"),
+        "t11-6-lines": (
+            ("\n".join(f"line {index}" for index in range(65)) + "\n").encode(),
+            "batch_too_large",
+        ),
+        "t11-6-large": (b"", "input_too_large"),
+        "t11-6-encoding": (b"\xff\xfe\x00\x00", "invalid_input"),
+    }
+    with running_service(tmp_path, max_slots=1) as (client, settings):
+        for index, (object_id, (payload, expected_code)) in enumerate(cases.items()):
+            staged = settings.input_dir / object_id
+            if expected_code == "input_too_large":
+                with staged.open("wb") as handle:
+                    handle.truncate(oversized)
+            else:
+                staged.write_bytes(payload)
+            execution_id = str(uuid.uuid4())
+            created = client.post(
+                EXECUTIONS_PATH,
+                json={
+                    "execution_id": execution_id,
+                    "kind": "embed",
+                    "input_object_id": object_id,
+                    "input_sha256": hashlib.sha256(staged.read_bytes()).hexdigest(),
+                    "source_version": index + 1,
+                    "deadline": (datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
+                    "options_revision": bge.OPTIONS_REVISION,
+                },
+            )
+            assert created.status_code == 201, created.text
+            record = wait_for_state(client, execution_id, {"failed", "succeeded"}, timeout=120.0)
+            assert record["state"] == "failed", record
+            assert record["error"]["code"] == "execution_failed", record
+            assert expected_code in record["error"]["message"], record["error"]["message"]
 
 
 # -- helpers -----------------------------------------------------------------

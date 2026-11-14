@@ -1,6 +1,6 @@
 {
   "schema": "knoted-embedding-fixture/1",
-  "description": "Small Chinese/English sample for the dense BGE-M3 smoke test. Semantics only: no throughput, latency or recall claims.",
+  "description": "Small Chinese/English sample for the dense BGE-M3 smoke test. The English sentence is deliberately unrelated (cooking); semantics only: no throughput, latency or recall claims.",
   "texts": [
     {
       "id": "zh-notes",
@@ -13,9 +13,9 @@
       "text": "知识库里的笔记先分块，再嵌入为检索用的向量。"
     },
     {
-      "id": "en-search",
+      "id": "en-unrelated",
       "language": "en",
-      "text": "Knoted stores notes as chunks with dense embeddings for retrieval."
+      "text": "Preheat the oven to 200 degrees and bake the bread for thirty minutes."
     },
     {
       "id": "mixed-query",

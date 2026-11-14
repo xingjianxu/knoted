@@ -47,13 +47,14 @@ tokenizer revision、推理依赖版本、`model_revision` 配置键、GPU UUID 
 | `tokenizer.json` | 17,098,108 | `21106b6d7dab2952c1d496fb21d5dc9db75c28ed361a05f5020bbba27810dd08` |
 | `tokenizer_config.json` | 444 | `a62b2b6784f990259fddef5f16388693a8043be4f69179e6a5257eeb3f9abac4` |
 
-运行时**必需**的是 dense 路径加载的 10 个文件（`bge.REQUIRED_FILES`，逐次校验存在性与
-size）：`config.json`、`config_sentence_transformers.json`、`sentence_bert_config.json`、
+运行时**必需**的是 dense 路径加载的 10 个文件（`bge.REQUIRED_FILES`）；每次进程加载模型前
+逐文件校验存在性、size **与 sha256**（`artifact_problems()`，约 2.3 GiB，一次进程一次）：`config.json`、`config_sentence_transformers.json`、`sentence_bert_config.json`、
 `modules.json`、`1_Pooling/config.json`、`model.safetensors`、`tokenizer.json`、
 `tokenizer_config.json`、`special_tokens_map.json`、`sentencepiece.bpe.model`。
 
-`README.md`、`sparse_linear.pt`、`colbert_linear.pt` 计入快照清单（sha256 固定），但
-**不是运行必需**：BGE-M3 的 sparse 与 ColBERT 头在本卡不使用也不加载，只有 dense
+`README.md`、`sparse_linear.pt`、`colbert_linear.pt` 计入快照清单（sha256 固定，由
+`MANIFEST.json`/本文件/常量三方交叉核对，运行时不读取、不哈希），但**不是运行必需**：
+BGE-M3 的 sparse 与 ColBERT 头在本卡不使用也不加载，只有 dense
 （`normalize_embeddings=True`）路径。启用其它头属于新契约，必须新 revision 与新
 `OPTIONS_REVISION`。
 
@@ -149,7 +150,13 @@ max_seq_length/runtime 版本/`gpu_uuid_env`/`options_revision`），消费方�
   `encode` 从未被调用；8192 token 边界通过。模型本身没有被伪造。
 - `t11_3`：`LOCK.md`、`MANIFEST.json`、`bge.MODEL_REVISION`、`lock_summary()` 与
   实际加载契约（`hidden_size`/`max_seq_length`/`device`）一致；13 个文件的 size/sha256
-  三方一致；安装的 4 个库版本等于锁定值；UUID 环境变量的映射被实际检查。
+  三方一致，10 个必需文件的磁盘摘要由 `artifact_problems()` 真实重算；安装的 4 个库版本
+  等于锁定值；UUID 环境变量的映射被实际检查。
+- `t11_3b`：把必需文件软链到临时目录后篡改同尺寸的 `config.json`，
+  `artifact_problems()` 返回 `sha256 ... does not match the lock`，证明运行期摘要校验有效。
+- `t11_6`：经执行协议提交空对象、65 行、8 MiB+1（稀疏文件）与非 UTF-8 的 embed 输入，
+  均在不加载模型的情况下得到终态 `failed`，消息含 `empty_input`/`batch_too_large`/
+  `input_too_large`/`invalid_input`。
 - `t11_5`：`max_slots=2` 下同时提交一个 parse 与一个 embed，两者在账本里的
   `started_at..finished_at` 区间不重叠（`gpu_slots` 默认 1）；两个请求都在对方结束前
   被接受，因此重叠是可观测的而不是理论上的。修复前该用例实测重叠（同机复跑）。

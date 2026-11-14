@@ -10,8 +10,9 @@ The snapshot lives at ``KNOTED_INTELLIGENCE_MODELS_DIR/bge-m3`` (default
 ``/data/knoted-dev/service/models/bge-m3``) and is never downloaded at runtime:
 ``HF_HUB_OFFLINE``/``TRANSFORMERS_OFFLINE``/``HF_HUB_DISABLE_TELEMETRY`` are set
 before ``sentence_transformers`` (and therefore ``torch``) is imported, and the
-snapshot path is passed explicitly. A missing or wrongly-sized file is a
-:class:`EmbeddingError` with ``models_missing``, not a hub fallback.
+snapshot path is passed explicitly. A missing, wrongly-sized or tampered file is
+a :class:`EmbeddingError` with ``models_missing``, not a hub fallback: the ten
+files the dense path loads are re-hashed with SHA-256 before the model loads.
 
 GPU selection is explicit. ``KNOTED_EMBED_GPU_UUID`` must hold an
 ``nvidia-smi -L`` UUID (for example ``GPU-9e2b...``); it is copied into
@@ -28,6 +29,7 @@ space. Changing a value is a new ``OPTIONS_REVISION``, not a runtime choice.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -326,20 +328,44 @@ def locked_model_revision() -> str:
 
 
 def artifact_problems(root: Path | None = None) -> list[str]:
-    """Relative descriptions of missing or wrongly-sized required files."""
+    """Relative descriptions of files that do not match the lock.
+
+    The ten files the dense path loads are checked for existence, size **and**
+    SHA-256; a digest read of ~2.3 GiB happens once per process before the model
+    loads. The three inventoried-but-unused files (README, sparse/ColBERT
+    heads) are cross-checked against ``MANIFEST.json``/``LOCK.md`` instead of
+    being hashed at runtime.
+    """
 
     snapshot = root or model_dir()
     problems: list[str] = []
-    sizes = {relative: size for relative, size, _sha256 in EXPECTED_FILES}
+    locked = {relative: (size, sha256) for relative, size, sha256 in EXPECTED_FILES}
     for relative in REQUIRED_FILES:
         candidate = snapshot / relative
         if not candidate.is_file():
             problems.append(f"{relative}: missing")
             continue
+        expected_size, expected_sha256 = locked[relative]
         actual = candidate.stat().st_size
-        if actual != sizes[relative]:
-            problems.append(f"{relative}: expected {sizes[relative]} bytes, found {actual} bytes")
+        if actual != expected_size:
+            problems.append(f"{relative}: expected {expected_size} bytes, found {actual} bytes")
+            continue
+        actual_sha256 = _sha256_file(candidate)
+        if actual_sha256 != expected_sha256:
+            problems.append(
+                f"{relative}: sha256 {actual_sha256} does not match the lock {expected_sha256}"
+            )
     return problems
+
+
+def _sha256_file(path: Path) -> str:
+    """Streams a file through SHA-256 without loading it into memory."""
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def require_model_dir(root: Path | None = None) -> Path:
@@ -359,7 +385,8 @@ def require_model_dir(root: Path | None = None) -> Path:
             "models_missing",
             "the locked BGE-M3 snapshot is incomplete ("
             + "; ".join(problems)
-            + f"); re-run {snapshot}/{FETCH_SCRIPT} as described in embedding/LOCK.md",
+            + f"); re-run {snapshot}/{FETCH_SCRIPT} --check as described in "
+            "embedding/LOCK.md",
         )
     return snapshot
 
