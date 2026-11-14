@@ -10,8 +10,16 @@
 #
 # This module declares paths, GPU UUIDs, the systemd wrapper and the client
 # contract only. It deliberately does not fetch binaries and never writes a key
-# into the Nix store. The tmpfiles entry below manages the runtime directory
-# permissions, not the secret itself.
+# into the Nix store. The tmpfiles entries below manage directory permissions,
+# not the secret itself.
+#
+# Host prerequisites (missing = deployment failure, not a silent default):
+#   * a `knoted` system user/group (shared with the Python and API services);
+#   * /data/llm/strata and the model/config tree, owned by host, with
+#     `install -d -o knoted -g knoted -m 0750 /data/llm/strata/state`;
+#   * /run/knoted 0750 root:knoted, /run/knoted/strata-api-key 0440 root:knoted;
+#   * /run/knoted/strata-auth-header 0600 for the verification curl commands
+#     (contains `Authorization: Bearer <key>` so the key never enters argv).
 #
 # Why `strata serve` and not `strata launch`: `launch --no-tui` prints the
 # address and returns while the server keeps running, so systemd would see the
@@ -33,9 +41,25 @@ let
   # GPU UUIDs, not nvidia-smi indexes. CUDA_VISIBLE_DEVICES accepts UUIDs and
   # renumbers them to 0..n-1 inside the unit, so Strata's own `--gpu`/`gpu` run
   # config field stays correct after a card is added, removed or swapped.
-  visibleDevices = lib.concatStringsSep "," cfg.gpus;
+  # Normalize only the hex part to lower case; CUDA requires the `GPU-` prefix.
+  normalizeUuid = uuid: "GPU-" + lib.removePrefix "gpu-" (lib.toLower uuid);
+  visibleDevices = lib.concatStringsSep "," (map normalizeUuid cfg.gpus);
 
   shellList = args: lib.concatMapStringsSep " " (arg: lib.escapeShellArg arg) args;
+
+  # Cheap startup checks: size only (sha256 is host evidence, t12_2).
+  expectedFiles = lib.concatMapStringsSep "\n" (file: ''
+    model_file=${lib.escapeShellArg "${cfg.model.path}/${file.name}"}
+    if [ ! -f "$model_file" ]; then
+      echo "knoted-strata: missing model file: $model_file" >&2
+      exit 1
+    fi
+    model_size=$(${pkgs.coreutils}/bin/stat -c %s "$model_file")
+    if [ "$model_size" != "${toString file.sizeBytes}" ]; then
+      echo "knoted-strata: wrong size for $model_file: $model_size (expected ${toString file.sizeBytes})" >&2
+      exit 1
+    fi
+  '') cfg.model.files;
 
   preflight = pkgs.writeShellScript "knoted-strata-preflight" ''
     set -eu
@@ -58,6 +82,14 @@ let
       echo "knoted-strata: API key is not readable by the service user: $keyfile" >&2
       exit 1
     fi
+    # The alias in this module is the single authority. A run config without
+    # model_name makes the server report the family default instead, which
+    # breaks Knoted's provider identity silently; refuse to start.
+    alias=${lib.escapeShellArg cfg.model.alias}
+    if ! ${pkgs.jq}/bin/jq -e --arg alias "$alias" '(.model_name // "") == $alias' "$runconfig" >/dev/null; then
+      echo "knoted-strata: run config model_name must equal $alias (knoted.strata.model.alias is the single authority)" >&2
+      exit 1
+    fi
     if [ -z "''${CUDA_VISIBLE_DEVICES:-}" ]; then
       echo "knoted-strata: CUDA_VISIBLE_DEVICES is empty; refusing to use the default cards" >&2
       exit 1
@@ -66,6 +98,7 @@ let
       echo "knoted-strata: model directory is missing or empty: $modeldir" >&2
       exit 1
     fi
+${expectedFiles}
   '';
 
   serve = pkgs.writeShellScript "knoted-strata-serve" ''
@@ -165,21 +198,30 @@ in
       port = lib.mkOption {
         type = lib.types.port;
         default = 15604;
-        description = "Fixed by the Knoted plan; changing it requires updating the provider contract.";
+        readOnly = true;
+        description = ''
+          Fixed by the Knoted plan (127.0.0.1:15604). Read-only rather than a
+          tunable: changing the port requires a plan change and a Knoted client
+          update, so an accidental override must not be possible.
+        '';
       };
     };
 
     gpus = lib.mkOption {
       type = lib.types.listOf lib.types.str;
-      default = [
-        "GPU-6bc31459-053f-60ef-0615-3aec9593c9e7"
-        "GPU-9e2b6db5-acef-fa85-a28a-7214d1f4c6c0"
-      ];
-      example = [ "GPU-00000000-0000-0000-0000-000000000000" ];
+      default = [ "GPU-6bc31459-053f-60ef-0615-3aec9593c9e7" ];
+      example = [ "GPU-6bc31459-053f-60ef-0615-3aec9593c9e7" ];
       description = ''
         GPU UUIDs from `nvidia-smi --query-gpu=uuid --format=csv,noheader`
-        on wks-lab. Never permanent nvidia-smi indexes. Two RTX 3090s are the
-        default Strata slot; the Python service owns another card by UUID.
+        on wks-lab. Never permanent nvidia-smi indexes.
+
+        The plan caps the application at two cards: one Strata, one Python
+        (requirements R30, indexing-and-rag “最多两卡”). The default is the
+        single first 3090 for Strata; the Python service takes the second
+        (GPU-9e2b6db5-…); the third 3090 is not used. Listing two UUIDs here is
+        accepted only as an explicit exception and requires a documented plan
+        change; the service must never take a third card by itself.
+
         The order is the order Strata sees them (0..n-1 after remapping).
       '';
     };
@@ -206,13 +248,25 @@ in
       description = "Create /run/knoted with 0750 root:knoted; the key file itself is host-managed.";
     };
 
+    manageStateDir = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Reassert stateDir as 0750 user:group with tmpfiles. This works on the
+        separate /data mount (tmpfiles-setup runs after local-fs.target); the
+        host still creates its parents and owns the install tree.
+      '';
+    };
+
     model = {
       alias = lib.mkOption {
         type = lib.types.str;
         default = "qwen3.8-flash-next-iq3_s";
         description = ''
           The model id the server reports in /v1/models and chat responses
-          (Strata's `model_name`). Knoted sends this exact value.
+          (Strata's `model_name`). Knoted sends this exact value. This module is
+          the single source of truth: T61 must not define another default, and
+          the service refuses to start when the run config disagrees.
         '';
       };
       family = lib.mkOption {
@@ -287,13 +341,6 @@ in
       };
     };
 
-    credentialFile = lib.mkOption {
-      type = lib.types.str;
-      default = cfg.apiKeyFile;
-      readOnly = true;
-      description = "Path Knoted's API/worker uses as the client credential file.";
-    };
-
     provider = {
       baseUrl = lib.mkOption {
         type = lib.types.str;
@@ -333,7 +380,11 @@ in
         message = "knoted.strata: declare at least one GPU UUID; the engine must not fall back to default cards.";
       }
       {
-        assertion = builtins.all (uuid: builtins.match "GPU-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" uuid != null) cfg.gpus;
+        assertion = builtins.length cfg.gpus >= 1 && builtins.length cfg.gpus <= 2;
+        message = "knoted.strata.gpus: 1-2 cards only. The plan caps the application at two GPUs (one Strata, one Python); a second Strata card needs a documented plan change and a third is never allowed.";
+      }
+      {
+        assertion = builtins.all (uuid: builtins.match "GPU-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" uuid != null) (map normalizeUuid cfg.gpus);
         message = "knoted.strata.gpus: every entry must be a GPU UUID from nvidia-smi (GPU-…), not a numeric index.";
       }
       {
@@ -349,6 +400,8 @@ in
 
     systemd.tmpfiles.rules = lib.optionals cfg.manageRuntimeDir [
       "d /run/knoted 0750 root ${cfg.group} -"
+    ] ++ lib.optionals cfg.manageStateDir [
+      "d ${cfg.stateDir} 0750 ${cfg.user} ${cfg.group} -"
     ];
 
     systemd.services.knoted-strata = {
