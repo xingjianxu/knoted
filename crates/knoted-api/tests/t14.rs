@@ -28,6 +28,7 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
+use webauthn_authenticator_rs::AuthenticatorBackend;
 use webauthn_authenticator_rs::prelude::{
     CreationChallengeResponse, RegisterPublicKeyCredential, RequestChallengeResponse, Url,
     WebauthnAuthenticator,
@@ -301,6 +302,13 @@ async fn t14_1_replayed_challenge_rejected() {
     assert_eq!(status, StatusCode::CONFLICT, "body: {body}");
     assert_eq!(body["code"], "ceremony_replayed");
 
+    // An unknown ceremony id is a 409 too: the contract declares no 404 for
+    // these endpoints.
+    let (status, _, body) =
+        bootstrap_finish(&app, &config, Uuid::new_v4(), &credential, None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "body: {body}");
+    assert_eq!(body["code"], "ceremony_not_found");
+
     assert_eq!(passkey_count(pool).await, 1, "no duplicate credential");
     assert_eq!(session_count(pool).await, 1, "no second session");
     assert_eq!(user_count(pool).await, 1, "still exactly one owner");
@@ -322,8 +330,30 @@ async fn t14_2_wrong_origin_or_rp_id_rejected() {
     let mut authenticator = soft_token();
     let (credential_json, credential) = register(&mut authenticator, &config, &options);
 
-    // 1. Tamper with `clientDataJSON`: the signed origin is replaced by an
-    //    attacker origin. `webauthn-rs` must reject it and write nothing.
+    // 1. A genuinely signed response whose `clientDataJSON` says
+    //    `https://evil.example`. The low-level authenticator API is used on
+    //    purpose: it signs the client data without applying the browser origin
+    //    guard, so the signature is valid and only the server's exact-origin
+    //    check can reject the credential.
+    let challenge: CreationChallengeResponse = serde_json::from_value(options.clone())
+        .expect("the server options must deserialize as a creation challenge");
+    let evil_origin = authenticator
+        .perform_register(
+            Url::parse("https://evil.example").expect("the evil origin is a URL"),
+            challenge.public_key,
+            60_000,
+        )
+        .expect("the low-level authenticator must sign the evil origin");
+    let evil_json = serde_json::to_value(&evil_origin).expect("the credential is JSON");
+    let (status, _, body) = bootstrap_finish(&app, &config, ceremony_id, &evil_json, None).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "body: {body}");
+    assert_eq!(body["code"], "credential_rejected");
+    assert_eq!(passkey_count(pool).await, 0, "no credential may be stored");
+    assert_eq!(session_count(pool).await, 0, "no session may be created");
+
+    // 2. Tamper with an already-signed `clientDataJSON` instead: the origin
+    //    changes without a matching signature, so signature integrity rejects
+    //    it as well.
     let mut tampered = credential.clone();
     let mut client_data: Value = serde_json::from_slice(&tampered.response.client_data_json)
         .expect("the client data must be JSON");
@@ -336,10 +366,10 @@ async fn t14_2_wrong_origin_or_rp_id_rejected() {
         bootstrap_finish(&app, &config, ceremony_id, &tampered_json, None).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "body: {body}");
     assert_eq!(body["code"], "credential_rejected");
-    assert_eq!(passkey_count(pool).await, 0, "no credential may be stored");
-    assert_eq!(session_count(pool).await, 0, "no session may be created");
+    assert_eq!(passkey_count(pool).await, 0);
+    assert_eq!(session_count(pool).await, 0);
 
-    // 2. A server configured with the wrong origin rejects the genuine
+    // 3. A server configured with the wrong origin rejects the genuine
     //    credential, because the signed origin no longer matches.
     let wrong_origin = AuthConfig {
         origin: "https://wlab.132140.xyz:15602".to_owned(),
@@ -359,7 +389,7 @@ async fn t14_2_wrong_origin_or_rp_id_rejected() {
     assert_eq!(passkey_count(pool).await, 0);
     assert_eq!(session_count(pool).await, 0);
 
-    // 3. A server configured with a parent RP ID rejects the credential whose
+    // 4. A server configured with a parent RP ID rejects the credential whose
     //    authenticator data hashes the original RP ID.
     let wrong_rp_id = AuthConfig {
         rp_id: "132140.xyz".to_owned(),
@@ -480,6 +510,11 @@ async fn t14_3_login_flow_and_metadata() {
         sessions_before,
         "a replay must not mint another session"
     );
+
+    // An unknown login ceremony is a 409 as well, never an undeclared 404.
+    let (status, _, body) = login_finish(&app, &config, Uuid::new_v4(), &assertion_json).await;
+    assert_eq!(status, StatusCode::CONFLICT, "body: {body}");
+    assert_eq!(body["code"], "ceremony_not_found");
 
     db.drop().await;
 }
@@ -611,6 +646,88 @@ async fn t14_6_ceremony_expires_after_five_minutes() {
         consumed, None,
         "an expired ceremony must not burn the token"
     );
+
+    db.drop().await;
+}
+
+/// Transport hints are filtered to the contract's `PasskeyTransport` enum.
+#[tokio::test]
+async fn t14_7_unknown_transports_are_dropped() {
+    let db = test_db().await;
+    let pool = &db.pool;
+    let now = fixed_now();
+    let config = config();
+    let app = build_router_with_auth(context(pool, now), config.clone());
+
+    let token = issue_bootstrap(pool, now).await;
+    let (ceremony_id, options) = bootstrap_options(&app, &config, &token).await;
+    let mut authenticator = soft_token();
+    let (mut credential_json, _) = register(&mut authenticator, &config, &options);
+
+    // The attestation object is unchanged; transports are the browser's hint
+    // and not part of the signed authenticator data. Adding the non-contract
+    // `test`/`unknown` values must not make the registration fail.
+    credential_json["response"]["transports"] =
+        json!(["usb", "test", "unknown", "internal", "hybrid"]);
+    let (status, _, body) =
+        bootstrap_finish(&app, &config, ceremony_id, &credential_json, None).await;
+    assert_eq!(status, StatusCode::CREATED, "body: {body}");
+
+    let transports: Vec<String> = sqlx::query_scalar("SELECT transports FROM passkey_credentials")
+        .fetch_one(pool)
+        .await
+        .expect("the passkey row must exist");
+    assert_eq!(transports, vec!["usb", "internal", "hybrid"]);
+
+    db.drop().await;
+}
+
+/// Two concurrent finishes with the same ceremony and credential: exactly one
+/// wins, and only one Passkey and one session exist afterwards.
+#[tokio::test]
+async fn t14_8_concurrent_finish_is_single_use() {
+    let db = test_db().await;
+    let pool = &db.pool;
+    let now = fixed_now();
+    let config = config();
+    let app = build_router_with_auth(context(pool, now), config.clone());
+
+    let token = issue_bootstrap(pool, now).await;
+    let (ceremony_id, options) = bootstrap_options(&app, &config, &token).await;
+    let mut authenticator = soft_token();
+    let (credential, _) = register(&mut authenticator, &config, &options);
+
+    let (first, second) = tokio::join!(
+        bootstrap_finish(&app, &config, ceremony_id, &credential, None),
+        bootstrap_finish(&app, &config, ceremony_id, &credential, None),
+    );
+    let statuses = [first.0, second.0];
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|status| **status == StatusCode::CREATED)
+            .count(),
+        1,
+        "exactly one finish must succeed: {statuses:?}"
+    );
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|status| **status == StatusCode::CONFLICT)
+            .count(),
+        1,
+        "exactly one finish must be rejected: {statuses:?}"
+    );
+    let loser = if first.0 == StatusCode::CONFLICT {
+        first.2
+    } else {
+        second.2
+    };
+    assert_eq!(loser["code"], "ceremony_replayed");
+
+    assert_eq!(passkey_count(pool).await, 1, "only one Passkey may exist");
+    assert_eq!(session_count(pool).await, 1, "only one session may exist");
+    assert_eq!(user_count(pool).await, 1, "only one owner may exist");
 
     db.drop().await;
 }

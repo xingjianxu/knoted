@@ -69,7 +69,10 @@ pub fn router(config: AuthConfig) -> Router<AppContext> {
 }
 
 /// `POST /auth/bootstrap/options`
-#[derive(Debug, Deserialize)]
+///
+/// `Debug` is deliberately not derived: the struct carries a secret token and a
+/// future log line must not be able to print it.
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct BootstrapOptionsRequest {
     bootstrap_token: String,
@@ -277,9 +280,11 @@ async fn bootstrap_finish(
     let result: Result<CreatedSession, DomainAuthError> = async {
         let mut tx = ctx.pool().begin().await.map_err(DbError::from)?;
         // Account-takeover guard: a previously issued bootstrap token must not
-        // add a Passkey to an account that already has one. The check runs
-        // before any consume so the token stays usable for the operator, and
-        // again after the token is consumed to close a concurrent race.
+        // add a Passkey to an account that already has one. The first check
+        // runs before any consume so the token stays usable for the operator.
+        // The second runs after consumption inside the same transaction as
+        // defence in depth; what actually serialises the flow is T13's
+        // single-live-bootstrap-token invariant, not this check.
         if owner_has_passkey(&mut tx, ceremony.user_id).await? {
             return Err(DomainAuthError::BootstrapAlreadyCompleted);
         }
@@ -456,7 +461,12 @@ fn finished(status: StatusCode, created: CreatedSession, now: DateTime<Utc>) -> 
     response
 }
 
-/// The browser's transport hints, as stored in `passkey_credentials.transports`.
+/// The browser's transport hints, filtered to the contract's enum.
+///
+/// `webauthn-rs` also models the non-contract `test` and `unknown` values. They
+/// are hints, not a security property, so they are dropped instead of failing
+/// the whole registration: the browser's list may legitimately contain a value
+/// this API version does not expose.
 fn credential_transports(credential: &RegisterPublicKeyCredential) -> Vec<String> {
     credential
         .response
@@ -467,6 +477,12 @@ fn credential_transports(credential: &RegisterPublicKeyCredential) -> Vec<String
             serde_json::to_value(transport)
                 .ok()
                 .and_then(|value| value.as_str().map(str::to_owned))
+        })
+        .filter(|transport| {
+            matches!(
+                transport.as_str(),
+                "usb" | "nfc" | "ble" | "hybrid" | "internal"
+            )
         })
         .collect()
 }
@@ -523,8 +539,10 @@ fn auth_error(error: DomainAuthError, request_id: RequestId) -> Response {
             "the WebAuthn credential could not be verified",
             request_id,
         ),
+        // The contract only declares 409 for these endpoints, so an unknown
+        // ceremony is answered exactly like a consumed or expired one.
         CeremonyNotFound => api_error(
-            StatusCode::NOT_FOUND,
+            StatusCode::CONFLICT,
             "ceremony_not_found",
             "the ceremony does not exist",
             request_id,
