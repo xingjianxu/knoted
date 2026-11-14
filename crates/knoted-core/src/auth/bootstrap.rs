@@ -171,8 +171,36 @@ pub enum DomainAuthError {
     ConsumedToken,
     #[error("the account already exists; a recovery token is required")]
     Conflict,
+    #[error("the WebAuthn relying-party configuration is invalid")]
+    Configuration,
+    #[error("the WebAuthn credential could not be verified")]
+    CredentialRejected,
+    #[error("the ceremony does not exist")]
+    CeremonyNotFound,
+    #[error("the ceremony has already been used")]
+    CeremonyReplayed,
+    #[error("the ceremony has expired")]
+    CeremonyExpired,
+    #[error("the account already has a Passkey; a recovery token is required")]
+    BootstrapAlreadyCompleted,
+    #[error("this Passkey is already registered")]
+    DuplicateCredential,
+    #[error("the last Passkey of the account cannot be removed")]
+    LastCredential,
+    #[error("the Passkey does not exist")]
+    PasskeyNotFound,
+    #[error("a Passkey verification within the last five minutes is required")]
+    RecentVerificationRequired,
+    #[error("stored authentication state is invalid")]
+    InvalidState,
     #[error(transparent)]
     Database(#[from] DbError),
+}
+
+impl From<sqlx::Error> for DomainAuthError {
+    fn from(error: sqlx::Error) -> Self {
+        DomainAuthError::Database(DbError::from(error))
+    }
 }
 
 impl DomainAuthError {
@@ -183,6 +211,17 @@ impl DomainAuthError {
             DomainAuthError::ExpiredToken => "expired_token",
             DomainAuthError::ConsumedToken => "consumed_token",
             DomainAuthError::Conflict => "conflict",
+            DomainAuthError::Configuration => "configuration_error",
+            DomainAuthError::CredentialRejected => "credential_rejected",
+            DomainAuthError::CeremonyNotFound => "ceremony_not_found",
+            DomainAuthError::CeremonyReplayed => "ceremony_replayed",
+            DomainAuthError::CeremonyExpired => "ceremony_expired",
+            DomainAuthError::BootstrapAlreadyCompleted => "bootstrap_already_completed",
+            DomainAuthError::DuplicateCredential => "duplicate_credential",
+            DomainAuthError::LastCredential => "last_credential",
+            DomainAuthError::PasskeyNotFound => "not_found",
+            DomainAuthError::RecentVerificationRequired => "recent_verification_required",
+            DomainAuthError::InvalidState => "invalid_state",
             DomainAuthError::Database(_) => "database_error",
         }
     }
@@ -405,6 +444,74 @@ pub async fn consume_bootstrap(
             owner_created: owner.created,
         })
         .map_err(DomainAuthError::from)
+}
+
+/// Consumes a bootstrap token by its stored row id.
+///
+/// `bootstrap/options` verifies the plaintext token, binds its row id to the
+/// ceremony (`ceremonies.credential_token_id`) and never keeps the plaintext.
+/// `bootstrap/finish` therefore has only the id to work with, while still
+/// needing the same single-use, expiry-checked consumption as
+/// [`consume_bootstrap`]. The conditional `UPDATE` is the authority: it burns the
+/// token and ensures the owner in the caller's transaction, so a failure rolls
+/// both back together.
+pub async fn consume_bootstrap_token(
+    tx: &mut Transaction<'_, Postgres>,
+    token_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<BootstrapOutcome, DomainAuthError> {
+    let consumed: Option<(Uuid,)> = sqlx::query_as(
+        "UPDATE credential_tokens SET consumed_at = $2 \
+         WHERE id = $1 AND purpose = 'bootstrap' \
+           AND consumed_at IS NULL AND expires_at > $2 \
+         RETURNING id",
+    )
+    .bind(token_id)
+    .bind(now)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(DbError::from)?;
+
+    if consumed.is_none() {
+        let error = classify_bootstrap_rejection_by_id(tx, token_id, now).await?;
+        tracing::debug!(
+            purpose = TokenPurpose::Bootstrap.as_str(),
+            token_id = %token_id,
+            reason = error.reason(),
+            "credential token rejected"
+        );
+        return Err(error);
+    }
+
+    ensure_owner(tx)
+        .await
+        .map(|owner| BootstrapOutcome {
+            user: owner.user,
+            owner_created: owner.created,
+        })
+        .map_err(DomainAuthError::from)
+}
+
+/// Same classification as [`classify_bootstrap_rejection`], keyed by row id.
+async fn classify_bootstrap_rejection_by_id(
+    tx: &mut Transaction<'_, Postgres>,
+    token_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<DomainAuthError, DbError> {
+    let row: Option<(DateTime<Utc>, Option<DateTime<Utc>>)> = sqlx::query_as(
+        "SELECT expires_at, consumed_at FROM credential_tokens \
+         WHERE id = $1 AND purpose = 'bootstrap'",
+    )
+    .bind(token_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    Ok(match row {
+        None => DomainAuthError::InvalidToken,
+        Some((_, Some(_))) => DomainAuthError::ConsumedToken,
+        Some((expires_at, None)) if expires_at <= now => DomainAuthError::ExpiredToken,
+        Some((_, None)) => DomainAuthError::ConsumedToken,
+    })
 }
 
 /// Finds out why the conditional `UPDATE` matched nothing.
