@@ -105,9 +105,11 @@ impl TestDb {
     /// The statement uses `IF EXISTS`, so a schema that is already gone is not
     /// an error; dropping a second time is a no-op.
     pub async fn drop(self) {
-        self.cleaned.set(true);
         self.pool.close().await;
         let _ = drop_schema(&self.base_url, &self.schema).await;
+        // Marked only after the cleanup attempt: if this future is cancelled
+        // mid-await, `Drop` still runs and retries (DROP ... IF EXISTS is safe).
+        self.cleaned.set(true);
     }
 }
 
@@ -169,7 +171,9 @@ async fn create_schema(base_url: &str, schema: &str) -> Result<(), sqlx::Error> 
     sqlx::query(&format!("CREATE SCHEMA {schema}"))
         .execute(&mut connection)
         .await?;
-    connection.close().await?;
+    // The schema exists and is committed; a failing close must not hide that
+    // fact, otherwise the caller would skip its cleanup guard.
+    let _ = connection.close().await;
     Ok(())
 }
 
