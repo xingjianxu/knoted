@@ -1,6 +1,6 @@
 # Knoted v1 文档与实施任务入口
 
-> 产品实施采用实际可用的 executing-plans 或 subagent-driven-development。当前仅文档交付，72张产品任务卡均未开始。
+> 产品实施采用实际可用的 executing-plans 或 subagent-driven-development。当前 T01—T05 已完成、审查并集成到本地主线；T06—T72 仍待领取。
 
 ## 阅读顺序
 
@@ -14,7 +14,7 @@
 
 ## 约束与范围
 
-本次人工授权是将会话计划落成Markdown，不执行T01—T72。Issue待关联、无远程写权限。产品重大架构实施前按仓库ADR/RFC规则确认，不把本计划误作Accepted ADR。基线master `6c00202c1a389a4e0e0ae797744c2159654c761d`。
+本文档交付的原授权是将会话计划落成Markdown，不执行T01—T72。此后用户单独授权实施 T01—T05（已完成并集成，见下方“实施进展”）；T06—T72 仍按任务卡逐张领取，重大架构实施前按仓库ADR/RFC规则确认，不把本计划误作Accepted ADR。Issue待关联；本次实施未推送、未创建PR、未改远程资源，任务卡“远程权限：无”仍然有效。基线master `6c00202c1a389a4e0e0ae797744c2159654c761d`。
 
 默认串行按编号推进；直接依赖列用于定位输入，不等于自动授权并行。共享锁文件、API、迁移、主机配置由主Agent串行集成。T10/T11/T12/T21/T70有独立app/host子任务，必须分别领取。除这些明确跨仓库交接外，一张卡一个Agent、一个Worktree、一组可独立验收的结果。
 
@@ -24,11 +24,11 @@
 
 | 任务 | 成果 | 直接依赖 | 状态 |
 |---|---|---|---|
-| [T01](tasks/T01.md) | Rust workspace与配置 | — | pending |
-| [T02](tasks/T02.md) | React与工具链骨架 | — | pending |
-| [T03](tasks/T03.md) | 公共OpenAPI契约 | T01, T02 | pending |
-| [T04](tasks/T04.md) | 生成客户端与查询入口 | T03 | pending |
-| [T05](tasks/T05.md) | 数据库迁移与测试隔离 | T01, T03 | pending |
+| [T01](tasks/T01.md) | Rust workspace与配置 | — | done（已集成 cd2cb6a） |
+| [T02](tasks/T02.md) | React与工具链骨架 | — | done（已集成 7b62fdc） |
+| [T03](tasks/T03.md) | 公共OpenAPI契约 | T01, T02 | done（已集成 7e3c54b） |
+| [T04](tasks/T04.md) | 生成客户端与查询入口 | T03 | done（已集成 892178e） |
+| [T05](tasks/T05.md) | 数据库迁移与测试隔离 | T01, T03 | done（已集成 79a7d06） |
 | [T06](tasks/T06.md) | API健康和日志 | T05 | pending |
 | [T07](tasks/T07.md) | 任务领取与租约 | T05 | pending |
 | [T08](tasks/T08.md) | 任务重试和取消 | T07 | pending |
@@ -100,3 +100,19 @@
 ## 阶段交付
 
 A基础T01—T12；B认证/UI T13—T21；C笔记T22—T32；D事务T33—T42；E文件/全文T43—T56；F RAG T57—T66；G运维T67—T72。部署T21后按可部署任务逐次更新，不把只有PR或测试通过称为生命周期完成。
+
+## 实施进展（T01—T05）
+
+基线 master `715e1c2`。五个任务各自在 `.worktrees/knoted-t0N` 的 `feat/t0N` 分支实施，经独立审查、修复循环后合并到本地 master；未推送、未创建 PR。
+
+| 任务 | 任务分支提交范围 | 主线集成 | 主线复跑证据 |
+|---|---|---|---|
+| T01 | `8a32d2a`..`cd2cb6a` | 快进至 `cd2cb6a` | `cargo test --workspace t01_` 7 passed；fmt/clippy 0；二进制缺库配置 exit 1、凭据零泄漏 |
+| T02 | `d4d0ced`..`f01a8fa` | merge `7b62fdc` | `pnpm install --frozen-lockfile`、typecheck、lint、build 0；vitest t02 5 passed |
+| T03 | `1dfd5b8`..`5d344bb` | merge `7e3c54b` | `pnpm api:check` 0（79 operations / 16 examples / 8 invalid rejected） |
+| T04 | `a5d7231`..`b3691e3` | merge `892178e` | `pnpm api:generate` 无差异；web vitest 13 passed |
+| T05 | `7805c6d`..`e9a08a4` | merge `79a7d06` | `cargo test --workspace t05_` 8 passed（真实 PG 18）；测试后无残留 schema |
+
+主线整体验证：`cargo fmt --check`、`cargo test --workspace --locked`（15 passed）、`cargo clippy --workspace --all-targets -- -D warnings`、`pnpm install --frozen-lockfile`、`pnpm api:check`、`pnpm run typecheck`、`pnpm run lint`、`pnpm run test`（13 passed）、`pnpm run build` 全部 exit 0。逐卡证据与仍存在的限制写在各任务卡“执行证据”及 `/data/knoted-dev/tasks/t0N/report.md`；过程记录见 `/data/knoted-dev/tasks/knoted-v1-impl/progress.md`。
+
+尚未执行：远程推送、PR、CI、测试实例部署（T21 前无测试实例，T01—T05 均为库/契约/前端骨架，无需部署）。
