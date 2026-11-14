@@ -6,9 +6,9 @@
 //! tests are separate crates and cannot use `cfg(test)` items) but it is meant
 //! for test code only: production paths must never call it.
 //!
-//! The helper refuses any database whose name does not contain `test`, so a
+//! The helper refuses any database whose name does not end with `_test`, so a
 //! misconfigured `KNOTED_TEST_DATABASE_URL` cannot point the test suite at
-//! `knoted_dev` or `knoted_prod`.
+//! `knoted_dev`, `knoted_prod` or a look-alike such as `knoted_latest`.
 
 use std::cell::Cell;
 use std::fmt;
@@ -56,12 +56,14 @@ impl TestDb {
     pub async fn create_from_url(url: &str) -> Result<TestDb, DbError> {
         let options = PgConnectOptions::from_str(url)?;
         let database = options.get_database().unwrap_or_default().to_owned();
-        if !database.contains("test") {
+        // Require the `_test` suffix: `contains("test")` would also accept a
+        // real-looking name such as `knoted_latest`.
+        if !database.ends_with("_test") {
             return Err(DbError::UnsafeTestTarget(database));
         }
 
         let schema = sql_identifier(&format!(
-            "knoted_t05_{}",
+            "knoted_test_{}",
             &Uuid::new_v4().simple().to_string()[..12]
         ));
 
@@ -71,7 +73,9 @@ impl TestDb {
         // behind. On success `TestDb` owns the cleanup instead.
         let guard = SchemaGuard::new(url, schema.clone());
 
-        let search_path = format!("SET search_path TO {schema}");
+        // `public` stays on the path so extension types installed there
+        // (pgvector `vector`, pg_trgm) remain visible to schema-scoped tests.
+        let search_path = format!("SET search_path TO {schema}, public");
         let pool = PgPoolOptions::new()
             .max_connections(2)
             .after_connect(move |connection, _metadata| {

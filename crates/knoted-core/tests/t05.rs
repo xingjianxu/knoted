@@ -123,7 +123,7 @@ async fn t05_2_failed_migration_blocks_ready() {
 
     // Simulate a schema that already holds an incompatible `entity_registry`
     // and has no record of migration 0001.
-    sqlx::query("DROP TABLE entity_registry")
+    sqlx::query("DROP TABLE entity_registry CASCADE")
         .execute(&db.pool)
         .await
         .expect("dropping the migrated table must work");
@@ -131,7 +131,7 @@ async fn t05_2_failed_migration_blocks_ready() {
         .execute(&db.pool)
         .await
         .expect("the legacy table must be creable");
-    sqlx::query("DROP TABLE _sqlx_migrations")
+    sqlx::query("DROP TABLE _sqlx_migrations CASCADE")
         .execute(&db.pool)
         .await
         .expect("dropping the bookkeeping table must work");
