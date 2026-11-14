@@ -1,6 +1,6 @@
 # GitHub 远程配置状态与操作记录
 
-远程配置已在 2026-11-14 经用户明确授权执行：首次推送、标签增补、Projects 建立、分支规则集配置。本文只记录**实际执行的命令、实测结果和仍待人工处理的项**；未实际运行的检查明确标注，不得把本文当成无条件脚本执行。任何后续写操作仍须重新取得对应授权。
+远程配置已在 2026-11-14 经用户明确授权执行：首次推送、标签增补、Projects 建立、分支规则集配置。本文只记录**实际执行的命令、实测结果和仍待人工处理的项**；未实际运行的检查明确标注，不得把本文当成无条件脚本执行。后续写操作按根 [AGENTS.md](../../AGENTS.md)「远程操作授权」执行：常规 Issue、Labels 与 Projects、push 非默认分支、PR 创建与普通合并默认授权、不再逐次许可；仓库级设置（ruleset、分支保护、webhook、协作者与权限、Actions、可见性与删除、标签名增删）仍须人工确认。
 
 ## 当前实际状态
 
@@ -26,7 +26,7 @@ gh auth status   # 实测 scopes: gist, project, read:org, repo, workflow
 
 - 缺 scope 时 `gh project list` 直接失败：`missing required scopes [read:project]`。
 - Git 推送凭据与 gh token **互相独立**（本机 `credential.helper = store --file ${XDG_RUNTIME_DIR}/agenix/git-creds`）；刷新 gh scope 不影响推送凭据，反之亦然。
-- scope 具备不等于授权：远程写操作仍按具体任务取得许可。
+- scope 具备不等于放开授权范围：常规远程写操作按默认授权执行，仓库级设置与规则 12 的边界仍需人工确认。
 
 ## 2. 首次推送与默认分支
 
@@ -133,7 +133,7 @@ mutation {
 
 `singleSelectOptions` 是**覆盖式**写入 id/name/color/description 四项：必须回写完整列表；保留既有 option id 才能保住条目的已选值；想保留既有说明就必须把原 description 一并回写，省略或留空会静默清空。
 
-- Iteration 未启用；需要排期时在看板设置中配置。Projects 自动化（自动加入看板、写字段）未建立执行引擎，`gh project item-add` / `item-edit` 属写操作，需单独授权。
+- Iteration 未启用；需要排期时在看板设置中配置。Projects 自动化（自动加入看板、写字段）未建立执行引擎，`gh project item-add` / `item-edit` 属默认授权的常规写操作，不再逐次许可。
 
 ## 6. 分支规则集与合并策略
 
