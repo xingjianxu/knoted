@@ -8,13 +8,16 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
-use super::{EnqueueOutcome, Job, JobOutcome, JobSpec, LEASE_SECONDS, Lease, enqueued_topic};
+use super::{
+    EnqueueOutcome, Job, JobOutcome, JobSpec, JobState, LEASE_SECONDS, Lease, enqueued_topic,
+};
 use crate::db::DbError;
 
-/// SQL predicate shared by the claim scan: a job is due when it is waiting and
-/// its availability has passed, or when it is running/cancelling but its lease
-/// expired (the owner is gone, so the attempt has to be repeated).
-const DUE_PREDICATE: &str = "((state = 'queued' AND available_at <= now())
+/// SQL predicate shared by the claim scan: a job is due when it is waiting for
+/// its first or next attempt and its availability has passed, or when it is
+/// running/cancelling but its lease expired (the owner is gone, so the attempt
+/// has to be repeated).
+const DUE_PREDICATE: &str = "((state IN ('queued', 'retry_wait') AND available_at <= now())
       OR (state IN ('running', 'cancel_requested') AND lease_expires_at < now()))";
 
 /// Enqueues `spec` in the caller's transaction.
@@ -91,7 +94,9 @@ pub async fn enqueue(
 ///
 /// A takeover keeps `cancel_requested` as it is: taking the lease over repeats
 /// the attempt, it does not undo the cancellation request. Every other due job
-/// becomes `running`.
+/// becomes `running`. The returned [`Lease::state`] is the state the job was in
+/// when it was claimed, so the caller can see that it is confirming a
+/// cancellation instead of running the work.
 pub async fn claim(pool: &PgPool, worker: &str) -> Result<Option<Lease>, DbError> {
     let token = Uuid::new_v4();
     let mut tx = pool.begin().await?;
@@ -109,14 +114,14 @@ pub async fn claim(pool: &PgPool, worker: &str) -> Result<Option<Lease>, DbError
         return Ok(None);
     };
 
-    let (attempt, expires_at): (i32, DateTime<Utc>) = sqlx::query_as(
+    let (attempt, expires_at, state): (i32, DateTime<Utc>, String) = sqlx::query_as(
         "UPDATE jobs SET state = CASE WHEN state = 'cancel_requested' \
                  THEN 'cancel_requested' ELSE 'running' END, \
              lease_token = $2, \
              lease_expires_at = now() + make_interval(secs => $3), \
              attempts = attempts + 1, locked_by = $4, updated_at = now() \
          WHERE id = $1 \
-         RETURNING attempts, lease_expires_at",
+         RETURNING attempts, lease_expires_at, state",
     )
     .bind(job_id)
     .bind(token)
@@ -127,13 +132,42 @@ pub async fn claim(pool: &PgPool, worker: &str) -> Result<Option<Lease>, DbError
 
     tx.commit().await?;
 
+    let state = JobState::parse(&state).ok_or(DbError::UnknownJobState(state))?;
     Ok(Some(Lease {
         job_id,
         token,
         expires_at,
         attempt,
         worker: worker.to_owned(),
+        state,
     }))
+}
+
+/// Extends the lease of a job this worker still owns and reports the state it
+/// was in while doing so.
+///
+/// `None` means the token no longer matches (another worker took the job over),
+/// exactly like [`heartbeat`] returning `false`. `Some(CancelRequested)` tells
+/// the worker to stop the execution and confirm the cancellation instead of
+/// committing a result.
+pub async fn heartbeat_state(pool: &PgPool, lease: &Lease) -> Result<Option<JobState>, DbError> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "UPDATE jobs SET lease_expires_at = now() + make_interval(secs => $3), updated_at = now() \
+         WHERE id = $1 AND lease_token = $2 AND state IN ('running', 'cancel_requested') \
+         RETURNING state",
+    )
+    .bind(lease.job_id)
+    .bind(lease.token)
+    .bind(LEASE_SECONDS)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some((state,)) = row else {
+        return Ok(None);
+    };
+    JobState::parse(&state)
+        .map(Some)
+        .ok_or(DbError::UnknownJobState(state))
 }
 
 /// Extends the lease of a job this worker still owns.
@@ -142,17 +176,79 @@ pub async fn claim(pool: &PgPool, worker: &str) -> Result<Option<Lease>, DbError
 /// has taken the job over. The caller must stop working in that case: nothing it
 /// produces afterwards can be committed.
 pub async fn heartbeat(pool: &PgPool, lease: &Lease) -> Result<bool, DbError> {
+    Ok(heartbeat_state(pool, lease).await?.is_some())
+}
+
+/// Reads one job row, or `None` when it does not exist.
+pub async fn load(pool: &PgPool, job_id: Uuid) -> Result<Option<Job>, DbError> {
+    Ok(sqlx::query_as("SELECT * FROM jobs WHERE id = $1")
+        .bind(job_id)
+        .fetch_optional(pool)
+        .await?)
+}
+
+/// Requests cancellation in one atomic statement.
+///
+/// A `queued` or `retry_wait` job has no lease and therefore goes straight to
+/// `cancelled`; `cancel_requested` requires the lease that only a running job
+/// holds, so a running job keeps it until the worker confirms. Returns `None`
+/// when the job does not exist or is already `cancel_requested`/terminal: those
+/// states are left untouched and the caller reads the row to report it.
+pub async fn request_cancel(pool: &PgPool, job_id: Uuid) -> Result<Option<Job>, DbError> {
+    Ok(sqlx::query_as(
+        "UPDATE jobs SET state = CASE \
+                 WHEN state IN ('queued', 'retry_wait') THEN 'cancelled' \
+                 ELSE 'cancel_requested' END, \
+             updated_at = now() \
+         WHERE id = $1 AND state IN ('queued', 'retry_wait', 'running') \
+         RETURNING *",
+    )
+    .bind(job_id)
+    .fetch_optional(pool)
+    .await?)
+}
+
+/// Moves a still-owned attempt to `retry_wait` and sets its next availability.
+///
+/// The three lease columns are cleared in the same statement (the check
+/// constraint requires it), `attempts` is left untouched because the retry
+/// budget is consumed by claims, not by scheduling, and `last_error` keeps the
+/// reason for the next attempt. Returns `false` when the token no longer owns
+/// the job; the database is untouched in that case.
+pub async fn schedule_retry(
+    pool: &PgPool,
+    lease: &Lease,
+    error: &str,
+    available_at: DateTime<Utc>,
+) -> Result<bool, DbError> {
     let result = sqlx::query(
-        "UPDATE jobs SET lease_expires_at = now() + make_interval(secs => $3), updated_at = now() \
+        "UPDATE jobs SET state = 'retry_wait', last_error = $3, available_at = $4, \
+             lease_token = NULL, lease_expires_at = NULL, locked_by = NULL, updated_at = now() \
          WHERE id = $1 AND lease_token = $2 AND state IN ('running', 'cancel_requested')",
     )
     .bind(lease.job_id)
     .bind(lease.token)
-    .bind(LEASE_SECONDS)
+    .bind(error)
+    .bind(available_at)
     .execute(pool)
     .await?;
 
     Ok(result.rows_affected() == 1)
+}
+
+/// Records that `job_id` was created by a manual retry of `retry_of`.
+pub async fn link_retry(
+    tx: &mut Transaction<'_, Postgres>,
+    job_id: Uuid,
+    retry_of: Uuid,
+) -> Result<Job, DbError> {
+    Ok(sqlx::query_as(
+        "UPDATE jobs SET retry_of = $2, updated_at = now() WHERE id = $1 RETURNING *",
+    )
+    .bind(job_id)
+    .bind(retry_of)
+    .fetch_one(&mut **tx)
+    .await?)
 }
 
 /// Commits `outcome` if `lease` still owns the job, and releases the lease.
