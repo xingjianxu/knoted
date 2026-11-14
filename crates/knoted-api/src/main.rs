@@ -48,8 +48,10 @@ async fn run_server(args: Vec<String>) -> ExitCode {
                 println!("{USAGE}");
                 return ExitCode::SUCCESS;
             }
-            other => {
-                eprintln!("knoted-api: unknown argument `{other}`");
+            _ => {
+                // The value is never echoed: a token pasted into the wrong
+                // argument slot would otherwise reach stderr and the logs.
+                eprintln!("knoted-api: unknown argument");
                 eprintln!("{USAGE}");
                 return ExitCode::from(2);
             }
@@ -130,8 +132,9 @@ async fn run_admin(args: &[String]) -> ExitCode {
             println!("{USAGE}");
             ExitCode::SUCCESS
         }
-        other => {
-            eprintln!("knoted-api: unknown admin command `{other}`");
+        _ => {
+            // Same rule as the server parser: no argument values in output.
+            eprintln!("knoted-api: unknown admin command");
             eprintln!("{USAGE}");
             ExitCode::from(2)
         }

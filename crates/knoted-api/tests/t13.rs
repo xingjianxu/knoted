@@ -11,7 +11,7 @@
 //! once the owner exists while recovery tokens stay available. WebAuthn
 //! verification and HTTP auth routes are T14/T15 and deliberately absent.
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use chrono::{Duration, TimeZone, Utc};
 use knoted_api::admin::{self, TokenCommand};
@@ -420,6 +420,38 @@ async fn t13_5_ceremony_token_binding_enforced() {
         "the binding must be enforced by a CHECK constraint, got {error:?}"
     );
 
+    // Recovery without a token is equally contradictory: the token is what the
+    // ceremony will re-check on finish.
+    let error = sqlx::query(
+        "INSERT INTO ceremonies (id, purpose, state, expires_at) \
+         VALUES ($1, 'recovery', '{}'::jsonb, $2)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(expires_at)
+    .execute(pool)
+    .await
+    .expect_err("a recovery ceremony without a credential token must be rejected");
+    assert!(
+        is_check_violation(&error),
+        "the binding must be enforced by a CHECK constraint, got {error:?}"
+    );
+
+    // add_passkey comes from a session; a CLI token does not authorise it.
+    let error = sqlx::query(
+        "INSERT INTO ceremonies (id, purpose, credential_token_id, state, expires_at) \
+         VALUES ($1, 'add_passkey', $2, '{}'::jsonb, $3)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(token.id)
+    .bind(expires_at)
+    .execute(pool)
+    .await
+    .expect_err("an add_passkey ceremony bound to a credential token must be rejected");
+    assert!(
+        is_check_violation(&error),
+        "the binding must be enforced by a CHECK constraint, got {error:?}"
+    );
+
     // The legal combinations still insert.
     sqlx::query(
         "INSERT INTO ceremonies (id, purpose, state, expires_at) \
@@ -448,41 +480,64 @@ async fn t13_5_ceremony_token_binding_enforced() {
     assert_eq!(ceremonies, 2, "only the two legal ceremonies must exist");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t13_6_concurrent_issue_keeps_single_live_token() {
     let db = test_db().await;
     let now = fixed_now();
     let pool = &db.pool;
 
-    // Two CLI invocations race. The supersede only sees committed rows, so
-    // issuance is serialised per purpose with a transaction-scoped advisory
-    // lock; exactly one of the two tokens must stay usable.
-    let (left, right) = tokio::join!(
-        auth::issue_token(pool, TokenPurpose::Bootstrap, now),
-        auth::issue_token(pool, TokenPurpose::Bootstrap, now),
-    );
-    let left = left.expect("concurrent issuance must not fail");
-    let right = right.expect("concurrent issuance must not fail");
+    // Warm both pooled connections before racing: a cold pool would serialise
+    // the two issuers on connection setup instead of on issuance, which would
+    // let the test pass even without the advisory lock.
+    let (first, second) = tokio::join!(pool.acquire(), pool.acquire());
+    drop(first.expect("the first pooled connection must open"));
+    drop(second.expect("the second pooled connection must open"));
 
-    let live: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM credential_tokens WHERE purpose = 'bootstrap' \
-         AND consumed_at IS NULL AND expires_at > $1",
-    )
-    .bind(now)
-    .fetch_one(pool)
-    .await
-    .expect("credential_tokens must be readable");
-    assert_eq!(live, 1, "at most one live token per purpose");
+    // Several rounds of two barrier-synchronised issuers. Without the
+    // transaction-scoped advisory lock both transactions read "no live token"
+    // and insert, leaving two usable tokens; with it, the second round's
+    // supersede sees the first commit.
+    for round in 0..8 {
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let issue = |round: usize| {
+            let pool = pool.clone();
+            let barrier = barrier.clone();
+            tokio::spawn(async move {
+                barrier.wait().await;
+                let purpose = TokenPurpose::Bootstrap;
+                (round, auth::issue_token(&pool, purpose, now).await)
+            })
+        };
 
-    let left_live = auth::verify_token(pool, TokenPurpose::Bootstrap, left.plaintext(), now)
+        let (left, right) = tokio::join!(issue(round), issue(round));
+        let (_, left) = left.expect("the issuing task must not panic");
+        let (_, right) = right.expect("the issuing task must not panic");
+        let left = left.expect("concurrent issuance must not fail");
+        let right = right.expect("concurrent issuance must not fail");
+
+        let live: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM credential_tokens WHERE purpose = 'bootstrap' \
+             AND consumed_at IS NULL AND expires_at > $1",
+        )
+        .bind(now)
+        .fetch_one(pool)
         .await
-        .is_ok();
-    let right_live = auth::verify_token(pool, TokenPurpose::Bootstrap, right.plaintext(), now)
-        .await
-        .is_ok();
-    assert!(
-        left_live ^ right_live,
-        "exactly one of the concurrently issued tokens must remain usable \
-         (left={left_live}, right={right_live})"
-    );
+        .expect("credential_tokens must be readable");
+        assert_eq!(
+            live, 1,
+            "round {round}: at most one live token per purpose after concurrent issuance"
+        );
+
+        let left_live = auth::verify_token(pool, TokenPurpose::Bootstrap, left.plaintext(), now)
+            .await
+            .is_ok();
+        let right_live = auth::verify_token(pool, TokenPurpose::Bootstrap, right.plaintext(), now)
+            .await
+            .is_ok();
+        assert!(
+            left_live ^ right_live,
+            "round {round}: exactly one of the concurrently issued tokens must remain usable \
+             (left={left_live}, right={right_live})"
+        );
+    }
 }
