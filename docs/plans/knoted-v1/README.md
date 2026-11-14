@@ -14,7 +14,7 @@
 
 ## 约束与范围
 
-本文档交付的原授权是将会话计划落成Markdown，不执行T01—T72。此后用户单独授权实施 T01—T05（已完成并集成，见下方“实施进展”）；T06—T72 仍按任务卡逐张领取，重大架构实施前按仓库ADR/RFC规则确认，不把本计划误作Accepted ADR。Issue待关联；本次实施未推送、未创建PR、未改远程资源，任务卡“远程权限：无”仍然有效。基线master `6c00202c1a389a4e0e0ae797744c2159654c761d`。
+本文档交付的原授权是将会话计划落成Markdown，不执行T01—T72。此后用户单独授权实施 T01—T05（已完成并集成，见下方“实施进展”）；T06—T72 仍按任务卡逐张领取，重大架构实施前按仓库ADR/RFC规则确认，不把本计划误作Accepted ADR。Issue仍未关联；实施阶段未推送、未创建PR、未改远程资源，任务卡的“远程权限：无”只约束当时的实施动作。T01—T05 全部成果此后经分支 `feat/t01-t05-skeleton` 推送，以 PR [#4](https://github.com/xingjianxu/knoted/pull/4) 普通 merge 进入远程 master `795d624`。基线master `6c00202c1a389a4e0e0ae797744c2159654c761d`。
 
 默认串行按编号推进；直接依赖列用于定位输入，不等于自动授权并行。共享锁文件、API、迁移、主机配置由主Agent串行集成。T10/T11/T12/T21/T70有独立app/host子任务，必须分别领取。除这些明确跨仓库交接外，一张卡一个Agent、一个Worktree、一组可独立验收的结果。
 
@@ -103,7 +103,7 @@ A基础T01—T12；B认证/UI T13—T21；C笔记T22—T32；D事务T33—T42；
 
 ## 实施进展（T01—T05）
 
-基线 master `715e1c2`。五个任务各自在 `.worktrees/knoted-t0N` 的 `feat/t0N` 分支实施，经独立审查、修复循环后合并到本地 master；未推送、未创建 PR。
+基线 master `715e1c2`。五个任务各自在 `.worktrees/knoted-t0N` 的 `feat/t0N` 分支实施，经独立审查、修复循环后合并到本地 master；实施阶段未推送、未创建 PR。39 个提交随后整体经 `feat/t01-t05-skeleton` 分支推送，由 PR [#4](https://github.com/xingjianxu/knoted/pull/4) 普通 merge 进入远程 master `795d624`；本地 master 已快进同步，该分支已删。
 
 | 任务 | 任务分支提交范围 | 主线集成 | 主线复跑证据 |
 |---|---|---|---|
