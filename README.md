@@ -25,7 +25,11 @@
 | 评估重要架构变更 | [architecture-review](.agents/skills/architecture-review/SKILL.md) |
 | 记录决策、分配 ADR 编号 | [adr-create](.agents/skills/adr-create/SKILL.md) |
 | 按范围审计项目 | [project-audit](.agents/skills/project-audit/SKILL.md) |
-| 配置 GitHub 看板、标签、CI | [待授权配置方案](docs/development/github-setup.md) |
-| 查看本次能力检查和交付 | [初始化报告](docs/development/initialization-report.md) |
+| 查看 GitHub 远程配置现状与复核命令 | [远程配置记录](docs/development/github-setup.md) |
+| 查看能力检查与初始化交付记录 | [初始化报告](docs/development/initialization-report.md) |
 
-调用示例：Codex 使用 `$issue-work` 并给出 Issue 编号、仓库和授权范围；Pi 使用 `/skill:issue-work`。不支持自动发现时直接读取该 `SKILL.md`，按同一规则执行。原生工具语法只在适配文档中维护。
+调用示例：Codex 使用 `$issue-work` 并给出 Issue 编号或任务描述；Pi 使用 `/skill:issue-work`。不支持自动发现时直接读取该 `SKILL.md`，按同一规则执行。原生工具语法只在适配文档中维护。
+
+## GitHub 默认授权
+
+Issue、Labels、Projects、push、PR 创建与合并默认已授权，不再逐次索取许可；仅 ruleset、分支保护、webhook、协作者与仓库设置类操作需要单独确认。保留的人工确认点只有重大架构决策和不可逆/生产变更。详见 [AGENTS.md](AGENTS.md) 的「远程操作授权」。

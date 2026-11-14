@@ -2,6 +2,8 @@
 
 检查日期：2026-11-14。目标仓库：`xingjianxu/knoted`。本次交付范围是本地文件、配置、验证和安全的本地 Git 集成；任何远程写操作仍待明确授权。
 
+> **时点说明：** 本记录固定描述 2026-11-14 初始化时点的状态。其中远程部分——首次推送、标签、Projects #1、ruleset——已由同日的后续授权任务完成，最新事实和可复核命令见 [GitHub 配置记录](github-setup.md)。下文提到的具体提交哈希均在 `.git` 重建后失效，现行对应关系同样见该文档的“历史重建说明”。
+
 ## 文件与完整结构
 
 新增 AGENTS.md、README.md、六个项目管理 Skills、三份 Issue Forms、PR 模板、Quality workflow、开发指南、ADR/RFC/计划模板及本记录。修改 `.gitignore`，保留 `/target`，增加 `.worktrees/`、`.superpowers/`。构建生成 Cargo.lock（无第三方依赖）。
@@ -106,7 +108,7 @@ Superpowers 实际安装的 15 个 Skills：using-superpowers、brainstorming、
 
 实际 Skill 采用 Conventional Commits，标题≤72字符，不以句点结束，从 diff 判断 type/scope；允许仓库规则优先，因此中文摘要/正文兼容。提交前分别检查 MERGE_HEAD、CHERRY_PICK_HEAD、REVERT_HEAD、冲突和 diff；按逻辑暂存，不跳过 hooks、不改历史、不顺带 push。
 
-本次逻辑拆分：`e9c3363` 原始 Rust 骨架基线、`9171137` 用户安装的提交 Skill、`d04ea56` 管理体系初始化；另以文档提交记录最终验证。实现已快进集成到本地 `master`；无远程推送。管理体系提交示例：
+本次逻辑拆分：原始 Rust 骨架基线、用户安装的提交 Skill、管理体系初始化各一个提交，另以文档提交记录最终验证。实现已快进集成到本地 `master`；无远程推送。具体哈希在 `.git` 重建后失效，现行对应关系见 [历史重建说明](github-setup.md)。管理体系提交示例：
 
 ```text
 chore(workflow): 建立 Agent 驱动开发管理体系
@@ -124,7 +126,7 @@ chore(workflow): 建立 Agent 驱动开发管理体系
 - 三份 Issue Forms、Quality YAML 和 19 个标签定义通过本地 YAML 解析/结构检查。远端表单渲染、真实 CI 和 Projects 尚未执行。
 - Rust fmt、test、clippy 通过；当前 0 个测试，结果仅证明骨架编译与工具检查通过。
 - 独立审查已完成，两项发现均已修正并核对：Superpowers 实际数量15，以及纯本地授权交付的完成条件。27份 Markdown 的66个本地链接无缺失；暂存差异及凭据特征检查通过。
-- `d04ea56` 已进入本地主线 master，祖先关系检查成功；主线 fmt/test/clippy再次通过，主工作区干净。最后的文档记录提交仍按相同 Git 集成与检查流程完成。
+- 管理体系提交已进入当时本地主线 master，祖先关系检查成功；主线 fmt/test/clippy 再次通过，主工作区干净。最后的文档记录提交仍按相同 Git 集成与检查流程完成。现主线提交见 [GitHub 配置记录](github-setup.md) 的历史重建说明。
 - `.worktrees/` 位于主根 `/wrd/prj/knoted/.worktrees/`；任务路径为 `task-agent-workflow`。主根 `git check-ignore -v .worktrees/` 实际输出 `.gitignore:4:.worktrees/`。
 - 清理在最后一个文档提交安全集成后进行：确认工作区干净、没有 Agent 使用、仅有本任务生成的 target 和隔离 Pi 探测缓存，再用 git worktree remove 和 branch -d。该记录提交时不提前声称自有 Worktree 已被删除；最终清理结果见会话交付报告与 `git worktree list`。
 
