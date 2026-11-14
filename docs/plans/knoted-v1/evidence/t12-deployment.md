@@ -450,6 +450,26 @@ in sys.config.system.build.toplevel.drvPath"
 run config 的 `model_name` 必须等于别名（`jq -e`），`model.files` 每个文件的 `stat -c %s` 必须等于期望
 size；任一不符即拒绝启动。sha256 留给 host 证据（t12_2）。
 
+preflight 脚本单独构建并检查过失败闭合（不是系统构建）：
+
+```sh
+nix build --impure --no-link --print-out-paths --expr "
+let sys = import <nixpkgs/nixos> { configuration = {
+  imports = [ $(pwd)/nix/strata-client.nix ];
+  nixpkgs.hostPlatform = \"x86_64-linux\"; system.stateVersion = \"24.11\";
+  knoted.strata.enable = true; }; };
+in sys.config.systemd.services.knoted-strata.serviceConfig.ExecStartPre"
+# exit 0，输出 /nix/store/…-knoted-strata-preflight
+
+bash -n /nix/store/…-knoted-strata-preflight
+# exit 0
+
+CUDA_VISIBLE_DEVICES=GPU-6bc31459-053f-60ef-0615-3aec9593c9e7 /nix/store/…-knoted-strata-preflight
+# exit 1；knoted-strata: Strata CLI is not executable: /data/llm/strata/bin/strata
+```
+
+最后一条在未安装 host 路径的当前机器上执行，证明缺失前置条件时拒绝启动，而不是静默使用默认卡/模型。
+
 反向断言（应失败，实际失败）：
 
 | 覆盖 | 结果 | 输出 |
@@ -463,8 +483,8 @@ size；任一不符即拒绝启动。sha256 留给 host 证据（t12_2）。
 
 `git diff --check` / `git diff --cached --check` 均为 exit 0。
 
-限制：只做了 parse + NixOS 求值 + 断言，**没有** `nix build`、没有主机激活、没有修改 `/etc/nixos`；
-host 仍需在自己的 flake 中实际构建并启用。
+限制：只做了 parse + NixOS 求值 + 断言 + preflight 小脚本构建，**没有**构建或激活整个系统、没有修改
+`/etc/nixos`；host 仍需在自己的 flake 中实际构建并启用。
 
 ## 8. 未执行 / 限制
 
