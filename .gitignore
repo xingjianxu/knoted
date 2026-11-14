@@ -1,1 +1,7 @@
 /target
+
+# Git Worktrees
+.worktrees/
+
+# Agent execution scratch (plans belong in docs/plans/)
+.superpowers/

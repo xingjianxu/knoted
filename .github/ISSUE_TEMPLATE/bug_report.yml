@@ -1,0 +1,56 @@
+name: Bug 报告
+description: 提交可验证的问题、影响与验收标准；不包含密钥或敏感数据。
+title: "[Bug] "
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先搜索已有的 open/closed Issues。安全漏洞或凭据泄露请使用经确认的私密渠道，不在此公开。
+        Agent 通过 gh 提交时，应复用这些字段并显式添加 agent-found、needs-triage 标签。
+  - type: dropdown
+    id: source
+    attributes:
+      label: 问题来源
+      options: [人工报告, Agent 发现]
+    validations:
+      required: true
+  - type: textarea
+    id: background
+    attributes:
+      label: 背景、问题和影响范围
+      description: 描述实际行为、受影响用户或模块，以及发生频率。
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 版本和环境
+      description: 提供版本或 commit、操作系统和必要配置，删除敏感信息。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤与证据
+      description: 给出最小复现及脱敏日志；无法复现时明确写出观察和未确认项。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期行为
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 可验证的验收标准
+      description: 使用检查清单描述修复后的可观察结果和必要回归测试。
+    validations:
+      required: true
+  - type: textarea
+    id: related
+    attributes:
+      label: 查重结果、相关 Issue / ADR 与建议
+      description: 链接候选重复任务；建议方向可选，不强制规定实现。

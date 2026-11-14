@@ -1,0 +1,47 @@
+name: 技术债务
+description: 记录维护、性能、测试或文档债务的证据与收益。
+title: "[Debt] "
+labels: [tech-debt, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请提供具体证据并先查重。审计发现不自动进入开发；安全信息请脱敏。
+        Agent 通过 gh 创建时必须显式设置 agent-found 和 needs-triage。
+  - type: dropdown
+    id: source
+    attributes:
+      label: 问题来源
+      options: [人工报告, Agent 发现]
+    validations:
+      required: true
+  - type: textarea
+    id: background
+    attributes:
+      label: 背景和现状证据
+      description: 代码位置、失败测试、测量数据或文档偏差；标明已确认和待验证项。
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: 影响范围与维护成本
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期改善与边界
+      description: 说明做完后的收益、兼容约束和不涉及的重构。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 可验证的验收标准
+    validations:
+      required: true
+  - type: textarea
+    id: related
+    attributes:
+      label: 查重结果、关联任务 / ADR 和建议方向
