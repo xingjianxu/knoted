@@ -12,7 +12,8 @@
 - [x] 固化需求、架构、接口、索引和部署约定。
 - [x] 生成72张独立任务卡和依赖索引。
 - [x] 链接、结构、依赖、范围验证；独立审查的重要问题已核实并修正。
-- [ ] 安全提交、本地主线集成、主线验证和任务工作区清理。
+- [x] 文档主体安全提交、本地主线集成及主线验证。
+- 清理：本收尾记录提交并集成后移除本任务Worktree与分支，实际结果记录到最终会话及下述证据目录。
 
 ## 实施判断
 
@@ -33,3 +34,9 @@
 最终结构结果：80份本目录Markdown、72张任务卡、32项需求、572个本地链接、127条依赖边，零错误、零环。另修改上级docs/plans/README.md入口，共81份Markdown改动。git diff --cached --check通过；敏感信息模式检查未发现凭据。此检查不等于产品行为测试。
 
 有效提交Skill：.agents/skills/git-commit/SKILL.md，提交前已完整读取。预定仅本地提交/集成，不执行推送、PR或远程CI。
+
+## 本地主线验收
+
+文档主体提交 `9c4198c` 已快进集成到本地master。主线再次执行文档验证：80份Markdown、72卡、32需求、572本地链接、127依赖边，零错误；git diff --check通过。产品状态仍为pending，未执行远程操作。本记录是收尾补充，不修改产品设计。
+
+可复现验证脚本和输出保留在 `/data/knoted-dev/tasks/docs-knoted-v1/validate.py` 与 `evidence/`；使用 `python <该脚本> /wrd/prj/knoted` 可重复检查。最终HEAD和Worktree清理结果保存在同目录 `evidence/final-state.txt`，避免在文档内自引用自身提交SHA。
