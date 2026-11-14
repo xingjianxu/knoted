@@ -106,6 +106,29 @@ describe("t04 generated client", () => {
     queryClient.clear();
   });
 
+  it("t04_1_forwards_abort_signal", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const fakeFetch = vi.fn<typeof fetch>((input) => {
+      const request = input instanceof Request ? input : new Request(input);
+      capturedSignal = request.signal;
+      return new Promise<Response>((_resolve, reject) => {
+        request.signal.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted.", "AbortError"));
+        });
+      });
+    });
+    vi.stubGlobal("fetch", fakeFetch);
+    const { raw } = createApiClient({ baseUrl: "/api/v1", fetch: fakeFetch });
+    const controller = new AbortController();
+
+    const pending = raw.GET("/notes", { signal: controller.signal });
+    await vi.waitFor(() => expect(fakeFetch).toHaveBeenCalledTimes(1));
+    controller.abort();
+
+    expect(capturedSignal?.aborted).toBe(true);
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  });
+
   it("t04_1_unauthorized_clears_cache_without_retry", async () => {
     const fetchMock = vi.fn<typeof fetch>(
       async () =>
@@ -188,6 +211,45 @@ describe("t04 generated client", () => {
       fieldErrors: [{ field: "title", message: "required" }],
       currentVersion: 7,
     });
+  });
+
+  it("t04_1_401_clear_is_scoped", async () => {
+    const fetchMock = vi.fn<typeof fetch>(
+      async () =>
+        new Response(
+          JSON.stringify({
+            code: "unauthorized",
+            message: "no session",
+            request_id: "00000000-0000-0000-0000-000000000000",
+          }),
+          { status: 401, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const onUnauthorized = vi.fn();
+    const { queryClient, api } = createQueryClient({ onUnauthorized });
+    const beforeKey = queryKeys.notes.detail("before-401");
+    const afterKey = queryKeys.notes.detail("after-401");
+    queryClient.setQueryData(beforeKey, { id: "before-401" });
+
+    await expect(
+      queryClient.fetchQuery({
+        queryKey: queryKeys.tasks.list({}),
+        queryFn: ({ signal }) => api.raw.GET("/tasks", { signal }),
+      }),
+    ).rejects.toBeInstanceOf(ApiRequestError);
+
+    // Cached after the 401 response but before the deferred removal runs.
+    queryClient.setQueryData(afterKey, { id: "after-401" });
+
+    await vi.waitFor(() => {
+      expect(queryClient.getQueryData(beforeKey)).toBeUndefined();
+    });
+    expect(queryClient.getQueryData(afterKey)).toEqual({ id: "after-401" });
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+
+    queryClient.clear();
   });
 
   it("t04_1_sends_credentials_and_csrf", async () => {

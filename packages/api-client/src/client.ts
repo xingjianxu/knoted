@@ -46,7 +46,7 @@ function readCookie(name: string): string | undefined {
 }
 
 export function createApiClient(options: ApiClientOptions): ApiClient {
-  const fetchImpl = options.fetch ?? ((input) => globalThis.fetch(input));
+  const fetchImpl = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
   const csrfCookieName = options.csrfCookieName ?? DEFAULT_CSRF_COOKIE_NAME;
 
   const raw = createClient<paths>({

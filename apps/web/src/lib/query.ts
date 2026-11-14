@@ -84,7 +84,7 @@ export interface QueryClientBundle {
  *
  * Cache policy: server data is stale after 30s, focus refetches are disabled
  * to avoid surprise draft clobbering, and authentication/validation failures
- * are never retried (the 401 path also clears the whole cache).
+ * are never retried (a 401 drops every entry that existed when it arrived).
  */
 export function createQueryClient(options?: { onUnauthorized?: () => void }): QueryClientBundle {
   const queryClient = new QueryClient({
@@ -105,10 +105,19 @@ export function createQueryClient(options?: { onUnauthorized?: () => void }): Qu
   const api = createApiClient({
     baseUrl: "/api/v1",
     onUnauthorized: () => {
-      // clear() also cancels in-flight queries. Deferring one task keeps the
-      // triggering 401 reaching its caller as ApiRequestError (not TanStack's
-      // CancelledError) while still dropping every cached entry before paint.
-      setTimeout(() => queryClient.clear(), 0);
+      // clear() cancels in-flight queries, which would turn the triggering 401
+      // into CancelledError. Snapshot the keys that exist now and remove just
+      // those on the next task, after the rejection has settled. Entries cached
+      // after the 401 (including a new login's session) survive; this is not a
+      // paint-time guarantee because background tabs clamp timers.
+      const unauthorizedHashes = new Set(
+        queryClient.getQueryCache().getAll().map((query) => query.queryHash),
+      );
+      setTimeout(() => {
+        queryClient.removeQueries({
+          predicate: (query) => unauthorizedHashes.has(query.queryHash),
+        });
+      }, 0);
       options?.onUnauthorized?.();
     },
   });
