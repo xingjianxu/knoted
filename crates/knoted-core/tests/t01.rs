@@ -316,7 +316,11 @@ fn t01_7_parse_errors_do_not_echo_source() {
     );
 
     let error = AppConfig::load(&path).unwrap_err();
-    assert!(matches!(error, ConfigError::Parse { .. }));
+    let ConfigError::Parse { line, column, .. } = &error else {
+        panic!("expected a parse error, got {error:?}");
+    };
+    assert!(*line >= 1, "the error must carry a line");
+    assert!(*column >= 1, "the error must carry a column");
     let display = error.to_string();
     let debug = format!("{error:?}");
     assert!(
@@ -325,7 +329,7 @@ fn t01_7_parse_errors_do_not_echo_source() {
     );
     assert!(!debug.contains("SENTINEL"), "error Debug leaked: {debug}");
     assert!(
-        std::error::Error::source(&error).is_some(),
-        "the TOML source must remain available programmatically"
+        std::error::Error::source(&error).is_none(),
+        "the raw TOML error must not be retained: its Display echoes the line"
     );
 }

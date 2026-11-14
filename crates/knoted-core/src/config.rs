@@ -139,9 +139,19 @@ impl AppConfig {
             path: path.to_path_buf(),
             source,
         })?;
-        let file: ConfigFile = toml::from_str(&contents).map_err(|source| ConfigError::Parse {
-            path: path.to_path_buf(),
-            source,
+        let file: ConfigFile = toml::from_str(&contents).map_err(|source| {
+            // The TOML error's Display (and its source chain) echoes the raw
+            // offending line, which can be a `database.url` with a password.
+            // Keep only the location, never the payload.
+            let (line, column) = source
+                .span()
+                .map(|span| line_column(&contents, span.start))
+                .unwrap_or((0, 0));
+            ConfigError::Parse {
+                path: path.to_path_buf(),
+                line,
+                column,
+            }
         })?;
         Self::from_file(file)
     }
@@ -167,6 +177,15 @@ impl AppConfig {
             Some(value) if !value.is_empty() => PathBuf::from(value),
             _ => PathBuf::from(DEFAULT_CONFIG_PATH),
         }
+    }
+
+    /// Database settings, when the file declares them.
+    ///
+    /// [`AppConfig::load_for_process`] has already rejected configurations
+    /// without a database section, so process entry points can call this and
+    /// treat `None` as a bug instead of re-implementing the check.
+    pub fn database(&self) -> Option<&DatabaseConfig> {
+        self.database.as_ref()
     }
 
     fn from_file(file: ConfigFile) -> Result<AppConfig, ConfigError> {
@@ -325,7 +344,9 @@ fn redact_password_parameters(value: &str) -> String {
 /// Configuration loading failures.
 ///
 /// `Display` never includes credential values or TOML source fragments, and
-/// `Debug` intentionally omits source payloads for the same reason.
+/// `Debug` intentionally omits source payloads for the same reason. Parse
+/// failures keep only a line/column, because `toml::de::Error` echoes the
+/// offending line and may carry a database password.
 #[derive(thiserror::Error)]
 pub enum ConfigError {
     #[error("read config file {}: {source}", path.display())]
@@ -334,11 +355,14 @@ pub enum ConfigError {
         #[source]
         source: std::io::Error,
     },
-    #[error("parse config file {}: invalid TOML syntax", path.display())]
+    #[error(
+        "parse config file {}: invalid TOML syntax at line {line} column {column}",
+        path.display()
+    )]
     Parse {
         path: PathBuf,
-        #[source]
-        source: toml::de::Error,
+        line: usize,
+        column: usize,
     },
     #[error("missing required config field `{field}` for {process}")]
     Missing {
@@ -391,4 +415,17 @@ impl fmt::Debug for ConfigError {
                 .finish(),
         }
     }
+}
+
+/// One-based line and column for a byte offset in `contents`.
+fn line_column(contents: &str, offset: usize) -> (usize, usize) {
+    let offset = offset.min(contents.len());
+    let before = &contents[..offset];
+    let line = before.matches('\n').count() + 1;
+    let column = before
+        .rsplit_once('\n')
+        .map(|(_, tail)| tail.chars().count())
+        .unwrap_or_else(|| before.chars().count())
+        + 1;
+    (line, column)
 }
