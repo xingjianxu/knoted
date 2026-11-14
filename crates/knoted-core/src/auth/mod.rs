@@ -6,6 +6,7 @@
 //! rule that `knoted-core` owns persistence.
 
 mod bootstrap;
+pub mod sessions;
 
 pub use bootstrap::{
     BootstrapOutcome, DomainAuthError, IssuedToken, OwnerAccount, TOKEN_TTL, TokenPurpose,

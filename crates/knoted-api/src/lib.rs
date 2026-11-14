@@ -15,6 +15,7 @@ pub use error::{ApiErrorBody, FieldError};
 pub use middleware::RequestId;
 
 use axum::Router;
+use knoted_core::config::AuthConfig;
 use knoted_core::context::AppContext;
 
 /// Wraps a router with the transport layer stack shared by the binary and the
@@ -34,9 +35,22 @@ where
 }
 
 /// Builds the complete router: health probes, the fallbacks and the shared
-/// middleware.
+/// middleware, with the default authentication settings.
+///
+/// Processes that loaded a configuration use [`build_router_with_auth`], so the
+/// configured RP ID and origin reach the handlers instead of a default.
 pub fn build_router(ctx: AppContext) -> Router {
-    with_transport_layers(routes::router(ctx))
+    build_router_with_auth(ctx, AuthConfig::default())
+}
+
+/// Builds the complete router with explicit authentication settings.
+///
+/// `auth` travels in a request extension, so the auth routes (T14) and the CSRF
+/// guard read one copy of the settings. Nothing else about the router changes:
+/// health probes, the request id layer and the fallbacks behave exactly as with
+/// [`build_router`].
+pub fn build_router_with_auth(ctx: AppContext, auth: AuthConfig) -> Router {
+    with_transport_layers(routes::router(ctx).layer(axum::Extension(auth)))
 }
 
 #[cfg(test)]

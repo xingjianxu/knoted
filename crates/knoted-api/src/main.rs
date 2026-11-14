@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use knoted_api::admin::{self, TokenCommand};
-use knoted_api::build_router;
+use knoted_api::build_router_with_auth;
 use knoted_api::logging;
 use knoted_core::config::{AppConfig, ProcessKind};
 use knoted_core::context::AppContext;
@@ -112,7 +112,9 @@ async fn run_server(args: Vec<String>) -> ExitCode {
     };
     tracing::info!(%bind, "knoted-api listening");
 
-    if let Err(error) = axum::serve(listener, build_router(ctx)).await {
+    if let Err(error) =
+        axum::serve(listener, build_router_with_auth(ctx, config.auth().clone())).await
+    {
         tracing::error!(error = %error, "the API server stopped with an error");
         return ExitCode::FAILURE;
     }

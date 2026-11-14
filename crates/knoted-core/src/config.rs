@@ -102,6 +102,36 @@ pub struct CredentialsConfig {
     pub credential_file: Option<PathBuf>,
 }
 
+fn default_rp_id() -> String {
+    "wlab.132140.xyz".to_owned()
+}
+
+fn default_origin() -> String {
+    "https://wlab.132140.xyz:15601".to_owned()
+}
+
+/// WebAuthn relying-party settings and the one origin allowed to write.
+///
+/// `rp_id` is the WebAuthn RP ID and never contains a port; the port belongs to
+/// `origin`, which is compared exactly against the `Origin` header of every
+/// write request. Both have the deployment's defaults, so an existing
+/// configuration file stays valid without an `[auth]` section.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct AuthConfig {
+    pub rp_id: String,
+    pub origin: String,
+}
+
+impl Default for AuthConfig {
+    fn default() -> AuthConfig {
+        AuthConfig {
+            rp_id: default_rp_id(),
+            origin: default_origin(),
+        }
+    }
+}
+
 /// Validated process configuration.
 #[derive(Clone, PartialEq, Eq)]
 pub struct AppConfig {
@@ -109,6 +139,7 @@ pub struct AppConfig {
     pub database: Option<DatabaseConfig>,
     pub logging: LoggingConfig,
     pub credentials: CredentialsConfig,
+    pub auth: AuthConfig,
     secrets: BTreeMap<String, String>,
 }
 
@@ -119,6 +150,7 @@ impl fmt::Debug for AppConfig {
             .field("database", &self.database)
             .field("logging", &self.logging)
             .field("credentials", &self.credentials)
+            .field("auth", &self.auth)
             .field("loaded_credentials", &self.secrets.len())
             .finish()
     }
@@ -188,10 +220,16 @@ impl AppConfig {
         self.database.as_ref()
     }
 
+    /// WebAuthn relying-party and allowed-origin settings.
+    pub fn auth(&self) -> &AuthConfig {
+        &self.auth
+    }
+
     fn from_file(file: ConfigFile) -> Result<AppConfig, ConfigError> {
         if let Some(database) = &file.database {
             validate_database(database)?;
         }
+        validate_auth(&file.auth)?;
         let secrets = match &file.credentials.credential_file {
             Some(path) => load_credentials(path)?,
             None => BTreeMap::new(),
@@ -207,6 +245,7 @@ impl AppConfig {
             database: file.database,
             logging: file.logging,
             credentials: file.credentials,
+            auth: file.auth,
             secrets,
         })
     }
@@ -250,6 +289,8 @@ struct ConfigFile {
     logging: LoggingConfig,
     #[serde(default)]
     credentials: CredentialsConfig,
+    #[serde(default)]
+    auth: AuthConfig,
 }
 
 #[derive(Deserialize)]
@@ -283,6 +324,52 @@ fn validate_database(database: &DatabaseConfig) -> Result<(), ConfigError> {
         });
     }
     Ok(())
+}
+
+fn validate_auth(auth: &AuthConfig) -> Result<(), ConfigError> {
+    // A WebAuthn RP ID is a bare host: `localhost` or a registered domain. It
+    // never carries a scheme, a port or a path, and whitespace is always a typo.
+    if auth.rp_id.is_empty()
+        || auth.rp_id.contains('/')
+        || auth.rp_id.contains(':')
+        || auth.rp_id.chars().any(char::is_whitespace)
+    {
+        return Err(ConfigError::Invalid {
+            field: "auth.rp_id",
+            message: "must be a bare host name without scheme, port, path or whitespace".to_owned(),
+        });
+    }
+
+    // The origin is compared verbatim against the `Origin` header, so it must be
+    // the canonical `https://host[:port]` form a browser sends: no credentials,
+    // path, query, fragment or trailing slash. Parsing it here turns a typo into
+    // a startup failure instead of silently rejecting every write request.
+    let Ok(origin) = url::Url::parse(&auth.origin) else {
+        return Err(invalid_origin());
+    };
+    let canonical = origin.scheme() == "https"
+        && origin.host_str().is_some_and(|host| !host.is_empty())
+        && origin.path() == "/"
+        && origin.query().is_none()
+        && origin.fragment().is_none()
+        && origin.username().is_empty()
+        && origin.password().is_none();
+    // A browser never writes the default https port into `Origin`, and `url`
+    // normalises `:443` away, so an explicit default port in the configuration
+    // would silently never match. Reject it at load time instead.
+    if !canonical || auth.origin.ends_with('/') || auth.origin.ends_with(":443") {
+        return Err(invalid_origin());
+    }
+    Ok(())
+}
+
+fn invalid_origin() -> ConfigError {
+    ConfigError::Invalid {
+        field: "auth.origin",
+        message: "must be `https://host[:port]` without credentials, path, query, \
+                  fragment, trailing slash or the default `:443` port"
+            .to_owned(),
+    }
 }
 
 fn load_credentials(path: &Path) -> Result<BTreeMap<String, String>, ConfigError> {
