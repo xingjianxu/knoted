@@ -6,6 +6,7 @@
 //! rule that `knoted-core` owns persistence.
 
 mod bootstrap;
+pub mod credentials;
 pub mod sessions;
 pub mod webauthn;
 

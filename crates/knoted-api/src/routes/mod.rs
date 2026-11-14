@@ -19,7 +19,7 @@ use crate::middleware::RequestId;
 /// before wrapping.
 pub fn router(ctx: AppContext, auth: AuthConfig) -> Router {
     health::router()
-        .nest("/api/v1", auth::router(auth))
+        .nest("/api/v1", auth::router(auth, ctx.clone()))
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .with_state(ctx)
