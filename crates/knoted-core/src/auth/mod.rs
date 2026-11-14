@@ -7,8 +7,10 @@
 
 mod bootstrap;
 pub mod sessions;
+pub mod webauthn;
 
 pub use bootstrap::{
     BootstrapOutcome, DomainAuthError, IssuedToken, OwnerAccount, TOKEN_TTL, TokenPurpose,
-    TokenRecord, User, consume_bootstrap, ensure_owner, hash_token, issue_token, verify_token,
+    TokenRecord, User, consume_bootstrap, consume_bootstrap_token, ensure_owner, hash_token,
+    issue_token, verify_token,
 };
