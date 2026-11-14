@@ -104,9 +104,11 @@ async fn t07_1_two_workers_do_not_claim_same_job() {
         "enqueueing writes exactly one outbox row"
     );
 
-    // Two workers on two threads start their claim at the same instant. The
-    // barrier makes the race real: both transactions are already open before
-    // either claims, so the loser has to skip the row the winner locked.
+    // Two workers on two threads start their claim at the same instant. This
+    // proves that concurrent claims never hand the same job out twice. It does
+    // not prove `SKIP LOCKED`: a claimer that merely blocks behind the winner
+    // also ends up with `None` here. That is what
+    // `t07_1_claim_skips_a_row_locked_by_another_transaction` covers.
     let barrier = Arc::new(Barrier::new(2));
     let mut tasks = Vec::new();
     for worker in ["worker-a", "worker-b"] {
@@ -494,6 +496,13 @@ async fn t07_4_rejects_unknown_state() {
 #[tokio::test]
 async fn t07_4_rejects_invalid_max_attempts() {
     let db = test_db().await;
+    let count_jobs = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM jobs WHERE kind = 'parse'")
+            .fetch_one(&db.pool)
+            .await
+            .expect("the jobs table must be readable")
+    };
+    let before = count_jobs().await;
 
     for max_attempts in [0, -1] {
         let mut tx = db.pool.begin().await.expect("a transaction must start");
@@ -506,7 +515,12 @@ async fn t07_4_rejects_invalid_max_attempts() {
         )
         .await
         .expect_err("an impossible attempt budget must be rejected");
-        tx.rollback().await.expect("the transaction must roll back");
+        // Committing instead of rolling back makes the "wrote nothing"
+        // assertion below meaningful: a validation error must not leave a row
+        // that a commit would persist.
+        tx.commit()
+            .await
+            .expect("the rejected transaction must still be committable");
         assert!(
             matches!(error, DbError::InvalidMaxAttempts(value) if value == max_attempts),
             "unexpected error: {error:?}"
@@ -514,9 +528,9 @@ async fn t07_4_rejects_invalid_max_attempts() {
     }
 
     assert_eq!(
-        outbox_count(&db.pool, Uuid::nil()).await,
-        0,
-        "a rejected enqueue must not write anything"
+        count_jobs().await,
+        before,
+        "a rejected enqueue must not leave a job row behind"
     );
 
     db.drop().await;

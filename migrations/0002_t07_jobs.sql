@@ -64,9 +64,12 @@ CREATE UNIQUE INDEX jobs_kind_idempotency_key_idx
     ON jobs (kind, idempotency_key)
     WHERE idempotency_key IS NOT NULL;
 
--- Claim scan: due queued jobs, plus running jobs whose lease expired. The
--- order matches the claim query (`priority DESC, available_at ASC`) so the
--- scan does not sort the whole candidate set.
+-- Claim scan: due queued jobs, plus running/cancelling jobs whose lease
+-- expired. The column list matches the claim query's filter and order
+-- (`priority DESC, available_at ASC`) so each branch can be read in claim
+-- order. The predicate is an OR over two states, so the planner usually
+-- combines the branches with BitmapOr and still sorts the candidates: this
+-- index bounds the scan, it does not remove the sort.
 CREATE INDEX jobs_claim_order_idx ON jobs (state, priority DESC, available_at);
 CREATE INDEX jobs_lease_expires_at_idx
     ON jobs (lease_expires_at)
