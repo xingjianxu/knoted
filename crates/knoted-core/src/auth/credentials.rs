@@ -89,23 +89,68 @@ fn row_to_record(row: PasskeyRow) -> PasskeyRecord {
     }
 }
 
-/// Lists the owner's Passkeys, oldest first.
+/// Rows returned by [`list_passkeys`] when the caller passes no limit.
+pub const PASSKEY_PAGE_DEFAULT_LIMIT: u32 = 50;
+/// Upper bound for [`list_passkeys`], so a listing can never scan the table.
+pub const PASSKEY_PAGE_MAX_LIMIT: u32 = 100;
+
+/// One page of the owner's Passkeys, newest first.
 ///
-/// The ordering is total (`created_at, id`) so a listing is stable across calls
-/// even when two credentials were registered in the same instant.
+/// `next_cursor` is the keyset position `(created_at, id)` of the last returned
+/// row, and is only set when another row exists. Encoding it for the contract's
+/// opaque `next_cursor` string is a DTO concern and belongs to the route.
+pub struct PasskeyList {
+    /// The credentials in this page, newest first.
+    pub items: Vec<PasskeyRecord>,
+    /// Keyset position to resume after, or `None` on the last page.
+    pub next_cursor: Option<(DateTime<Utc>, Uuid)>,
+}
+
+/// Lists one page of the owner's Passkeys, newest first.
+///
+/// The ordering is total (`created_at DESC, id DESC`) and the cursor is a
+/// keyset position, so two credentials registered in the same instant are still
+/// paged without overlap or gaps. The query reads one row beyond the page to
+/// tell whether a next page exists, which is what makes `next_cursor` truthful
+/// instead of a guess. A zero limit is clamped to one row and a limit above
+/// [`PASSKEY_PAGE_MAX_LIMIT`] is capped, so a listing is always bounded.
 pub async fn list_passkeys(
-    pool: &PgPool,
+    executor: &mut PgConnection,
     user_id: Uuid,
-) -> Result<Vec<PasskeyRecord>, DomainAuthError> {
+    cursor: Option<(DateTime<Utc>, Uuid)>,
+    limit: Option<u32>,
+) -> Result<PasskeyList, DomainAuthError> {
+    let (cursor_created_at, cursor_id) = match cursor {
+        Some((created_at, id)) => (Some(created_at), Some(id)),
+        None => (None, None),
+    };
+    let limit = i64::from(
+        limit
+            .unwrap_or(PASSKEY_PAGE_DEFAULT_LIMIT)
+            .clamp(1, PASSKEY_PAGE_MAX_LIMIT),
+    );
     let rows: Vec<PasskeyRow> = sqlx::query_as(&format!(
         "SELECT {PASSKEY_COLUMNS} FROM passkey_credentials \
-         WHERE user_id = $1 ORDER BY created_at, id"
+         WHERE user_id = $1 \
+           AND ($2::timestamptz IS NULL \
+                OR (created_at, id) < ($2::timestamptz, $3::uuid)) \
+         ORDER BY created_at DESC, id DESC LIMIT $4"
     ))
     .bind(user_id)
-    .fetch_all(pool)
+    .bind(cursor_created_at)
+    .bind(cursor_id)
+    .bind(limit + 1)
+    .fetch_all(&mut *executor)
     .await
     .map_err(DbError::from)?;
-    Ok(rows.into_iter().map(row_to_record).collect())
+    let mut items: Vec<PasskeyRecord> = rows.into_iter().map(row_to_record).collect();
+    let next_cursor = if items.len() as i64 > limit {
+        items.truncate(limit as usize);
+        items.last().map(|record| (record.created_at, record.id))
+    } else {
+        None
+    };
+    Ok(PasskeyList { items, next_cursor })
 }
 
 /// Stores a newly registered Passkey and returns its record.

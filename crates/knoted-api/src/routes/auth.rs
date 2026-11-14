@@ -22,13 +22,15 @@
 //! consumed token and the session in one transaction, so a rejected credential
 //! leaves no partial state behind.
 
-use axum::extract::rejection::JsonRejection;
-use axum::extract::{Extension, Path, State};
+use axum::extract::rejection::{JsonRejection, QueryRejection};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::from_fn_with_state;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
 use knoted_core::auth::sessions::{self, CreatedSession};
 use knoted_core::auth::webauthn::{
@@ -180,8 +182,8 @@ impl From<&credentials::PasskeyRecord> for PasskeyBody {
 
 /// `PasskeyPage` from the contract.
 ///
-/// The owner has at most a handful of Passkeys, so the listing is returned in
-/// full and `next_cursor` is always `null` until a page size is needed.
+/// `next_cursor` is the opaque keyset cursor of the next page, or `null` on the
+/// last page.
 #[derive(Debug, Serialize)]
 struct PasskeyPageBody {
     items: Vec<PasskeyBody>,
@@ -536,25 +538,109 @@ async fn login_finish(
 
 /// `GET /auth/passkeys`
 ///
-/// Lists the owner's credentials in registration order. The stored public key is
-/// not part of the response; `credential_id` is base64url so a browser can
-/// compare it with `PublicKeyCredential.rawId`.
+/// Lists one page of the owner's credentials, newest first. The stored public
+/// key is not part of the response; `credential_id` is base64url so a browser
+/// can compare it with `PublicKeyCredential.rawId`. `cursor` is the opaque,
+/// versioned encoding of the keyset position `(created_at, id)`, and `limit`
+/// follows the contract's default (50) and maximum (100).
 async fn passkey_list(
     State(ctx): State<AppContext>,
     Extension(current): Extension<CurrentSession>,
     request_id: RequestId,
+    query: Result<Query<PasskeyListQuery>, QueryRejection>,
 ) -> Response {
-    match credentials::list_passkeys(ctx.pool(), current.session.user_id).await {
-        Ok(records) => (
+    let Query(query) = match query {
+        Ok(query) => query,
+        Err(_) => {
+            return bad_request(
+                "the cursor or limit query parameter is not valid",
+                request_id,
+            );
+        }
+    };
+    if let Some(limit) = query.limit
+        && !(1..=credentials::PASSKEY_PAGE_MAX_LIMIT).contains(&limit)
+    {
+        return validation_error(
+            "limit",
+            &format!(
+                "must be between 1 and {}",
+                credentials::PASSKEY_PAGE_MAX_LIMIT
+            ),
+            request_id,
+        );
+    }
+    let cursor = match query.cursor.as_deref().map(decode_passkey_cursor) {
+        None => None,
+        Some(Some(cursor)) => Some(cursor),
+        Some(None) => {
+            return validation_error("cursor", "the cursor is not valid", request_id);
+        }
+    };
+    let mut connection = match ctx.pool().acquire().await {
+        Ok(connection) => connection,
+        Err(error) => return database_error(error, request_id),
+    };
+    match credentials::list_passkeys(
+        &mut connection,
+        current.session.user_id,
+        cursor,
+        query.limit,
+    )
+    .await
+    {
+        Ok(page) => (
             StatusCode::OK,
             Json(PasskeyPageBody {
-                items: records.iter().map(PasskeyBody::from).collect(),
-                next_cursor: None,
+                items: page.items.iter().map(PasskeyBody::from).collect(),
+                next_cursor: page
+                    .next_cursor
+                    .map(|(created_at, id)| encode_passkey_cursor(created_at, id)),
             }),
         )
             .into_response(),
         Err(error) => auth_error(error, request_id),
     }
+}
+
+/// The `cursor` and `limit` query parameters of `GET /auth/passkeys`.
+#[derive(Debug, Deserialize)]
+struct PasskeyListQuery {
+    cursor: Option<String>,
+    limit: Option<u32>,
+}
+
+/// Version tag of the encoded Passkey cursor; a differing tag is rejected.
+const PASSKEY_CURSOR_VERSION: u8 = 1;
+
+/// The payload behind the opaque `next_cursor` string.
+#[derive(Debug, Serialize, Deserialize)]
+struct PasskeyCursor {
+    v: u8,
+    created_at: DateTime<Utc>,
+    id: Uuid,
+}
+
+/// Encodes the keyset position as base64url versioned JSON, per the contract.
+fn encode_passkey_cursor(created_at: DateTime<Utc>, id: Uuid) -> String {
+    let cursor = PasskeyCursor {
+        v: PASSKEY_CURSOR_VERSION,
+        created_at,
+        id,
+    };
+    let bytes = serde_json::to_vec(&cursor).expect("a cursor is always JSON");
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
+/// Decodes a client-supplied cursor, rejecting anything that is not ours.
+///
+/// The cursor is not an authorisation token: the listing is still scoped to the
+/// signed-in owner. It only carries the sort key, and a malformed or
+/// future-version value is a client error rather than a silent reset.
+fn decode_passkey_cursor(raw: &str) -> Option<(DateTime<Utc>, Uuid)> {
+    let bytes = URL_SAFE_NO_PAD.decode(raw).ok()?;
+    let cursor: PasskeyCursor = serde_json::from_slice(&bytes).ok()?;
+    (cursor.v == PASSKEY_CURSOR_VERSION).then_some((cursor.created_at, cursor.id))
 }
 
 /// `POST /auth/passkeys/options`
@@ -682,7 +768,7 @@ async fn passkey_finish(
     };
     let transports = credential_transports(&body.credential);
 
-    let result: Result<credentials::PasskeyRecord, DomainAuthError> = async {
+    let result: Result<Option<credentials::PasskeyRecord>, DomainAuthError> = async {
         let mut tx = ctx.pool().begin().await.map_err(DbError::from)?;
         consume_ceremony(&mut tx, body.ceremony_id, CeremonyPurpose::AddPasskey, now).await?;
         let record = credentials::add_passkey(
@@ -694,14 +780,26 @@ async fn passkey_finish(
             now,
         )
         .await?;
-        sessions::mark_verified(&mut tx, current.session.id, now).await?;
+        // The session row can disappear or expire between the guard and this
+        // write. Refusing the whole transaction keeps the answer honest: a
+        // revoked session must not receive a 200 and a fresh credential.
+        if !sessions::mark_verified(&mut tx, current.session.id, now).await? {
+            tx.rollback().await.map_err(DbError::from)?;
+            return Ok(None);
+        }
         tx.commit().await.map_err(DbError::from)?;
-        Ok(record)
+        Ok(Some(record))
     }
     .await;
 
     match result {
-        Ok(record) => (StatusCode::CREATED, Json(PasskeyBody::from(&record))).into_response(),
+        Ok(Some(record)) => (StatusCode::CREATED, Json(PasskeyBody::from(&record))).into_response(),
+        Ok(None) => api_error(
+            StatusCode::UNAUTHORIZED,
+            crate::middleware::auth::UNAUTHENTICATED,
+            "a live session cookie is required",
+            request_id,
+        ),
         Err(error) => auth_error(error, request_id),
     }
 }
@@ -977,6 +1075,20 @@ fn invalid_passkey_name(request_id: RequestId) -> Response {
     .with_field_errors(vec![FieldError {
         field: "name".to_owned(),
         message: format!("must be at most {MAX_PASSKEY_NAME} characters"),
+    }])
+    .into_response(StatusCode::BAD_REQUEST)
+}
+
+/// A `400 validation_failed` naming a query parameter that failed validation.
+fn validation_error(field: &str, message: &str, request_id: RequestId) -> Response {
+    ApiErrorBody::new(
+        "validation_failed",
+        "the request query is invalid",
+        request_id.get(),
+    )
+    .with_field_errors(vec![FieldError {
+        field: field.to_owned(),
+        message: message.to_owned(),
     }])
     .into_response(StatusCode::BAD_REQUEST)
 }

@@ -219,7 +219,7 @@ impl DomainAuthError {
             DomainAuthError::BootstrapAlreadyCompleted => "bootstrap_already_completed",
             DomainAuthError::DuplicateCredential => "duplicate_credential",
             DomainAuthError::LastCredential => "last_credential",
-            DomainAuthError::PasskeyNotFound => "passkey_not_found",
+            DomainAuthError::PasskeyNotFound => "not_found",
             DomainAuthError::RecentVerificationRequired => "recent_verification_required",
             DomainAuthError::InvalidState => "invalid_state",
             DomainAuthError::Database(_) => "database_error",

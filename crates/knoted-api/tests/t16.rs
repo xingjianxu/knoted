@@ -21,7 +21,7 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use knoted_api::build_router_with_auth;
 use knoted_api::middleware::auth::{CSRF_HEADER, SESSION_COOKIE};
 use knoted_core::auth::sessions::{self, CreatedSession};
-use knoted_core::auth::{self, TokenPurpose};
+use knoted_core::auth::{self, DomainAuthError, TokenPurpose};
 use knoted_core::config::AuthConfig;
 use knoted_core::context::{AppContext, FixedClock};
 use knoted_core::db::testing::TestDb;
@@ -654,6 +654,11 @@ async fn t16_4_last_credential_cannot_be_removed() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+    assert_eq!(
+        body["code"],
+        DomainAuthError::PasskeyNotFound.reason(),
+        "the HTTP code and the domain reason must agree"
+    );
 
     db.drop().await;
 }
@@ -780,6 +785,451 @@ async fn t16_5_failed_recovery_keeps_old_credentials() {
         1,
         "the owner is untouched"
     );
+
+    db.drop().await;
+}
+
+/// Builds a request with independent control over the session cookie, the
+/// `Origin` header and the CSRF header, so the guards can be tested one at a
+/// time.
+fn guarded_request(
+    method: Method,
+    path: &str,
+    session: Option<&Browser>,
+    origin: Option<&str>,
+    csrf: bool,
+    body: Option<&Value>,
+) -> Request<Body> {
+    let mut builder = Request::builder().method(method).uri(path);
+    if let Some(origin) = origin {
+        builder = builder.header(header::ORIGIN, origin);
+    }
+    if let Some(session) = session {
+        builder = builder.header(header::COOKIE, &session.cookie);
+        if csrf {
+            builder = builder.header(CSRF_HEADER, &session.csrf);
+        }
+    }
+    let body = match body {
+        Some(body) => {
+            builder = builder.header(header::CONTENT_TYPE, "application/json");
+            Body::from(serde_json::to_vec(body).expect("the test body is JSON"))
+        }
+        None => Body::empty(),
+    };
+    builder
+        .header(header::USER_AGENT, "t16 test agent")
+        .body(body)
+        .expect("the request is well formed")
+}
+
+/// Parses a `PasskeyPage` body into its ids and next cursor.
+fn page_ids(body: &Value) -> (Vec<Uuid>, Option<String>) {
+    let items = body["items"].as_array().expect("the page must carry items");
+    let ids = items
+        .iter()
+        .map(|item| {
+            item["id"]
+                .as_str()
+                .expect("a Passkey id is a string")
+                .parse()
+                .expect("a Passkey id is a UUID")
+        })
+        .collect();
+    let next_cursor = body["next_cursor"].as_str().map(str::to_owned);
+    (ids, next_cursor)
+}
+
+#[tokio::test]
+async fn t16_6_passkey_page_paginates() {
+    let db = test_db().await;
+    let pool = &db.pool;
+    let now = fixed_now();
+    let config = config();
+    let clock = Arc::new(FixedClock::new(now));
+    let app = build_router_with_auth(context(pool, &clock), config.clone());
+
+    let (_bootstrapped, browser) = bootstrap_owner(&app, &config, pool, now).await;
+    for name in ["Second", "Third"] {
+        let (status, body) = add_passkey(&app, &config, &browser, name).await;
+        assert_eq!(status, StatusCode::CREATED, "add passkey failed: {body}");
+    }
+    let mut all = passkey_ids(pool).await;
+    assert_eq!(all.len(), 3, "three credentials must exist");
+    all.sort_unstable();
+
+    // A full page carries a cursor, the following page carries the remainder
+    // and no cursor.
+    let (status, _, first) = call(
+        &app,
+        authenticated_get(&format!("{PASSKEYS}?limit=2"), &browser, &config.origin),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "first page failed: {first}");
+    let (first_ids, cursor) = page_ids(&first);
+    assert_eq!(first_ids.len(), 2, "the limit must bound the page");
+    let cursor = cursor.expect("a full page must carry a next cursor");
+
+    let (status, _, second) = call(
+        &app,
+        authenticated_get(
+            &format!("{PASSKEYS}?limit=2&cursor={cursor}"),
+            &browser,
+            &config.origin,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "second page failed: {second}");
+    let (second_ids, next_cursor) = page_ids(&second);
+    assert_eq!(second_ids.len(), 1, "the second page holds the rest");
+    assert_eq!(next_cursor, None, "the last page has no cursor");
+
+    let mut walked: Vec<Uuid> = first_ids.iter().chain(second_ids.iter()).copied().collect();
+    assert_eq!(walked.len(), 3, "paging must not repeat a credential");
+    walked.sort_unstable();
+    assert_eq!(
+        walked, all,
+        "paging must neither repeat nor skip a credential"
+    );
+
+    // A page larger than the list is a single page with no cursor.
+    let (status, _, page) = call(
+        &app,
+        authenticated_get(&format!("{PASSKEYS}?limit=100"), &browser, &config.origin),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "single page failed: {page}");
+    let (ids, cursor) = page_ids(&page);
+    assert_eq!(ids.len(), 3, "the default page fits every credential");
+    assert_eq!(cursor, None, "there is no next page");
+
+    // A limit outside the contract's range is a client error with a stable
+    // code, not a silently clamped page.
+    for query in ["limit=0", "limit=101"] {
+        let (status, _, body) = call(
+            &app,
+            authenticated_get(&format!("{PASSKEYS}?{query}"), &browser, &config.origin),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}: {body}");
+        assert_eq!(body["code"], "validation_failed", "{query}: {body}");
+        assert_eq!(body["field_errors"][0]["field"], "limit", "{query}: {body}");
+    }
+    // A non-numeric limit is rejected by the extractor, and a malformed cursor
+    // is rejected explicitly instead of silently restarting the listing.
+    let (status, _, body) = call(
+        &app,
+        authenticated_get(&format!("{PASSKEYS}?limit=abc"), &browser, &config.origin),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "limit=abc: {body}");
+    assert_eq!(body["code"], "invalid_request", "limit=abc: {body}");
+
+    let (status, _, body) = call(
+        &app,
+        authenticated_get(
+            &format!("{PASSKEYS}?cursor=not-a-cursor"),
+            &browser,
+            &config.origin,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "bad cursor: {body}");
+    assert_eq!(body["code"], "validation_failed", "bad cursor: {body}");
+    assert_eq!(
+        body["field_errors"][0]["field"], "cursor",
+        "bad cursor: {body}"
+    );
+
+    db.drop().await;
+}
+
+#[tokio::test]
+async fn t16_7_recovery_rollback_on_duplicate_credential() {
+    let db = test_db().await;
+    let pool = &db.pool;
+    let now = fixed_now();
+    let config = config();
+    let clock = Arc::new(FixedClock::new(now));
+    let app = build_router_with_auth(context(pool, &clock), config.clone());
+
+    let (bootstrapped, browser) = bootstrap_owner(&app, &config, pool, now).await;
+    let owner_id: Uuid = bootstrapped["session"]["user_id"]
+        .as_str()
+        .expect("the owner id is a string")
+        .parse()
+        .expect("the owner id is a UUID");
+    let original = passkey_ids(pool).await;
+    assert_eq!(original.len(), 1);
+
+    let token = issue_token(pool, TokenPurpose::Recovery, now).await;
+    let (status, _, body) = call(
+        &app,
+        json_request(
+            RECOVERY_OPTIONS,
+            &json!({ "recovery_token": token }),
+            &config.origin,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "recovery options failed: {body}");
+    let ceremony_id: Uuid = body["ceremony_id"]
+        .as_str()
+        .expect("the ceremony id is a string")
+        .parse()
+        .expect("the ceremony id is a UUID");
+    let challenge: CreationChallengeResponse = serde_json::from_value(body["options"].clone())
+        .expect("the options must be a creation challenge");
+    let mut authenticator = soft_token();
+    let credential = authenticator
+        .do_registration(origin(&config), challenge)
+        .expect("the software authenticator must complete registration");
+    // The recovery is about to install this credential id. Pre-occupying it
+    // makes the insert inside the transaction fail on the unique constraint.
+    let squatted_id = credential.raw_id.clone();
+    sqlx::query(
+        "INSERT INTO passkey_credentials (id, user_id, credential_id, passkey, name, created_at) \
+         VALUES ($1, $2, $3, '{}'::jsonb, 'Squatter', $4)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(owner_id)
+    .bind(&squatted_id)
+    .bind(now)
+    .execute(pool)
+    .await
+    .expect("the squatting row must be inserted");
+
+    let credential_json = serde_json::to_value(&credential).expect("the credential is JSON");
+    let finish = json!({
+        "recovery_token": token,
+        "ceremony_id": ceremony_id,
+        "credential": credential_json,
+    });
+    let (status, _, body) =
+        call(&app, json_request(RECOVERY_FINISH, &finish, &config.origin)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "finish: {body}");
+    assert_eq!(body["code"], "duplicate_credential");
+
+    // The whole transaction rolled back: neither the ceremony nor the token is
+    // consumed, and the old credential and session keep working.
+    let (token_consumed,): (Option<DateTime<Utc>>,) =
+        sqlx::query_as("SELECT consumed_at FROM credential_tokens WHERE token_hash = $1")
+            .bind(auth::hash_token(&token).as_slice())
+            .fetch_one(pool)
+            .await
+            .expect("the recovery token row must exist");
+    assert_eq!(
+        token_consumed, None,
+        "a rolled-back recovery must not consume the token"
+    );
+    let (ceremony_consumed,): (Option<DateTime<Utc>>,) =
+        sqlx::query_as("SELECT consumed_at FROM ceremonies WHERE id = $1")
+            .bind(ceremony_id)
+            .fetch_one(pool)
+            .await
+            .expect("the ceremony row must exist");
+    assert_eq!(
+        ceremony_consumed, None,
+        "a rolled-back recovery must not consume the ceremony"
+    );
+    let after_failure = passkey_ids(pool).await;
+    assert!(
+        after_failure.contains(&original[0]),
+        "the old credential must survive a failed recovery"
+    );
+    let (status, page) = load_passkey_page(&app, &browser, &config.origin).await;
+    assert_eq!(status, StatusCode::OK, "old session page: {page}");
+
+    // Remove the conflicting row and retry the same request: the ceremony and
+    // token are still usable, so it succeeds and the old session is revoked.
+    sqlx::query("DELETE FROM passkey_credentials WHERE credential_id = $1")
+        .bind(&squatted_id)
+        .execute(pool)
+        .await
+        .expect("the squatting row must be deletable");
+    let (status, headers, body) =
+        call(&app, json_request(RECOVERY_FINISH, &finish, &config.origin)).await;
+    assert_eq!(status, StatusCode::CREATED, "retried finish: {body}");
+    let recovery_browser = Browser::from_response(&headers, &body);
+    let (status, body) = load_passkey_page(&app, &browser, &config.origin).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "the old session must be revoked after a successful recovery: {body}"
+    );
+    assert_eq!(body["code"], "unauthenticated");
+    assert_eq!(
+        load_passkey_page(&app, &recovery_browser, &config.origin)
+            .await
+            .0,
+        StatusCode::OK,
+        "the recovery session must be usable"
+    );
+    let replaced = passkey_ids(pool).await;
+    assert_eq!(replaced.len(), 1, "recovery replaces the credential set");
+    assert_ne!(replaced[0], original[0]);
+
+    db.drop().await;
+}
+
+#[tokio::test]
+async fn t16_8_origin_and_csrf_guards() {
+    let db = test_db().await;
+    let pool = &db.pool;
+    let now = fixed_now();
+    let config = config();
+    let clock = Arc::new(FixedClock::new(now));
+    let app = build_router_with_auth(context(pool, &clock), config.clone());
+
+    let (_bootstrapped, browser) = bootstrap_owner(&app, &config, pool, now).await;
+
+    // The anonymous recovery routes reject a missing or foreign Origin.
+    let token = issue_token(pool, TokenPurpose::Recovery, now).await;
+    let recovery_options = json!({ "recovery_token": token });
+    let recovery_finish = json!({
+        "recovery_token": token,
+        "ceremony_id": Uuid::nil(),
+        "credential": {},
+    });
+    for (path, body) in [
+        (RECOVERY_OPTIONS, &recovery_options),
+        (RECOVERY_FINISH, &recovery_finish),
+    ] {
+        for origin_header in [None, Some("https://evil.example")] {
+            let (status, _, response) = call(
+                &app,
+                guarded_request(Method::POST, path, None, origin_header, false, Some(body)),
+            )
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::FORBIDDEN,
+                "{path} with origin {origin_header:?}: {response}"
+            );
+            assert_eq!(response["code"], "csrf_failed");
+        }
+    }
+    // The same recovery options request with the configured Origin succeeds.
+    let (status, _, body) = call(
+        &app,
+        json_request(RECOVERY_OPTIONS, &recovery_options, &config.origin),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "recovery options: {body}");
+
+    // A write without a CSRF token is rejected even with a live session.
+    for (method, path, body) in [
+        (Method::POST, PASSKEYS_OPTIONS, None),
+        (Method::POST, PASSKEYS_FINISH, Some(&json!({}))),
+        (
+            Method::DELETE,
+            &format!("{PASSKEYS}/{}", UUID_NOT_FOUND) as &str,
+            None,
+        ),
+    ] {
+        let (status, _, response) = call(
+            &app,
+            guarded_request(
+                method,
+                path,
+                Some(&browser),
+                Some(&config.origin),
+                false,
+                body,
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "{path} without CSRF: {response}"
+        );
+        assert_eq!(response["code"], "csrf_failed");
+    }
+    // A missing session is a 401, even when the origin and a CSRF token are
+    // presented.
+    for (method, path) in [
+        (Method::POST, PASSKEYS_OPTIONS.to_owned()),
+        (Method::POST, PASSKEYS_FINISH.to_owned()),
+        (Method::DELETE, format!("{PASSKEYS}/{UUID_NOT_FOUND}")),
+    ] {
+        let (status, _, response) = call(
+            &app,
+            guarded_request(method, &path, None, Some(&config.origin), false, None),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "{path} without a session: {response}"
+        );
+        assert_eq!(response["code"], "unauthenticated");
+    }
+
+    // The correct combination works for every route: options, finish and
+    // delete, each with session, Origin and CSRF.
+    let (status, _, body) = call(
+        &app,
+        guarded_request(
+            Method::POST,
+            PASSKEYS_OPTIONS,
+            Some(&browser),
+            Some(&config.origin),
+            true,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "passkey options: {body}");
+    let ceremony_id: Uuid = body["ceremony_id"]
+        .as_str()
+        .expect("the ceremony id is a string")
+        .parse()
+        .expect("the ceremony id is a UUID");
+    let challenge: CreationChallengeResponse = serde_json::from_value(body["options"].clone())
+        .expect("the options must be a creation challenge");
+    let mut authenticator = soft_token();
+    let credential = authenticator
+        .do_registration(origin(&config), challenge)
+        .expect("the software authenticator must complete registration");
+    let credential = serde_json::to_value(&credential).expect("the credential is JSON");
+    let finish = json!({ "ceremony_id": ceremony_id, "credential": credential });
+
+    let (status, _, body) = call(
+        &app,
+        guarded_request(
+            Method::POST,
+            PASSKEYS_FINISH,
+            Some(&browser),
+            Some(&config.origin),
+            true,
+            Some(&finish),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "passkey finish: {body}");
+    let added: Uuid = body["id"]
+        .as_str()
+        .expect("the new Passkey id is a string")
+        .parse()
+        .expect("the new Passkey id is a UUID");
+
+    let (status, _, body) = call(
+        &app,
+        guarded_request(
+            Method::DELETE,
+            &format!("{PASSKEYS}/{added}"),
+            Some(&browser),
+            Some(&config.origin),
+            true,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "passkey delete: {body}");
+    let remaining = passkey_ids(pool).await;
+    assert_eq!(remaining.len(), 1);
+    assert_ne!(remaining[0], added);
 
     db.drop().await;
 }
