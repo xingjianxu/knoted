@@ -65,7 +65,7 @@ export const queryKeys = {
   dashboard: () => ["dashboard"] as const,
   trash: () => ["trash"] as const,
   chat: {
-    sessions: () => ["chat", "sessions"] as const,
+    sessions: () => ["chat", "sessions", "list"] as const,
     session: (id: string) => ["chat", "sessions", id] as const,
     messages: (id: string) => ["chat", "sessions", id, "messages"] as const,
   },
