@@ -5,6 +5,7 @@
 //! `main.rs` only loads configuration, connects the pool, installs logging and
 //! serves [`build_router`] on `server.bind`.
 
+pub mod admin;
 pub mod error;
 pub mod logging;
 pub mod middleware;
