@@ -16,7 +16,7 @@ git check-ignore -v .worktrees/
 git status --short --untracked-files=all
 ```
 
-当前骨架没有测试用例；cargo test 成功只证明测试目标能构建和执行，不表示业务覆盖。行为新增时补有意义的回归测试。Cargo.lock 是当前二进制包的构建锁文件，不是新增第三方依赖。
+T01—T05 引入了真实回归测试：`cargo test --workspace --locked` 覆盖配置装载/脱敏与数据库迁移隔离（后者需要本机 PostgreSQL 测试库 `knoted_test`），前端 `pnpm run test` 覆盖空壳、客户端与查询入口。测试成功只证明这些场景，不表示未实现业务已有覆盖；行为新增时补有意义的回归测试。
 
 ## 文档、Skills 与 GitHub 配置
 
