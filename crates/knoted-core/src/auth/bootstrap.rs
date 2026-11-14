@@ -198,8 +198,9 @@ pub fn hash_token(token: &str) -> [u8; 32] {
 /// Generates a 256-bit token from the operating system CSPRNG.
 ///
 /// The encoding is URL-safe base64 without padding, so the value survives a
-/// copy/paste into a URL, a shell argument and a JSON body unchanged.
-fn generate_token() -> String {
+/// copy/paste into a URL, a shell argument, a cookie and a JSON body unchanged.
+/// Shared with [`super::sessions`], which issues the same shape of secret.
+pub(crate) fn generate_token() -> String {
     let mut bytes = [0u8; 32];
     OsRng.fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)

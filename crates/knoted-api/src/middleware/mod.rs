@@ -3,6 +3,7 @@
 //! Only transport concerns live here: request identity, the request log and the
 //! panic guard. Business rules stay in route handlers and the core crate.
 
+pub mod auth;
 mod catch_panic;
 mod request_id;
 
