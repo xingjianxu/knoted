@@ -8,6 +8,6 @@
 | `Cargo.toml` | 当前构建元数据；技术栈迁移需单独评估 |
 | `AGENTS.md` / `.agents/skills/` | 开发规则及项目管理流程，不加入运行时依赖 |
 | `docs/decisions/` / `docs/rfcs/` | 已讨论的决策及重要方案 |
-| `.github/` | GitHub 协作与 CI |
+| `.github/` | GitHub 协作模板与仓库自动化 |
 
 新增业务模块时补充责任、接口、依赖方向和测试入口。不要为了套用模板创建不存在的服务或数据库。本次管理体系初始化不构成产品架构决策，不产生虚构的 Accepted ADR。
