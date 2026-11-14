@@ -6,7 +6,8 @@
 //! [`init_with_writer`] instead of parsing stderr.
 
 use std::io;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::{Arc, Mutex, MutexGuard, Once, PoisonError};
 
 use knoted_core::config::{LogFormat, LogLevel};
 use thiserror::Error;
@@ -21,9 +22,50 @@ pub enum LoggingError {
     AlreadyInitialised,
 }
 
-/// Installs the process-wide subscriber writing to stderr.
+/// Installs the process-wide subscriber writing to stderr and the production
+/// panic hook.
+///
+/// The panic hook is the reason this function differs from
+/// [`init_with_writer`]: the Rust default hook prints the panic payload, which
+/// can embed note text, tokens or other user data. Handling user content (T13+)
+/// makes that a leak into the log stream, so the production hook replaces it
+/// with a fixed message and the source location. Tests that capture logs keep
+/// the standard hook by calling [`init_with_writer`].
 pub fn init(level: LogLevel, format: LogFormat) -> Result<(), LoggingError> {
-    init_with_writer(io::stderr, level, format)
+    init_with_writer(io::stderr, level, format)?;
+    install_panic_hook();
+    Ok(())
+}
+
+/// Replaces the process panic hook with one that never formats the payload.
+///
+/// The hook emits `process panicked` plus `file:line` through `tracing`, so it
+/// lands in the configured log format and sink instead of being written to
+/// stderr by the default hook. The panic payload is never read: it may contain
+/// user content. The request id is not attached because tracing span fields are
+/// write-only, so the hook cannot read it back; the panic guard's own log line
+/// carries the id for the failing request.
+///
+/// Idempotent: the first installation wins, so a test and `init` cannot chain
+/// hooks within one process.
+pub(crate) fn install_panic_hook() {
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        std::panic::set_hook(Box::new(|info| {
+            let location = info
+                .location()
+                .map(|location| format!("{}:{}", location.file(), location.line()));
+            // A panicking log sink must not turn one panic into a process
+            // abort, so emitting is best effort.
+            let _ = catch_unwind(AssertUnwindSafe(|| {
+                tracing::error!(
+                    target: "knoted_api::panic",
+                    location = location.as_deref().unwrap_or("unknown"),
+                    "process panicked"
+                );
+            }));
+        }));
+    });
 }
 
 /// Installs the process-wide subscriber writing to `writer`.

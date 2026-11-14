@@ -55,7 +55,7 @@ mod tests {
     use crate::with_transport_layers;
 
     async fn panicking_handler() -> StatusCode {
-        panic!("PANICPAYLOADSECRET")
+        panic!("SUPERSECRETBODY")
     }
 
     static LOG_BUFFER: OnceLock<LogBuffer> = OnceLock::new();
@@ -73,6 +73,10 @@ mod tests {
     #[tokio::test]
     async fn t06_4_panic_500_uses_shared_error_body() {
         let logs = captured_logs();
+        // Production installs this hook from `logging::init`; the test calls it
+        // directly so the hook's own output is captured instead of reaching the
+        // real stderr.
+        crate::logging::install_panic_hook();
         // The same stack `build_router` uses, so the test cannot drift from
         // production layer ordering.
         let app = with_transport_layers(Router::new().route("/panic", get(panicking_handler)));
@@ -119,8 +123,26 @@ mod tests {
         );
 
         let logs = logs.contents();
+        // Positive assertions: removing these log lines would otherwise let the
+        // redaction assertions below pass vacuously.
         assert!(
-            !logs.contains("PANICPAYLOADSECRET"),
+            logs.contains("handler panicked"),
+            "the panic guard must log a fixed message: {logs}"
+        );
+        assert!(
+            logs.contains("process panicked"),
+            "the production panic hook must log a fixed message: {logs}"
+        );
+        assert!(
+            logs.contains("lib.rs:"),
+            "the panic hook must record the source location: {logs}"
+        );
+        assert!(
+            logs.contains(&request_id.to_string()),
+            "the handler-panic log must carry the request id: {logs}"
+        );
+        assert!(
+            !logs.contains("SUPERSECRETBODY"),
             "the panic payload may contain user content and must never be logged: {logs}"
         );
     }
