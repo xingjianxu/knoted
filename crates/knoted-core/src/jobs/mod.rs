@@ -90,6 +90,23 @@ pub fn enqueued_topic(kind: &str) -> String {
     format!("job.enqueued.{kind}")
 }
 
+/// Result of [`enqueue`].
+///
+/// `created = false` means the `(kind, idempotency_key)` pair already existed
+/// and `job` is the row that was already there. That row may already be in a
+/// terminal state (`succeeded`, `failed`, `cancelled`), so a caller that treats
+/// "enqueue returned" as "the work will run" is wrong: it must inspect
+/// `job.state` (or `created`) and decide whether to wait, report the existing
+/// result or create a new job with a new key. T08 builds the retry flow on this
+/// distinction.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnqueueOutcome {
+    /// The stored job: newly inserted when `created`, otherwise the existing one.
+    pub job: Job,
+    /// Whether this call inserted the job (and therefore its outbox event).
+    pub created: bool,
+}
+
 /// A persisted job row.
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
 pub struct Job {

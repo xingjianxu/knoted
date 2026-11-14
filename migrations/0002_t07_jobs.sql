@@ -39,12 +39,21 @@ CREATE TABLE jobs (
     ),
     CONSTRAINT jobs_attempts_check CHECK (attempts >= 0),
     CONSTRAINT jobs_max_attempts_check CHECK (max_attempts >= 1),
-    -- A running job always has a lease; every other state has none. This makes
-    -- "state = running" sufficient to trust `lease_token`, and forces the
+    -- A lease exists exactly while a worker owns the job: `running` and
+    -- `cancel_requested` both hold it, so a cancellation request keeps the
+    -- resources and the execution quota until the worker confirms (matching the
+    -- RAG rule that no resource is released without a cancel confirmation).
+    -- Every other state must have all three lease columns NULL, which forces the
     -- state machine to release the lease in the same statement that ends a run.
     CONSTRAINT jobs_lease_check CHECK (
-        (state = 'running' AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL)
-        OR (state <> 'running' AND lease_token IS NULL AND lease_expires_at IS NULL)
+        (state IN ('running', 'cancel_requested')
+            AND lease_token IS NOT NULL
+            AND lease_expires_at IS NOT NULL
+            AND locked_by IS NOT NULL)
+        OR (state NOT IN ('running', 'cancel_requested')
+            AND lease_token IS NULL
+            AND lease_expires_at IS NULL
+            AND locked_by IS NULL)
     )
 );
 
@@ -55,8 +64,10 @@ CREATE UNIQUE INDEX jobs_kind_idempotency_key_idx
     ON jobs (kind, idempotency_key)
     WHERE idempotency_key IS NOT NULL;
 
--- Claim scan: due queued jobs, plus running jobs whose lease expired.
-CREATE INDEX jobs_state_available_at_idx ON jobs (state, available_at);
+-- Claim scan: due queued jobs, plus running jobs whose lease expired. The
+-- order matches the claim query (`priority DESC, available_at ASC`) so the
+-- scan does not sort the whole candidate set.
+CREATE INDEX jobs_claim_order_idx ON jobs (state, priority DESC, available_at);
 CREATE INDEX jobs_lease_expires_at_idx
     ON jobs (lease_expires_at)
     WHERE lease_expires_at IS NOT NULL;

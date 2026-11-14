@@ -34,7 +34,7 @@ async fn enqueue(pool: &PgPool) -> uuid::Uuid {
     tx.commit()
         .await
         .expect("the enqueue transaction must commit");
-    job.id
+    job.job.id
 }
 
 #[tokio::test]

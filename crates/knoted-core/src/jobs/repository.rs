@@ -8,22 +8,36 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
-use super::{Job, JobOutcome, JobSpec, LEASE_SECONDS, Lease, enqueued_topic};
+use super::{EnqueueOutcome, Job, JobOutcome, JobSpec, LEASE_SECONDS, Lease, enqueued_topic};
 use crate::db::DbError;
 
 /// SQL predicate shared by the claim scan: a job is due when it is waiting and
-/// its availability has passed, or when it is running but its lease expired.
+/// its availability has passed, or when it is running/cancelling but its lease
+/// expired (the owner is gone, so the attempt has to be repeated).
 const DUE_PREDICATE: &str = "((state = 'queued' AND available_at <= now())
-      OR (state = 'running' AND lease_expires_at < now()))";
+      OR (state IN ('running', 'cancel_requested') AND lease_expires_at < now()))";
 
-/// Enqueues `spec` in the caller's transaction and returns the stored job.
+/// Enqueues `spec` in the caller's transaction.
 ///
 /// Both the job row and its outbox row are written here, so the event exists
-/// exactly when the job exists. When `(kind, idempotency_key)` already exists
-/// the existing job is returned unchanged and no second outbox row is written:
-/// a retried enqueue is not a new piece of work.
-pub async fn enqueue(tx: &mut Transaction<'_, Postgres>, spec: JobSpec) -> Result<Job, DbError> {
-    let max_attempts = spec.max_attempts.max(1);
+/// exactly when the job exists.
+///
+/// When `(kind, idempotency_key)` already exists the existing job is returned
+/// with [`EnqueueOutcome::created`] set to `false` and no second outbox row is
+/// written: a retried enqueue is not a new piece of work. The existing job may
+/// already have finished, so the caller must look at `created`/`job.state`
+/// instead of assuming the work will run. Jobs without a key always insert.
+///
+/// `max_attempts` below 1 is rejected with [`DbError::InvalidMaxAttempts`]
+/// rather than silently clamped, so a caller cannot believe a job will be tried
+/// when it would have been tried zero times.
+pub async fn enqueue(
+    tx: &mut Transaction<'_, Postgres>,
+    spec: JobSpec,
+) -> Result<EnqueueOutcome, DbError> {
+    if spec.max_attempts < 1 {
+        return Err(DbError::InvalidMaxAttempts(spec.max_attempts));
+    }
     let inserted: Option<Job> = sqlx::query_as(
         "INSERT INTO jobs (kind, idempotency_key, payload, priority, max_attempts, available_at) \
          VALUES ($1, $2, $3, $4, $5, COALESCE($6, now())) \
@@ -34,7 +48,7 @@ pub async fn enqueue(tx: &mut Transaction<'_, Postgres>, spec: JobSpec) -> Resul
     .bind(&spec.idempotency_key)
     .bind(&spec.payload)
     .bind(spec.priority)
-    .bind(max_attempts)
+    .bind(spec.max_attempts)
     .bind(spec.available_at)
     .fetch_optional(&mut **tx)
     .await?;
@@ -51,7 +65,10 @@ pub async fn enqueue(tx: &mut Transaction<'_, Postgres>, spec: JobSpec) -> Resul
                 .bind(key)
                 .fetch_one(&mut **tx)
                 .await?;
-        return Ok(existing);
+        return Ok(EnqueueOutcome {
+            job: existing,
+            created: false,
+        });
     };
 
     sqlx::query("INSERT INTO outbox (job_id, topic, payload) VALUES ($1, $2, $3)")
@@ -61,7 +78,7 @@ pub async fn enqueue(tx: &mut Transaction<'_, Postgres>, spec: JobSpec) -> Resul
         .execute(&mut **tx)
         .await?;
 
-    Ok(job)
+    Ok(EnqueueOutcome { job, created: true })
 }
 
 /// Claims one due job for `worker`, or returns `None` when nothing is due.
@@ -71,6 +88,10 @@ pub async fn enqueue(tx: &mut Transaction<'_, Postgres>, spec: JobSpec) -> Resul
 /// row. An expired lease is up for grabs: the takeover writes a new token and
 /// counts as another attempt, and any result the previous holder still produces
 /// is rejected by [`heartbeat`] and [`finish_with_token`].
+///
+/// A takeover keeps `cancel_requested` as it is: taking the lease over repeats
+/// the attempt, it does not undo the cancellation request. Every other due job
+/// becomes `running`.
 pub async fn claim(pool: &PgPool, worker: &str) -> Result<Option<Lease>, DbError> {
     let token = Uuid::new_v4();
     let mut tx = pool.begin().await?;
@@ -89,7 +110,9 @@ pub async fn claim(pool: &PgPool, worker: &str) -> Result<Option<Lease>, DbError
     };
 
     let (attempt, expires_at): (i32, DateTime<Utc>) = sqlx::query_as(
-        "UPDATE jobs SET state = 'running', lease_token = $2, \
+        "UPDATE jobs SET state = CASE WHEN state = 'cancel_requested' \
+                 THEN 'cancel_requested' ELSE 'running' END, \
+             lease_token = $2, \
              lease_expires_at = now() + make_interval(secs => $3), \
              attempts = attempts + 1, locked_by = $4, updated_at = now() \
          WHERE id = $1 \
