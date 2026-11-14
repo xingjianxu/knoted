@@ -32,6 +32,14 @@ fn migrator() -> &'static Migrator {
     &MIGRATOR
 }
 
+/// Number of migrations embedded in this binary.
+///
+/// Readiness checks and tests use this instead of a hard-coded version count, so
+/// adding `0002_...` cannot leave a stale expectation behind.
+pub fn embedded_migration_count() -> usize {
+    migrator().iter().count()
+}
+
 /// Opens a connection pool and verifies that the database answers.
 ///
 /// `config.max_connections` sizes the pool and `config.connect_timeout_secs`
@@ -57,15 +65,22 @@ pub async fn migrate(pool: &PgPool) -> Result<(), DbError> {
     Ok(())
 }
 
-/// Reports whether every embedded migration is applied successfully.
+/// Reports whether the database schema matches the migrations embedded in this
+/// binary.
 ///
-/// This is the readiness primitive used by process health checks: a missing
-/// `_sqlx_migrations` table (fresh or unreachable database) and a failed
-/// migration row both mean "not ready", and are reported as `Ok(false)` rather
-/// than as an error so probes never panic.
+/// This is the readiness primitive used by process health checks. It reports
+/// `Ok(false)` (never an error or a panic) when the answer is not trustworthy:
+///
+/// - the database or `_sqlx_migrations` table is unreachable/missing;
+/// - an embedded version is not applied, so the schema is too old;
+/// - an applied row failed, so the schema is inconsistent;
+/// - an applied version is unknown to this binary, so the schema was written by
+///   a newer build (an old binary must not report ready against it);
+/// - an applied checksum differs from the embedded migration, so the migration
+///   file changed after being applied.
 pub async fn is_ready(pool: &PgPool) -> Result<bool, DbError> {
-    let applied: Vec<(i64, bool)> =
-        match sqlx::query_as("SELECT version, success FROM _sqlx_migrations")
+    let applied: Vec<(i64, bool, Vec<u8>)> =
+        match sqlx::query_as("SELECT version, success, checksum FROM _sqlx_migrations")
             .fetch_all(pool)
             .await
         {
@@ -73,14 +88,23 @@ pub async fn is_ready(pool: &PgPool) -> Result<bool, DbError> {
             Err(_) => return Ok(false),
         };
 
-    if applied.iter().any(|(_, success)| !success) {
-        return Ok(false);
-    }
+    let is_known = |version: i64, checksum: &[u8]| {
+        migrator().iter().any(|migration| {
+            migration.version == version && migration.checksum.as_ref() == checksum
+        })
+    };
 
-    let all_applied = migrator().iter().all(|migration| {
+    // Every applied row must be a successful, unmodified embedded migration.
+    let applied_rows_are_known = applied
+        .iter()
+        .all(|(version, success, checksum)| *success && is_known(*version, checksum));
+
+    // And every embedded migration must be applied.
+    let embedded_versions_are_applied = migrator().iter().all(|migration| {
         applied
             .iter()
-            .any(|(version, _)| *version == migration.version)
+            .any(|(version, _, _)| *version == migration.version)
     });
-    Ok(all_applied)
+
+    Ok(applied_rows_are_known && embedded_versions_are_applied)
 }

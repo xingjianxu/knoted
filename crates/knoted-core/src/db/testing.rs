@@ -60,14 +60,16 @@ impl TestDb {
             return Err(DbError::UnsafeTestTarget(database));
         }
 
-        let schema = format!("knoted_t05_{}", &Uuid::new_v4().simple().to_string()[..12]);
-        let schema = sql_identifier(&schema);
+        let schema = sql_identifier(&format!(
+            "knoted_t05_{}",
+            &Uuid::new_v4().simple().to_string()[..12]
+        ));
 
-        let mut admin = PgConnection::connect(url).await?;
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
-            .execute(&mut admin)
-            .await?;
-        admin.close().await?;
+        create_schema(url, &schema).await?;
+        // The schema now exists: from here on `guard` removes it again if any
+        // later setup step fails, so a failed pool or migration leaves nothing
+        // behind. On success `TestDb` owns the cleanup instead.
+        let guard = SchemaGuard::new(url, schema.clone());
 
         let search_path = format!("SET search_path TO {schema}");
         let pool = PgPoolOptions::new()
@@ -82,14 +84,15 @@ impl TestDb {
             .connect(url)
             .await?;
 
-        let db = TestDb {
+        migrate(&pool).await?;
+
+        guard.disarm();
+        Ok(TestDb {
             pool,
             schema,
             base_url: url.to_owned(),
             cleaned: Cell::new(false),
-        };
-        migrate(&db.pool).await?;
-        Ok(db)
+        })
     }
 
     /// Name of the isolated schema backing this test.
@@ -121,21 +124,53 @@ impl Drop for TestDb {
         if self.cleaned.replace(true) {
             return;
         }
-        // `TestDb::drop` was never awaited (the test panicked, for example).
-        // Clean up from a dedicated runtime so a failed run cannot leak its
-        // schema. Best effort: the test already failed, so errors are ignored.
-        let base_url = self.base_url.clone();
-        let schema = self.schema.clone();
-        let _ = std::thread::spawn(move || {
-            if let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                let _ = runtime.block_on(drop_schema(&base_url, &schema));
-            }
-        })
-        .join();
+        // `TestDb::drop` was never awaited (the test panicked or called
+        // `std::mem::drop`, for example). Clean up from a dedicated runtime so
+        // a finished test cannot leak its schema.
+        cleanup_schema_blocking(&self.base_url, &self.schema);
     }
+}
+
+/// Removes a schema if setup fails after the schema was created.
+///
+/// The guard is declared before the pool, so on an early return the pool is
+/// dropped first and the schema last.
+struct SchemaGuard {
+    base_url: String,
+    schema: String,
+    armed: bool,
+}
+
+impl SchemaGuard {
+    fn new(base_url: &str, schema: String) -> Self {
+        SchemaGuard {
+            base_url: base_url.to_owned(),
+            schema,
+            armed: true,
+        }
+    }
+
+    /// Hands the cleanup over to [`TestDb`] once setup succeeded.
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for SchemaGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            cleanup_schema_blocking(&self.base_url, &self.schema);
+        }
+    }
+}
+
+async fn create_schema(base_url: &str, schema: &str) -> Result<(), sqlx::Error> {
+    let mut connection = PgConnection::connect(base_url).await?;
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&mut connection)
+        .await?;
+    connection.close().await?;
+    Ok(())
 }
 
 async fn drop_schema(base_url: &str, schema: &str) -> Result<(), sqlx::Error> {
@@ -145,6 +180,24 @@ async fn drop_schema(base_url: &str, schema: &str) -> Result<(), sqlx::Error> {
         .await?;
     connection.close().await?;
     Ok(())
+}
+
+/// Best-effort schema removal that works from a synchronous `Drop`.
+///
+/// A dedicated current-thread runtime is used because the caller may already be
+/// inside a Tokio runtime (where `block_on` would panic) or may be unwinding.
+fn cleanup_schema_blocking(base_url: &str, schema: &str) {
+    let base_url = base_url.to_owned();
+    let schema = schema.to_owned();
+    let _ = std::thread::spawn(move || {
+        if let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            let _ = runtime.block_on(drop_schema(&base_url, &schema));
+        }
+    })
+    .join();
 }
 
 /// Guards the SQL we interpolate: only lowercase letters, digits and `_`.
