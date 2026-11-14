@@ -2,7 +2,7 @@
 
 ## 项目与入口
 
-Knoted 当前为 Rust 2024 workspace（`crates/knoted-core`、`knoted-api`、`knoted-worker`）加 pnpm workspace（`apps/web`、`packages/ui`、`packages/api-client`）的骨架：已有配置装载、SQLx 迁移与实体注册表、浏览器/内部 OpenAPI 契约及生成客户端，尚无认证、笔记、文件、搜索或 RAG 业务实现。任务状态见 [Knoted v1 计划](docs/plans/knoted-v1/README.md)，目录职责见 [架构现状](docs/architecture/README.md)。不要根据项目名称推断产品需求。管理体系采用语言无关的 Git、gh、Markdown 和标准 Agent Skills。
+Knoted 当前为 Rust 2024 workspace（`crates/knoted-core`、`knoted-api`、`knoted-worker`）加 pnpm workspace（`apps/web`、`packages/ui`、`packages/api-client`）：已有配置装载、SQLx 迁移与实体注册表、浏览器/内部 OpenAPI 契约及生成客户端、axum 服务骨架与健康检查、任务队列与租约状态机、唯一账号 Passkey 认证与会话保护，以及 `services/intelligence/` 的 Python 执行服务（Docling+RapidOCR 离线解析、BGE-M3 dense 嵌入）。笔记、项目/事项、文件扫描与检索、RAG 生成尚未实现。任务状态见 [Knoted v1 计划](docs/plans/knoted-v1/README.md)，目录职责见 [架构现状](docs/architecture/README.md)。不要根据项目名称推断产品需求。管理体系采用语言无关的 Git、gh、Markdown 和标准 Agent Skills。
 
 - `.agents/skills/`：项目管理流程；`docs/development/`：操作指南和平台适配。
 - `docs/decisions/`：ADR；`docs/rfcs/`：重大方案讨论；`docs/plans/`：复杂任务计划。

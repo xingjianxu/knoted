@@ -1,6 +1,6 @@
 # Knoted v1 文档与实施任务入口
 
-> 产品实施采用实际可用的 executing-plans 或 subagent-driven-development。当前 T01—T05 已完成、审查并集成到主线（远程 master 见下方「实施进展」）；T06—T72 仍待领取。
+> 产品实施采用实际可用的 executing-plans 或 subagent-driven-development。当前 T01—T16 已完成、审查并集成到主线（远程 master 见下方「实施进展」）；T17—T72 仍待领取。
 
 ## 阅读顺序
 
@@ -29,17 +29,17 @@
 | [T03](tasks/T03.md) | 公共OpenAPI契约 | T01, T02 | done（已集成 7e3c54b） |
 | [T04](tasks/T04.md) | 生成客户端与查询入口 | T03 | done（已集成 892178e） |
 | [T05](tasks/T05.md) | 数据库迁移与测试隔离 | T01, T03 | done（已集成 79a7d06） |
-| [T06](tasks/T06.md) | API健康和日志 | T05 | pending |
-| [T07](tasks/T07.md) | 任务领取与租约 | T05 | pending |
-| [T08](tasks/T08.md) | 任务重试和取消 | T07 | pending |
-| [T09](tasks/T09.md) | Python任务协议与暂存对象 | T03, T08 | pending |
-| [T10](tasks/T10.md) | Docling与中文OCR验证 | T09 | pending |
-| [T11](tasks/T11.md) | BGE-M3可运行性验证 | T09 | pending |
-| [T12](tasks/T12.md) | Strata IQ3_S可运行性验证 | T03 | pending |
-| [T13](tasks/T13.md) | 唯一账号与首次注册 | T05, T06 | pending |
-| [T14](tasks/T14.md) | Passkey注册与登录 | T13 | pending |
-| [T15](tasks/T15.md) | 会话与请求保护 | T14 | pending |
-| [T16](tasks/T16.md) | 凭据管理与恢复 | T15 | pending |
+| [T06](tasks/T06.md) | API健康和日志 | T05 | done（PR [#19](https://github.com/xingjianxu/knoted/pull/19)，集成 `ec29695`） |
+| [T07](tasks/T07.md) | 任务领取与租约 | T05 | done（PR [#20](https://github.com/xingjianxu/knoted/pull/20)，集成 `b4cc721`） |
+| [T08](tasks/T08.md) | 任务重试和取消 | T07 | done（PR [#22](https://github.com/xingjianxu/knoted/pull/22)，集成 `9bd5bcd`） |
+| [T09](tasks/T09.md) | Python任务协议与暂存对象 | T03, T08 | done（PR [#25](https://github.com/xingjianxu/knoted/pull/25)，集成 `40ce7c6`） |
+| [T10](tasks/T10.md) | Docling与中文OCR验证 | T09 | done（app PR [#27](https://github.com/xingjianxu/knoted/pull/27) 集成 `9dac968`；host `/etc/nixos` `b5ca207`） |
+| [T11](tasks/T11.md) | BGE-M3可运行性验证 | T09 | done（app PR [#30](https://github.com/xingjianxu/knoted/pull/30) 集成 `9056642`；host `/etc/nixos` `3cc5e31`） |
+| [T12](tasks/T12.md) | Strata IQ3_S可运行性验证 | T03 | done（app PR [#21](https://github.com/xingjianxu/knoted/pull/21)、验收回填 PR [#24](https://github.com/xingjianxu/knoted/pull/24) 集成 `392cb60`；host `/etc/nixos` `ae00563`） |
+| [T13](tasks/T13.md) | 唯一账号与首次注册 | T05, T06 | done（PR [#23](https://github.com/xingjianxu/knoted/pull/23)，集成 `11cb981`） |
+| [T14](tasks/T14.md) | Passkey注册与登录 | T13 | done（PR [#28](https://github.com/xingjianxu/knoted/pull/28)，集成 `e0fa445`） |
+| [T15](tasks/T15.md) | 会话与请求保护 | T14 | done（PR [#26](https://github.com/xingjianxu/knoted/pull/26)，集成 `32cbb6f`） |
+| [T16](tasks/T16.md) | 凭据管理与恢复 | T15 | done（PR [#29](https://github.com/xingjianxu/knoted/pull/29)，集成 `6ad602e`） |
 | [T17](tasks/T17.md) | UI基础控件与样式 | T02 | pending |
 | [T18](tasks/T18.md) | 弹层和菜单控件 | T17 | pending |
 | [T19](tasks/T19.md) | 树列表与空状态 | T18 | pending |
@@ -96,6 +96,28 @@
 | [T70](tasks/T70.md) | 完整Nix模块与主机接入 | T21, T69 | pending |
 | [T71](tasks/T71.md) | 功能与故障恢复集成验收 | T70 | pending |
 | [T72](tasks/T72.md) | 最终测试部署和交接 | T71 | pending |
+
+## 实施进展（T06—T16）
+
+基线 master `1147172`。每个任务在 `.worktrees/knoted-t0N` 的独立分支（`feat/t0N`、`docs/t12b`、`feat/t12b`）实施，经独立审查（多数任务两轮以上修复循环）后以 PR 普通 merge 进入远程 master；本地主线 `git merge --ff-only` 同步，分支在工作区核验后清理。跨仓库 host 交付在 `/etc/nixos` 独立提交，不混入本仓库。
+
+| 任务 | 实施范围 | PR / 集成 | 主线复跑证据 |
+|---|---|---|---|
+| T06 | axum 服务骨架、`AppContext`、request_id、`/health/live|ready`、安全日志 | [#19](https://github.com/xingjianxu/knoted/pull/19) → `ec29695` | `cargo test --workspace --locked` 23 passed；fmt/clippy 0；PG 失联 ready=503/live=200；日志零正文与 Cookie |
+| T07 | `jobs`/`outbox` 迁移、幂等入队、`SKIP LOCKED` 领取、90s 租约/20s 心跳、worker 骨架 | [#20](https://github.com/xingjianxu/knoted/pull/20) → `b4cc721` | `t07_` 15 passed（真实 PG）；证明 `SKIP LOCKED` 的持锁用例可证伪；租约 CHECK 与 `cancel_requested` 自洽 |
+| T08 | 任务状态机、5/30/120s 退避（总执行 ≤4）、取消确认、人工重试 `retry_of` | [#22](https://github.com/xingjianxu/knoted/pull/22) → `9bd5bcd` | `t08_` 6 passed；交错竞态（取消被旧 token 覆盖）先 RED 后 GREEN；全量 44 passed |
+| T12 | 本地 provider 契约、IQ3_S 固定安装与证据；host `/etc/nixos` `ae00563` | [#21](https://github.com/xingjianxu/knoted/pull/21)、[#24](https://github.com/xingjianxu/knoted/pull/24) → `392cb60` | `t12_1/2/3` 真实通过：仅回环 15604、别名 `qwen3.8-flash-next-iq3_s`、流式 + 断连取消、三件套 sha256 与 HF revision 一致 |
+| T13 | `0003_t13_auth` 迁移、唯一 owner、一次性 bootstrap/recovery token、admin CLI | [#23](https://github.com/xingjianxu/knoted/pull/23) → `11cb981` | `t13_` 6 passed；并发签发/消费取证；token 零明文落库与日志；ceremony 绑定 CHECK |
+| T09 | Python 内部执行协议 + SQLite 账本 + 受控暂存；Rust 客户端与 staging | [#25](https://github.com/xingjianxu/knoted/pull/25) → `40ce7c6` | Python 24 passed + Rust 8 passed（双端真实执行）；重启 queued/running → interrupted；进程组取消耗时确认 |
+| T15 | 会话、Cookie、闲置 7d/绝对 30d、CSRF/Origin、多会话管理、事务内原语 | [#26](https://github.com/xingjianxu/knoted/pull/26) → `32cbb6f` | `t15_` 11 passed；`max_connections=1` 连接池回归；事务回滚探针；全量 69 passed |
+| T10 | Docling + RapidOCR 离线解析适配、锁版报告、中英 fixture；host `b5ca207` | [#27](https://github.com/xingjianxu/knoted/pull/27) → `9dac968` | Python 31 passed（含 T09 24）；离线零连接零缓存；PDF 页像素炸弹与产物上限；host 断网解析通过 |
+| T14 | webauthn-rs 注册/登录、ceremony 5 分钟单次消费、counter 更新 | [#28](https://github.com/xingjianxu/knoted/pull/28) → `e0fa445` | `t14_` 8 passed；重放/并发 finish/合法签名+evil origin 均 422/409；全量 77 passed |
+| T16 | 凭据分页与管理、最后凭据保护、recovery 单事务替换与旧会话撤销 | [#29](https://github.com/xingjianxu/knoted/pull/29) → `6ad602e` | `t16_` 8 passed；恢复失败回滚后原凭据可用；Origin/CSRF 负向；全量 85 passed |
+| T11 | BGE-M3 dense 嵌入（1024 维归一化）、GPU UUID、OCR/嵌入串行；host `3cc5e31` | [#30](https://github.com/xingjianxu/knoted/pull/30) → `9056642` | Python 40 passed（CPU 与 GPU 嵌入两种环境）；运行期模型摘要校验；语义样本实测 gap 0.4197 |
+
+主线整体验证（T16 合并后 `6ad602e`）：`cargo fmt --check`、`cargo test --workspace --locked`（85 passed）、`cargo clippy --workspace --all-targets -- -D warnings` 全部 exit 0；Python 侧 `uv run --group dev pytest`（T09/T10/T11 共 40 passed，CPU 与 GPU 嵌入两种环境各跑一次）与 `ruff check/format --check` exit 0。逐卡证据与限制写在各任务卡「执行证据」及 `/data/knoted-dev/tasks/knoted-t06-t16/{reports,reviews,evidence}/`；过程记录见 `/data/knoted-dev/tasks/knoted-t06-t16/ledger.md`。
+
+尚未执行：T17 起的后续任务；测试实例部署（T21 才建立，T06—T16 均为库/契约/Python 服务，无对外部署）。仍存在的跨任务限制：无真实硬件 Passkey 人工验证；Docling Office 格式由 T46—T48 承接；Strata 与 Knoted 的 provider 模块尚未统一（见 T12 证据 §9，待人工裁决）。
 
 ## 阶段交付
 
