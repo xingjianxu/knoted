@@ -43,6 +43,8 @@ from .ledger import (
     Ledger,
     LedgerConflict,
 )
+from .parsing import models as parsing_models
+from .parsing import parse_document
 
 logger = logging.getLogger(__name__)
 
@@ -444,14 +446,11 @@ class Scheduler:
                 # The traceback names absolute paths; it belongs in the server log,
                 # not in a record the worker reads.
                 logger.warning("execution %s child stderr: %s", execution_id, tail)
-            reason = _child_failure_reason(output_dir)
+            reason = _child_failure_message(status, output_dir)
             self._finish(
                 execution_id,
                 FAILED,
-                error=_failure_error(
-                    "execution_failed",
-                    f"child {status}" + (f": compute failed ({reason})" if reason else ""),
-                ),
+                error=_failure_error("execution_failed", reason),
             )
             return
         self._register_artifact(execution_id, output_dir, artifact_object_id)
@@ -544,15 +543,30 @@ def _cancel_error(exit_status: str | None) -> ExecutionErrorDetail:
     return ExecutionErrorDetail(code="cancelled", message=message, request_id=str(uuid.uuid4()))
 
 
-def _child_failure_reason(output_dir: Path) -> str | None:
-    """Exception class the child recorded, if it managed to write one."""
+def _child_failure_message(exit_status: str, output_dir: Path) -> str:
+    """Exit status plus the path-free details the child recorded, if any."""
 
-    try:
-        status = json.loads((output_dir / CHILD_STATUS_FILE).read_text(encoding="utf-8"))
-    except (OSError, ValueError):  # pragma: no cover - the child died before writing
-        return None
+    status = _read_child_status(output_dir)
     reason = status.get("error_class")
-    return reason if isinstance(reason, str) and reason else None
+    detail = status.get("error_message")
+    reason = reason if isinstance(reason, str) and reason else None
+    detail = detail if isinstance(detail, str) and detail else None
+    if reason is None and detail is None:
+        return f"child {exit_status}"
+    description = reason or "unknown error"
+    if detail is not None:
+        # Only exceptions that expose `public_message` get here; those messages
+        # are built without filesystem paths (see parsing/models.py).
+        description = f"{description}: {detail[:600]}"
+    return f"child {exit_status}: compute failed ({description})"
+
+
+def _read_child_status(output_dir: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads((output_dir / CHILD_STATUS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):  # pragma: no cover - the child died before writing
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _signal_group(pid: int, signum: int) -> None:
@@ -639,6 +653,9 @@ def child_main(spec_json: str) -> int:
                 **identity,
                 "phase": "failed",
                 "error_class": type(exc).__name__,
+                # An exception opts in to a worker-facing message by exposing
+                # `public_message`; everything else stays in the server log.
+                "error_message": _public_error_message(exc),
                 "finished_at": _utc_iso(),
             },
         )
@@ -652,14 +669,13 @@ def child_main(spec_json: str) -> int:
 
 
 def _compute(spec: dict[str, Any]) -> dict[str, Any]:
-    """Placeholder parse/embed handlers.
+    """Parse and embed handlers.
 
-    T10 replaces ``parse`` with real document extraction and T11 replaces
-    ``embed`` with BGE-M3; the artifact layout and the metadata below are the
-    part the protocol depends on.
+    ``parse`` runs the locked Docling/RapidOCR adapter (:mod:`parsing`).
+    ``embed`` is still a T09 placeholder until T11; the artifact layout and the
+    metadata below are the part the protocol depends on.
     """
 
-    raw = Path(spec["input_path"]).read_bytes()
     base: dict[str, Any] = {
         "kind": spec["kind"],
         "source_version": spec["source_version"],
@@ -668,16 +684,32 @@ def _compute(spec: dict[str, Any]) -> dict[str, Any]:
         "child_pid": os.getpid(),
     }
     if spec["kind"] == "parse":
-        text = raw.decode("utf-8", errors="replace")
-        blocks = [
-            {"ordinal": ordinal, "text": line}
-            for ordinal, line in enumerate(line for line in text.splitlines() if line.strip())
-        ]
+        document = parse_document(
+            Path(spec["input_path"]),
+            options_revision=spec["options_revision"],
+            models_dir=parsing_models.default_models_dir(),
+        )
         return {
             **base,
-            "text_length": len(text),
-            "blocks": blocks[:256],
-            "truncated": len(blocks) > 256,
+            "text_length": len(document.full_text),
+            "title": document.title,
+            "source_format": document.source_format,
+            "page_count": document.page_count,
+            "full_text": document.full_text,
+            # A real parse never publishes a truncated document.
+            "truncated": False,
+            "parser": parsing_models.parser_summary(),
+            "blocks": [
+                {
+                    "ordinal": block.ordinal,
+                    "type": block.kind,
+                    "text": block.text,
+                    "page": block.page,
+                    "bbox": list(block.bbox) if block.bbox is not None else None,
+                    "structure": block.structure,
+                }
+                for block in document.blocks
+            ],
         }
     if spec["kind"] == "embed":
         vector = _placeholder_vector(spec["input_sha256"])
@@ -706,6 +738,13 @@ def _placeholder_vector(seed_hex: str, dims: int = 1024) -> list[float]:
     values = values[:dims]
     norm = math.sqrt(sum(value * value for value in values)) or 1.0
     return [round(value / norm, 8) for value in values]
+
+
+def _public_error_message(exc: BaseException) -> str:
+    """The message an exception allows into an execution record, or ``""``."""
+
+    message = getattr(exc, "public_message", None)
+    return message if isinstance(message, str) and message else ""
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
