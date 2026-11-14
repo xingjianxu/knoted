@@ -17,6 +17,7 @@ sha2 = "0.10"
 url = "2"
 rand = "0.8"
 base64 = "0.22"
+webauthn-rs = { version = "0.6", features = ["danger-allow-state-serialisation"] }
 
 # HTTP client for the internal Python protocol. `default-features = false`
 # keeps the OpenSSL-based native-tls backend out of the build; rustls is the

@@ -50,7 +50,7 @@ pub fn build_router(ctx: AppContext) -> Router {
 /// health probes, the request id layer and the fallbacks behave exactly as with
 /// [`build_router`].
 pub fn build_router_with_auth(ctx: AppContext, auth: AuthConfig) -> Router {
-    with_transport_layers(routes::router(ctx).layer(axum::Extension(auth)))
+    with_transport_layers(routes::router(ctx, auth.clone()).layer(axum::Extension(auth)))
 }
 
 #[cfg(test)]

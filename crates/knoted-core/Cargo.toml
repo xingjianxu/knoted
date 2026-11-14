@@ -20,6 +20,7 @@ url.workspace = true
 # from a dedicated runtime.
 tokio.workspace = true
 uuid.workspace = true
+webauthn-rs.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
