@@ -93,7 +93,13 @@ pub async fn require_session(
         }
     };
 
-    match sessions::resolve_session(&mut connection, &token, ctx.now()).await {
+    // Resolve on the connection and give it back before running the handler: a
+    // handler (and every downstream layer) may check out its own connection, so
+    // holding this one across `next.run` would deadlock a small pool.
+    let resolved = sessions::resolve_session(&mut connection, &token, ctx.now()).await;
+    drop(connection);
+
+    match resolved {
         Ok(Some(session)) => {
             request.extensions_mut().insert(CurrentSession { session });
             next.run(request).await

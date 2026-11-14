@@ -14,6 +14,7 @@
 use std::sync::{Arc, OnceLock};
 
 use axum::body::{Body, to_bytes};
+use axum::extract::State;
 use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use axum::middleware::from_fn_with_state;
 use axum::routing::get;
@@ -28,9 +29,10 @@ use knoted_core::auth::sessions::{CreatedSession, Session};
 use knoted_core::auth::{self, hash_token, sessions};
 use knoted_core::config::{AppConfig, AuthConfig, ConfigError, LogFormat, LogLevel};
 use knoted_core::context::{AppContext, FixedClock};
-use knoted_core::db::testing::TestDb;
+use knoted_core::db::testing::{TestDb, test_database_url};
 use serde_json::Value;
 use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -109,10 +111,11 @@ async fn list_sessions(
     pool: &PgPool,
     user_id: Uuid,
     now: DateTime<Utc>,
+    cursor: Option<(DateTime<Utc>, Uuid)>,
     limit: Option<u32>,
 ) -> Result<Vec<Session>, knoted_core::db::DbError> {
     let mut connection = connection(pool).await;
-    sessions::list_sessions(&mut connection, user_id, now, limit).await
+    sessions::list_sessions(&mut connection, user_id, now, cursor, limit).await
 }
 
 async fn revoke_session(
@@ -186,6 +189,45 @@ fn anonymous_app(config: AuthConfig) -> Router {
 
 async fn anonymous() -> &'static str {
     "ok"
+}
+
+/// Handler that needs its own pooled connection while the guards run.
+async fn acquire_from_pool(State(ctx): State<AppContext>) -> (StatusCode, &'static str) {
+    match ctx.pool().acquire().await {
+        Ok(connection) => {
+            drop(connection);
+            (StatusCode::OK, "acquired")
+        }
+        Err(_) => (StatusCode::SERVICE_UNAVAILABLE, "pool exhausted"),
+    }
+}
+
+/// Router whose handler checks out one more connection than the pool has.
+fn single_connection_app(ctx: AppContext) -> Router {
+    knoted_api::with_transport_layers(
+        Router::new()
+            .route("/needs-connection", get(acquire_from_pool))
+            .with_state(ctx.clone())
+            .layer(from_fn_with_state(AuthConfig::default(), require_csrf))
+            .layer(from_fn_with_state(ctx, require_session)),
+    )
+}
+
+/// The same schema, reached through a pool that allows exactly one connection.
+async fn single_connection_context(db: &TestDb, now: DateTime<Utc>) -> AppContext {
+    let base = test_database_url();
+    let separator = if base.contains('?') { '&' } else { '?' };
+    let url = format!(
+        "{base}{separator}options[search_path]={},public",
+        db.schema()
+    );
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_millis(500))
+        .connect(&url)
+        .await
+        .expect("a single-connection pool must open");
+    AppContext::new(pool).with_clock(Arc::new(FixedClock::new(now)))
 }
 
 /// Router with the CSRF guard alone, to prove it fails closed without a session.
@@ -465,7 +507,7 @@ async fn t15_2_logout_revokes_only_that_session() {
     );
 
     // The listing reflects the revocation and only returns live sessions.
-    let listed = list_sessions(pool, user, now, None)
+    let listed = list_sessions(pool, user, now, None, None)
         .await
         .expect("sessions must be listable");
     assert!(
@@ -854,6 +896,18 @@ fn t15_7_auth_config_defaults_and_overrides() {
     assert_eq!(config.auth().rp_id, "notes.example");
     assert_eq!(config.auth().origin, "https://notes.example:8443");
 
+    // Without a port the origin is valid as written: a browser omits the default
+    // https port from `Origin`, and the configured value is compared verbatim.
+    std::fs::write(
+        &path,
+        format!(
+            "{database}\n[auth]\nrp_id = \"notes.example\"\norigin = \"https://notes.example\"\n"
+        ),
+    )
+    .expect("the configuration must be written");
+    let config = AppConfig::load(&path).expect("an origin without a port must load");
+    assert_eq!(config.auth().origin, "https://notes.example");
+
     // The RP ID never carries a port, and the origin is compared verbatim, so a
     // trailing slash would silently reject every write. Both are rejected at
     // load time instead.
@@ -880,6 +934,7 @@ fn t15_7_auth_config_defaults_and_overrides() {
             "origin = \"https://wlab.132140.xyz:15601#frag\"",
             "auth.origin",
         ),
+        ("origin = \"https://wlab.132140.xyz:443\"", "auth.origin"),
     ] {
         std::fs::write(&path, format!("{database}\n[auth]\n{section}\n"))
             .expect("the configuration must be written");
@@ -955,6 +1010,15 @@ async fn t15_6_verification_window() {
             .await
             .expect("marking a revoked session must not fail"),
         "a revoked session must not report a successful verification"
+    );
+
+    // An idle-expired session is equally unable to record a verification.
+    let stale = create_session(pool, user, now - Duration::days(10), None, false).await;
+    assert!(
+        !mark_verified(pool, stale.session.id, now)
+            .await
+            .expect("marking an expired session must not fail"),
+        "an expired session must not report a successful verification"
     );
 
     // A login that verified at creation is already verified for T16's sensitive
@@ -1174,7 +1238,7 @@ async fn t15_10_session_list_filters_and_caps() {
     let second = create_session(pool, user, now - Duration::hours(1), Some("second"), false).await;
     let newest = create_session(pool, user, now, Some("newest"), false).await;
 
-    let listed = list_sessions(pool, user, now, None)
+    let listed = list_sessions(pool, user, now, None, None)
         .await
         .expect("sessions must be listable");
     let ids: Vec<Uuid> = listed.iter().map(|session| session.id).collect();
@@ -1190,7 +1254,7 @@ async fn t15_10_session_list_filters_and_caps() {
 
     // The query is bounded: the caller can ask for fewer rows, a zero limit is
     // clamped to one and the maximum limit keeps the statement bounded.
-    let capped = list_sessions(pool, user, now, Some(2))
+    let capped = list_sessions(pool, user, now, None, Some(2))
         .await
         .expect("sessions must be listable");
     assert_eq!(
@@ -1202,7 +1266,7 @@ async fn t15_10_session_list_filters_and_caps() {
         "the limit must keep the newest rows"
     );
     assert_eq!(
-        list_sessions(pool, user, now, Some(0))
+        list_sessions(pool, user, now, None, Some(0))
             .await
             .expect("a zero limit must not fail")
             .len(),
@@ -1210,7 +1274,7 @@ async fn t15_10_session_list_filters_and_caps() {
         "a zero limit must be clamped to one row"
     );
     assert_eq!(
-        list_sessions(pool, user, now, Some(u32::MAX))
+        list_sessions(pool, user, now, None, Some(u32::MAX))
             .await
             .expect("the maximum limit must not fail")
             .len(),
@@ -1218,5 +1282,69 @@ async fn t15_10_session_list_filters_and_caps() {
         "the maximum limit must still bound the query to the existing rows"
     );
 
+    // A keyset cursor walks the whole list without overlap or gaps.
+    let first_page = list_sessions(pool, user, now, None, Some(2))
+        .await
+        .expect("the first page must be listable");
+    assert_eq!(
+        first_page
+            .iter()
+            .map(|session| session.id)
+            .collect::<Vec<Uuid>>(),
+        vec![newest.session.id, second.session.id]
+    );
+    let cursor = first_page
+        .last()
+        .map(|session| (session.created_at, session.id))
+        .expect("the first page must not be empty");
+    let second_page = list_sessions(pool, user, now, Some(cursor), Some(2))
+        .await
+        .expect("the second page must be listable");
+    assert_eq!(
+        second_page
+            .iter()
+            .map(|session| session.id)
+            .collect::<Vec<Uuid>>(),
+        vec![middle.session.id],
+        "the cursor must continue after the last row of the first page"
+    );
+    let walked: Vec<Uuid> = first_page
+        .iter()
+        .chain(second_page.iter())
+        .map(|session| session.id)
+        .collect();
+    assert_eq!(
+        walked,
+        vec![newest.session.id, second.session.id, middle.session.id],
+        "paging must neither repeat nor skip a session"
+    );
+
+    db.drop().await;
+}
+
+#[tokio::test]
+async fn t15_11_session_guard_releases_its_connection() {
+    let db = test_db().await;
+    let now = fixed_now();
+    let user = owner(&db.pool).await;
+    let session = new_session(&db.pool, user, now).await;
+    let app = single_connection_app(single_connection_context(&db, now).await);
+
+    // With `max_connections = 1`, the handler can only check out a connection if
+    // the session guard already returned its own. Holding it across `next.run`
+    // would deadlock the request until the acquire timeout and answer 503.
+    let (status, _, body) = call(
+        &app,
+        session_request(Method::GET, "/needs-connection", &session),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the session guard must release its connection before the handler runs: {body}"
+    );
+    assert_eq!(body, Value::String("acquired".to_owned()));
+
+    drop(app);
     db.drop().await;
 }

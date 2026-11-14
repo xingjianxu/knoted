@@ -354,7 +354,10 @@ fn validate_auth(auth: &AuthConfig) -> Result<(), ConfigError> {
         && origin.fragment().is_none()
         && origin.username().is_empty()
         && origin.password().is_none();
-    if !canonical || auth.origin.ends_with('/') {
+    // A browser never writes the default https port into `Origin`, and `url`
+    // normalises `:443` away, so an explicit default port in the configuration
+    // would silently never match. Reject it at load time instead.
+    if !canonical || auth.origin.ends_with('/') || auth.origin.ends_with(":443") {
         return Err(invalid_origin());
     }
     Ok(())
@@ -364,7 +367,7 @@ fn invalid_origin() -> ConfigError {
     ConfigError::Invalid {
         field: "auth.origin",
         message: "must be `https://host[:port]` without credentials, path, query, \
-                  fragment or trailing slash"
+                  fragment, trailing slash or the default `:443` port"
             .to_owned(),
     }
 }

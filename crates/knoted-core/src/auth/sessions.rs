@@ -338,14 +338,21 @@ pub async fn logout(
 /// DESC`), which is the stable order a keyset cursor needs.
 ///
 /// The contract's `next_cursor` encoding is a DTO concern and belongs to the
-/// route layer (T14); this function guarantees the bounded, deterministically
-/// ordered page that cursor is derived from.
+/// route layer (T14); this function consumes the decoded `(created_at, id)` pair
+/// and guarantees the bounded, deterministically ordered page the cursor is
+/// derived from. Only rows strictly older in that total order are returned, so
+/// walking page after page neither repeats nor skips a row.
 pub async fn list_sessions(
     executor: &mut PgConnection,
     user_id: Uuid,
     now: DateTime<Utc>,
+    cursor: Option<(DateTime<Utc>, Uuid)>,
     limit: Option<u32>,
 ) -> Result<Vec<Session>, DbError> {
+    let (cursor_created_at, cursor_id) = match cursor {
+        Some((created_at, id)) => (Some(created_at), Some(id)),
+        None => (None, None),
+    };
     let limit = i64::from(
         limit
             .unwrap_or(SESSION_PAGE_DEFAULT_LIMIT)
@@ -355,10 +362,14 @@ pub async fn list_sessions(
         "SELECT {SESSION_COLUMNS} FROM sessions \
          WHERE user_id = $1 AND revoked_at IS NULL \
            AND idle_expires_at > $2 AND absolute_expires_at > $2 \
-         ORDER BY created_at DESC, id DESC LIMIT $3"
+           AND ($3::timestamptz IS NULL \
+                OR (created_at, id) < ($3::timestamptz, $4::uuid)) \
+         ORDER BY created_at DESC, id DESC LIMIT $5"
     ))
     .bind(user_id)
     .bind(now)
+    .bind(cursor_created_at)
+    .bind(cursor_id)
     .bind(limit)
     .fetch_all(&mut *executor)
     .await?;
@@ -437,7 +448,9 @@ pub async fn mark_verified(
     now: DateTime<Utc>,
 ) -> Result<bool, DbError> {
     let updated = sqlx::query(
-        "UPDATE sessions SET last_verified_at = $2 WHERE id = $1 AND revoked_at IS NULL",
+        "UPDATE sessions SET last_verified_at = $2 \
+         WHERE id = $1 AND revoked_at IS NULL \
+           AND idle_expires_at > $2 AND absolute_expires_at > $2",
     )
     .bind(session_id)
     .bind(now)
