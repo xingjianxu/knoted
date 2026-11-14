@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+base64.workspace = true
 chrono.workspace = true
+rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -12,6 +14,7 @@ sha2.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 toml.workspace = true
+tracing.workspace = true
 # Needed by the test-only schema helper, which cleans up after a panicking test
 # from a dedicated runtime.
 tokio.workspace = true
