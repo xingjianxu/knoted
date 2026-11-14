@@ -9,6 +9,10 @@ pub enum DbError {
     Migrate(#[from] sqlx::migrate::MigrateError),
     #[error("unknown source identity type `{0}`")]
     UnknownSourceType(String),
+    #[error("an enqueue without an idempotency key reported a duplicate conflict")]
+    UnkeyedIdempotentConflict,
+    #[error("invalid job attempt budget {0}: max_attempts must be at least 1")]
+    InvalidMaxAttempts(i32),
     #[error("refusing to use `{0}` as a test database: name must end with `_test`")]
     UnsafeTestTarget(String),
 }

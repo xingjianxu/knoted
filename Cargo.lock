@@ -802,6 +802,10 @@ name = "knoted-worker"
 version = "0.1.0"
 dependencies = [
  "knoted-core",
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

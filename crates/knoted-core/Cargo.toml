@@ -4,16 +4,16 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+chrono.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
 thiserror.workspace = true
 toml.workspace = true
-sqlx.workspace = true
-chrono.workspace = true
 # Needed by the test-only schema helper, which cleans up after a panicking test
 # from a dedicated runtime.
 tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 tempfile.workspace = true
