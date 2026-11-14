@@ -6,7 +6,9 @@
 //! The client is deliberately literal: `cancel_execution` returns whatever the
 //! service recorded, including `cancel_requested`, and only
 //! [`ExecutionState::cancellation_confirmed`] says a child is really gone. An
-//! HTTP timeout is a lost answer, never a cancelled computation.
+//! HTTP timeout is a lost answer, never a cancelled computation, which is why a
+//! timed-out cancel is reported as [`IntelligenceError::CancelUnconfirmed`]
+//! instead of a transport error: the caller must poll the record.
 
 use std::time::Duration;
 
@@ -25,6 +27,13 @@ use crate::files::staging::StagingStore;
 /// Short on purpose: every endpoint is a bookkeeping call, and a parse that
 /// takes minutes is observed by polling, not by one long request.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Timeout for a cancel request.
+///
+/// Longer than [`DEFAULT_TIMEOUT`] on purpose: the service may spend the whole
+/// SIGTERM grace period plus the SIGKILL budget before it answers. Even so, a
+/// timeout only means "not confirmed" — never "cancelled".
+pub const CANCEL_TIMEOUT: Duration = Duration::from_secs(30);
 
 const EXECUTIONS_PATH: &str = "/internal/v1/executions";
 const HEALTH_PATH: &str = "/internal/v1/health";
@@ -45,6 +54,7 @@ pub struct CreateOutcome {
 pub struct IntelligenceClient {
     base_url: String,
     http: reqwest::Client,
+    cancel_timeout: Duration,
 }
 
 impl IntelligenceClient {
@@ -79,7 +89,14 @@ impl IntelligenceClient {
         Ok(IntelligenceClient {
             base_url: trimmed.to_owned(),
             http,
+            cancel_timeout: CANCEL_TIMEOUT,
         })
+    }
+
+    /// Overrides how long a cancel request waits for the service to answer.
+    pub fn with_cancel_timeout(mut self, cancel_timeout: Duration) -> IntelligenceClient {
+        self.cancel_timeout = cancel_timeout;
+        self
     }
 
     /// The base url, without a trailing slash.
@@ -138,8 +155,18 @@ impl IntelligenceClient {
         let response = self
             .http
             .post(format!("{}/cancel", self.execution_url(execution_id)))
+            .timeout(self.cancel_timeout)
             .send()
-            .await?;
+            .await
+            .map_err(|error| {
+                if error.is_timeout() {
+                    // A lost answer is not a confirmation: the child may still be
+                    // alive, so the caller has to observe the record itself.
+                    IntelligenceError::CancelUnconfirmed { execution_id }
+                } else {
+                    IntelligenceError::Transport(error)
+                }
+            })?;
         self.expect_ok("cancel_execution", response).await
     }
 

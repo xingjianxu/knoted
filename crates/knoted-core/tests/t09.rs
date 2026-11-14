@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::time::Duration as StdDuration;
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use knoted_core::files::staging::{ObjectId, Sha256Hex, StagingError, StagingStore};
@@ -161,6 +162,31 @@ fn t09_contract_shapes_round_trip() {
     let record: ExecutionRecord = serde_json::from_value(minimal).expect("optional fields");
     assert_eq!(record.error, None);
     assert_eq!(record.started_at, None);
+
+    // `metadata` is optional, but when present it is an object of strings; a
+    // null or a nested value is a contract violation, not something to coerce.
+    let object_id = ObjectId::parse("result-t09.json").expect("valid id");
+    let digest = Sha256Hex::parse("a".repeat(64)).expect("valid digest");
+    let result = result_with(&object_id, digest, 1);
+    let wire = serde_json::to_value(&result).expect("result serialises");
+    assert!(
+        wire.get("metadata").is_none(),
+        "an empty metadata map is omitted rather than sent as null"
+    );
+    let mut with_metadata = wire.clone();
+    with_metadata["metadata"] = json!({ "source_version": "1" });
+    let parsed: ExecutionResult =
+        serde_json::from_value(with_metadata).expect("a string map is accepted");
+    assert_eq!(
+        parsed.metadata.get("source_version").map(String::as_str),
+        Some("1")
+    );
+    let mut null_metadata = wire;
+    null_metadata["metadata"] = Value::Null;
+    assert!(
+        serde_json::from_value::<ExecutionResult>(null_metadata).is_err(),
+        "null metadata is not the contract's string map"
+    );
 }
 
 #[tokio::test]
@@ -500,6 +526,78 @@ async fn t09_cancel_requires_confirmation() {
 }
 
 #[tokio::test]
+async fn t09_cancel_timeout_is_not_a_confirmation() {
+    let server = MockServer::start().await;
+    let route = format!("/internal/v1/executions/{EXECUTION_ID}/cancel");
+    Mock::given(method("POST"))
+        .and(path(route.clone()))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(StdDuration::from_millis(600))
+                .set_body_json(record_json(&record_with(
+                    &request(),
+                    ExecutionState::Cancelled,
+                    Some(base_instant() + Duration::minutes(1)),
+                ))),
+        )
+        .mount(&server)
+        .await;
+
+    let client = IntelligenceClient::new(server.uri())
+        .expect("client builds")
+        .with_cancel_timeout(StdDuration::from_millis(150));
+    let error = client
+        .cancel_execution(execution_id())
+        .await
+        .expect_err("a timed-out cancel is not an answer");
+    match error {
+        IntelligenceError::CancelUnconfirmed { execution_id } => {
+            assert_eq!(execution_id, self::execution_id());
+        }
+        other => panic!("expected an unconfirmed cancellation, got {other}"),
+    }
+
+    // A timed-out read is a plain transport failure: nothing was confirmed and
+    // nothing may be assumed about the record either.
+    server.reset().await;
+    mount(
+        &server,
+        "GET",
+        format!("/internal/v1/executions/{EXECUTION_ID}"),
+        200,
+        record_json(&record_with(&request(), ExecutionState::Running, None)),
+    )
+    .await;
+    let http = reqwest::Client::builder()
+        .timeout(StdDuration::from_millis(50))
+        .build()
+        .expect("the test client builds");
+    let impatient = IntelligenceClient::with_client(server.uri(), http)
+        .expect("client builds")
+        .with_cancel_timeout(StdDuration::from_millis(50));
+    // The route above answers immediately, so make the delay explicit.
+    server.reset().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/internal/v1/executions/{EXECUTION_ID}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(StdDuration::from_millis(600))
+                .set_body_json(record_json(&record_with(
+                    &request(),
+                    ExecutionState::Running,
+                    None,
+                ))),
+        )
+        .mount(&server)
+        .await;
+    let error = impatient
+        .get_execution(execution_id())
+        .await
+        .expect_err("the read times out");
+    assert!(matches!(error, IntelligenceError::Transport(_)), "{error}");
+}
+
+#[tokio::test]
 async fn t09_client_create_outcome_and_error_envelope() {
     let server = MockServer::start().await;
     let request = request();
@@ -690,6 +788,30 @@ fn t09_staging_object_ids_and_atomic_write() {
         Sha256Hex::parse(staged.sha256.as_str()).expect("the computed digest parses"),
         staged.sha256
     );
+
+    // A symlink planted in the staging root cannot be used to reach outside it.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+
+        let link = ObjectId::parse("escape-link").expect("valid id");
+        symlink("/etc/passwd", directory.path().join("escape-link"))
+            .expect("the symlink is created");
+        let read_error = store
+            .read(&link)
+            .expect_err("a symlink outside the root is refused");
+        assert!(
+            matches!(read_error, StagingError::EscapesRoot { .. }),
+            "{read_error}"
+        );
+        let write_error = store
+            .write(&link, b"must-not-reach-the-target")
+            .expect_err("writing through the symlink is refused");
+        assert!(
+            matches!(write_error, StagingError::EscapesRoot { .. }),
+            "{write_error}"
+        );
+    }
 
     // A missing object is reported, not guessed.
     let missing = ObjectId::parse("not-staged.json").expect("valid id");

@@ -19,7 +19,7 @@
 
 pub mod client;
 
-pub use client::{CreateOutcome, DEFAULT_TIMEOUT, IntelligenceClient};
+pub use client::{CANCEL_TIMEOUT, CreateOutcome, DEFAULT_TIMEOUT, IntelligenceClient};
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -346,6 +346,19 @@ pub enum IntelligenceError {
         operation: &'static str,
         /// HTTP status code.
         status: u16,
+    },
+    /// A cancellation request timed out, so the exit is **not** confirmed.
+    ///
+    /// The HTTP answer was lost; the computation may still be running. The
+    /// caller must poll `GET /executions/{id}` (see
+    /// [`ExecutionState::cancellation_confirmed`]) before releasing anything.
+    #[error(
+        "cancellation of execution {execution_id} was not confirmed before the request \
+         timed out; poll the record instead"
+    )]
+    CancelUnconfirmed {
+        /// Execution whose cancellation is uncertain.
+        execution_id: Uuid,
     },
     /// The response body does not match the contract.
     #[error("intelligence service response is not the contract: {reason}")]
