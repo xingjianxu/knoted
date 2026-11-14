@@ -5,22 +5,36 @@
 //! pool, and serve the router from [`knoted_api::build_router`]. Business
 //! routes live in the library crate.
 
+use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use knoted_api::admin::{self, TokenCommand};
 use knoted_api::build_router;
 use knoted_api::logging;
 use knoted_core::config::{AppConfig, ProcessKind};
 use knoted_core::context::AppContext;
 use knoted_core::db;
 
-const USAGE: &str = "usage: knoted-api [--config <PATH>]";
+const USAGE: &str = "usage: knoted-api [--config <PATH>]\n       \
+     knoted-api admin token --purpose <bootstrap|recovery> --config <PATH>";
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    // `admin` is a subcommand, not a flag: dispatch before the server parser
+    // sees the arguments, so an unknown admin flag never looks like a server
+    // flag.
+    if args.first().is_some_and(|arg| arg == "admin") {
+        return run_admin(&args[1..]).await;
+    }
+    run_server(args).await
+}
+
+async fn run_server(args: Vec<String>) -> ExitCode {
     let mut config_path = None;
-    let mut args = std::env::args().skip(1);
+    let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--config" => {
@@ -101,4 +115,61 @@ async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
+}
+
+async fn run_admin(args: &[String]) -> ExitCode {
+    let Some(subcommand) = args.first() else {
+        eprintln!("knoted-api: admin requires a subcommand");
+        eprintln!("{USAGE}");
+        return ExitCode::from(2);
+    };
+
+    match subcommand.as_str() {
+        "token" => run_admin_token(&args[1..]).await,
+        "--help" | "help" => {
+            println!("{USAGE}");
+            ExitCode::SUCCESS
+        }
+        other => {
+            eprintln!("knoted-api: unknown admin command `{other}`");
+            eprintln!("{USAGE}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+async fn run_admin_token(args: &[String]) -> ExitCode {
+    let command = match TokenCommand::parse(args) {
+        Ok(command) => command,
+        Err(error) => {
+            eprintln!("knoted-api: {error}");
+            eprintln!("{}", admin::USAGE);
+            return ExitCode::from(2);
+        }
+    };
+
+    let config = match AppConfig::load_for_process(&command.config, ProcessKind::Api) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("knoted-api: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if let Err(error) = logging::init(config.logging.level, config.logging.format) {
+        eprintln!("knoted-api: {error}");
+        return ExitCode::FAILURE;
+    }
+
+    // stdout is the operator's channel: the token is printed once here and
+    // nowhere else. Errors and logs carry fixed messages, never the token.
+    let mut stdout = io::stdout().lock();
+    match admin::run_token_command(&command, &config, &mut stdout).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            tracing::error!(error = %error, "admin token command failed");
+            eprintln!("knoted-api: {error}");
+            ExitCode::FAILURE
+        }
+    }
 }
