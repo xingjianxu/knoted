@@ -10,7 +10,8 @@
     "lint": "pnpm -r --if-present run lint",
     "test": "pnpm -r --if-present run test",
     "build": "pnpm -r --if-present run build",
-    "api:check": "node api/examples/check.mjs"
+    "api:check": "node api/examples/check.mjs",
+    "api:generate": "pnpm --filter @knoted/api-client run generate"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
