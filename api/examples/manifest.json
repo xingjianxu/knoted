@@ -42,6 +42,12 @@
     },
     {
       "document": "openapi.yaml",
+      "schema": "DateValue",
+      "file": "invalid/date-value-missing-time.json",
+      "valid": false
+    },
+    {
+      "document": "openapi.yaml",
       "schema": "NoteUpdate",
       "file": "valid/note-update.json",
       "valid": true

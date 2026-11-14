@@ -207,6 +207,132 @@ const EXPECTED_VERSION_SCHEMAS = [
   "ChatSessionUpdate",
 ];
 
+const REQUIRED_EXAMPLES = [
+  {
+    document: "openapi.yaml",
+    schema: "TaskStatus",
+    file: "valid/task-status-in-progress.json",
+    valid: true,
+  },
+  {
+    document: "openapi.yaml",
+    schema: "TaskStatus",
+    file: "invalid/task-status-blocked.json",
+    valid: false,
+  },
+  {
+    document: "openapi.yaml",
+    schema: "DateValue",
+    file: "valid/date-value-date-only.json",
+    valid: true,
+  },
+  {
+    document: "openapi.yaml",
+    schema: "DateValue",
+    file: "valid/date-value-with-time.json",
+    valid: true,
+  },
+  {
+    document: "openapi.yaml",
+    schema: "DateValue",
+    file: "invalid/date-value-bad-time.json",
+    valid: false,
+  },
+  {
+    document: "openapi.yaml",
+    schema: "DateValue",
+    file: "invalid/date-value-missing-date.json",
+    valid: false,
+  },
+  {
+    document: "openapi.yaml",
+    schema: "DateValue",
+    file: "invalid/date-value-missing-time.json",
+    valid: false,
+  },
+  {
+    document: "openapi.yaml",
+    schema: "NoteUpdate",
+    file: "valid/note-update.json",
+    valid: true,
+  },
+  {
+    document: "openapi.yaml",
+    schema: "NoteUpdate",
+    file: "invalid/note-update-missing-expected-version.json",
+    valid: false,
+  },
+  {
+    document: "openapi.yaml",
+    schema: "TaskCreate",
+    file: "valid/task-create.json",
+    valid: true,
+  },
+  {
+    document: "openapi.yaml",
+    schema: "TaskCreate",
+    file: "invalid/task-create-bad-priority.json",
+    valid: false,
+  },
+  {
+    document: "openapi.yaml",
+    schema: "ApiError",
+    file: "valid/api-error.json",
+    valid: true,
+  },
+  {
+    document: "openapi.yaml",
+    schema: "ApiError",
+    file: "invalid/api-error-missing-request-id.json",
+    valid: false,
+  },
+  {
+    document: "intelligence.openapi.yaml",
+    schema: "ExecutionRequest",
+    file: "valid/execution-request-parse.json",
+    valid: true,
+  },
+  {
+    document: "intelligence.openapi.yaml",
+    schema: "ExecutionRequest",
+    file: "invalid/execution-request-bad-kind.json",
+    valid: false,
+  },
+  {
+    document: "intelligence.openapi.yaml",
+    schema: "ExecutionState",
+    file: "valid/execution-state-interrupted.json",
+    valid: true,
+  },
+];
+
+const CSRF_EXEMPT_PATHS = new Set([
+  "/auth/bootstrap/options",
+  "/auth/bootstrap/finish",
+  "/auth/recovery/options",
+  "/auth/recovery/finish",
+  "/auth/login/options",
+  "/auth/login/finish",
+]);
+
+const LIST_RESPONSE_SCHEMAS = new Set([
+  "AuthSessionPage",
+  "PasskeyPage",
+  "NotePage",
+  "SnapshotPage",
+  "TagPage",
+  "ProjectPage",
+  "TaskPage",
+  "ActivityPage",
+  "ActivityRevisionPage",
+  "TrashPage",
+  "FileSourcePage",
+  "SearchResponse",
+  "JobPage",
+  "ChatSessionPage",
+  "CitationPage",
+]);
+
 const ETAG_ENTITY_SCHEMAS = new Set([
   "Note",
   "Project",
@@ -214,6 +340,7 @@ const ETAG_ENTITY_SCHEMAS = new Set([
   "Tag",
   "FileSource",
   "ChatSession",
+  "ChatSessionDetail",
 ]);
 
 class ContractError extends Error {}
@@ -394,6 +521,45 @@ function checkOperations(document, documentName, operations, requiredInventory) 
       `${label}: 缺少 200/201/204 成功响应`,
     );
 
+    for (const status of ["200", "201"]) {
+      const successResponse = operation.responses[status];
+      if (successResponse === undefined) continue;
+      const resolved = resolveLocal(
+        document,
+        successResponse,
+        `${label} ${status} 成功响应`,
+      );
+      const content = resolved.content;
+      check(
+        content !== null &&
+          typeof content === "object" &&
+          Object.keys(content).length > 0,
+        `${label}: ${status} 成功响应必须有 content`,
+      );
+      for (const [mediaType, media] of Object.entries(content)) {
+        const schema = media?.schema;
+        check(
+          schema !== null &&
+            typeof schema === "object" &&
+            Object.keys(schema).length > 0,
+          `${label}: ${status} ${mediaType} 响应 schema 不能为空`,
+        );
+        if (mediaType === "application/json") {
+          check(
+            typeof schema.$ref === "string" ||
+              typeof schema.type === "string" ||
+              Array.isArray(schema.anyOf) ||
+              Array.isArray(schema.oneOf) ||
+              Array.isArray(schema.allOf) ||
+              schema.properties !== undefined ||
+              schema.enum !== undefined ||
+              schema.const !== undefined,
+            `${label}: ${status} JSON 响应 schema 必须是具体 schema`,
+          );
+        }
+      }
+    }
+
     for (const [status, response] of Object.entries(operation.responses)) {
       const resolved = resolveLocal(document, response, `${label} ${status}`);
       check(
@@ -442,6 +608,31 @@ function checkOperations(document, documentName, operations, requiredInventory) 
     ].entries()) {
       parameters.push(
         resolveLocal(document, parameter, `${label} parameter[${index}]`),
+      );
+    }
+
+    const csrfRequired =
+      documentName === BROWSER_DOCUMENT &&
+      method !== "GET" &&
+      !CSRF_EXEMPT_PATHS.has(path);
+    if (csrfRequired) {
+      const csrfParameter = parameters.find(
+        (parameter) =>
+          parameter.name === "X-CSRF-Token" && parameter.in === "header",
+      );
+      check(
+        csrfParameter !== undefined,
+        `${label}: 非 GET 操作必须声明 X-CSRF-Token`,
+      );
+      check(
+        csrfParameter.required === false,
+        `${label}: X-CSRF-Token 必须 required: false（同源中间件自动附加）`,
+      );
+      check(
+        (operation.parameters ?? []).some(
+          (parameter) => parameter.$ref === "#/components/parameters/CsrfToken",
+        ),
+        `${label}: CSRF 参数必须 $ref CsrfToken 组件`,
       );
     }
 
@@ -532,6 +723,41 @@ function runChecks() {
   checkInfo(browser, BROWSER_DOCUMENT, "/api/v1");
   checkInfo(internal, INTERNAL_DOCUMENT, "http://127.0.0.1:15603");
 
+  const infoDescription = browser.info?.description;
+  check(
+    typeof infoDescription === "string" && infoDescription.length > 0,
+    "openapi.yaml: info.description 必须存在",
+  );
+  for (const requiredText of [
+    "/api/v1",
+    "knoted_session",
+    "HttpOnly",
+    "Secure",
+    "SameSite=Lax",
+    "knoted_csrf",
+    "X-CSRF-Token",
+    "Origin",
+    "expected_version",
+    "Idempotency-Key",
+  ]) {
+    check(
+      infoDescription.includes(requiredText),
+      `openapi.yaml: info.description 缺少说明：${requiredText}`,
+    );
+  }
+  check(
+    /闲置\s*7\s*天/.test(infoDescription),
+    "openapi.yaml: info.description 必须说明会话闲置 7 天过期",
+  );
+  check(
+    /绝对\s*30\s*天/.test(infoDescription),
+    "openapi.yaml: info.description 必须说明会话绝对 30 天过期",
+  );
+  check(
+    /7\s*天过期/.test(infoDescription),
+    "openapi.yaml: info.description 必须说明 Idempotency-Key 7 天过期",
+  );
+
   const browserOperations = collectOperations(browser, BROWSER_DOCUMENT);
   const internalOperations = collectOperations(internal, INTERNAL_DOCUMENT);
   checkOperations(
@@ -572,6 +798,152 @@ function runChecks() {
       );
     }
   }
+
+  const browserSchemas = browser.components?.schemas ?? {};
+
+  const dateValue = browserSchemas.DateValue;
+  check(dateValue !== undefined, "openapi.yaml: 缺少 DateValue");
+  check(
+    dateValue.additionalProperties === false,
+    "openapi.yaml#/components/schemas/DateValue: 必须 additionalProperties: false",
+  );
+  check(
+    JSON.stringify(dateValue.required) ===
+      JSON.stringify(["date", "time", "timezone"]),
+    "openapi.yaml#/components/schemas/DateValue: required 必须精确为 date,time,timezone",
+  );
+  check(
+    JSON.stringify(dateValue.properties?.time?.type) ===
+      JSON.stringify(["string", "null"]),
+    "openapi.yaml#/components/schemas/DateValue: time 必须为 [string,null]",
+  );
+  check(
+    dateValue.properties?.time?.pattern === "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+    "openapi.yaml#/components/schemas/DateValue: time 必须使用 HH:mm 严格 pattern",
+  );
+  check(
+    dateValue.properties?.timezone?.const === "Asia/Shanghai",
+    "openapi.yaml#/components/schemas/DateValue: timezone 必须 const Asia/Shanghai",
+  );
+
+  for (const [schemaName, schema] of Object.entries(browserSchemas)) {
+    if (
+      !schemaName.endsWith("Page") &&
+      !LIST_RESPONSE_SCHEMAS.has(schemaName)
+    ) {
+      continue;
+    }
+    check(
+      schema.required?.includes("items"),
+      `openapi.yaml#/components/schemas/${schemaName}: required 缺少 items`,
+    );
+    check(
+      schema.required?.includes("next_cursor"),
+      `openapi.yaml#/components/schemas/${schemaName}: required 缺少 next_cursor`,
+    );
+  }
+
+  const noteSchema = browserSchemas.Note;
+  check(
+    noteSchema?.required?.includes("position"),
+    "openapi.yaml#/components/schemas/Note: required 缺少 position",
+  );
+  check(
+    noteSchema?.properties?.position?.type === "integer",
+    "openapi.yaml#/components/schemas/Note: position 必须为 integer",
+  );
+  check(
+    browserSchemas.NoteCreate?.properties?.position === undefined,
+    "openapi.yaml#/components/schemas/NoteCreate: position 必须保持只读",
+  );
+  check(
+    browserSchemas.NoteUpdate?.properties?.position === undefined,
+    "openapi.yaml#/components/schemas/NoteUpdate: position 必须保持只读",
+  );
+
+  const chatSessionDetail = browserSchemas.ChatSessionDetail;
+  check(
+    chatSessionDetail !== undefined,
+    "openapi.yaml: 缺少 ChatSessionDetail",
+  );
+  check(
+    chatSessionDetail.required?.includes("messages"),
+    "openapi.yaml#/components/schemas/ChatSessionDetail: required 缺少 messages",
+  );
+  check(
+    chatSessionDetail.properties?.messages?.items?.$ref ===
+      "#/components/schemas/ChatMessage",
+    "openapi.yaml#/components/schemas/ChatSessionDetail: messages 必须引用 ChatMessage",
+  );
+  const getChatSession = findOperation(browserOperations, "getChatSession");
+  const getChatSessionResponse = resolveLocal(
+    browser,
+    getChatSession.operation.responses["200"],
+    "getChatSession 200",
+  );
+  check(
+    getChatSessionResponse.content?.["application/json"]?.schema?.$ref ===
+      "#/components/schemas/ChatSessionDetail",
+    "getChatSession: 200 必须返回 ChatSessionDetail",
+  );
+
+  for (const schemaName of ["NoteUpdate", "TaskUpdate", "ProjectUpdate"]) {
+    const schema = browserSchemas[schemaName];
+    check(
+      schema?.required?.includes("expected_version"),
+      `openapi.yaml#/components/schemas/${schemaName}: required 缺少 expected_version`,
+    );
+    check(
+      schema?.minProperties === 2,
+      `openapi.yaml#/components/schemas/${schemaName}: 必须 minProperties: 2（至少一个变更字段）`,
+    );
+  }
+  for (const schemaName of ["NoteMoveRequest", "NoteRestoreRequest"]) {
+    const schema = browserSchemas[schemaName];
+    check(
+      schema?.required?.includes("expected_version"),
+      `openapi.yaml#/components/schemas/${schemaName}: required 缺少 expected_version`,
+    );
+  }
+  check(
+    browserSchemas.NoteMoveRequest?.required?.includes("parent_id") &&
+      browserSchemas.NoteMoveRequest?.required?.includes("position"),
+    "openapi.yaml#/components/schemas/NoteMoveRequest: required 必须包含 parent_id/position",
+  );
+
+  const csrfParameterComponent = browser.components?.parameters?.CsrfToken;
+  check(
+    csrfParameterComponent?.name === "X-CSRF-Token" &&
+      csrfParameterComponent?.in === "header" &&
+      csrfParameterComponent?.required === false &&
+      typeof csrfParameterComponent?.description === "string" &&
+      csrfParameterComponent.description.includes("knoted_csrf") &&
+      csrfParameterComponent.description.includes("Origin"),
+    "openapi.yaml#/components/parameters/CsrfToken: 必须定义 X-CSRF-Token 头并与 knoted_csrf/Origin 关联",
+  );
+
+  const streamChatRunEvents = findOperation(
+    browserOperations,
+    "streamChatRunEvents",
+  );
+  const sseResponse = resolveLocal(
+    browser,
+    streamChatRunEvents.operation.responses["200"],
+    "streamChatRunEvents 200",
+  );
+  const sseMedia = sseResponse.content?.["text/event-stream"];
+  check(
+    typeof sseMedia?.schema?.description === "string" &&
+      sseMedia.schema.description.includes("ChatEvent"),
+    "streamChatRunEvents: SSE schema description 必须点名 ChatEvent",
+  );
+  check(
+    typeof sseMedia?.example === "string" &&
+      sseMedia.example.includes("event: delta") &&
+      sseMedia.example.includes("data: {") &&
+      sseMedia.example.endsWith("\n\n"),
+    "streamChatRunEvents: 必须提供一条 event/data SSE 示例帧",
+  );
 
   const internalSchemas = internal.components?.schemas ?? {};
   check(
@@ -674,6 +1046,65 @@ function runChecks() {
     Array.isArray(manifest.examples),
     "api/examples/manifest.json: examples 必须是数组",
   );
+
+  const requiredByFile = new Map(
+    REQUIRED_EXAMPLES.map((example) => [example.file, example]),
+  );
+  const manifestByFile = new Map();
+  for (const example of manifest.examples) {
+    check(
+      example !== null && typeof example === "object",
+      "api/examples/manifest.json: examples 条目必须是对象",
+    );
+    check(
+      typeof example.file === "string" && example.file.length > 0,
+      "api/examples/manifest.json: examples 条目缺少 file",
+    );
+    check(
+      !manifestByFile.has(example.file),
+      `api/examples/manifest.json: 样例文件重复登记：${example.file}`,
+    );
+    manifestByFile.set(example.file, example);
+    check(
+      requiredByFile.has(example.file),
+      `api/examples/manifest.json: 清单外样例 ${example.file}（必须登记到 REQUIRED_EXAMPLES）`,
+    );
+    if (example.valid) {
+      check(
+        example.file.startsWith("valid/"),
+        `api/examples/manifest.json: valid=true 的样例必须位于 valid/：${example.file}`,
+      );
+    } else {
+      check(
+        example.file.startsWith("invalid/"),
+        `api/examples/manifest.json: valid=false 的样例必须位于 invalid/：${example.file}`,
+      );
+    }
+  }
+  for (const requiredExample of REQUIRED_EXAMPLES) {
+    const listed = manifestByFile.get(requiredExample.file);
+    check(
+      listed !== undefined,
+      `api/examples/manifest.json: 缺少必需样例 ${requiredExample.file}`,
+    );
+    check(
+      listed.document === requiredExample.document &&
+        listed.schema === requiredExample.schema &&
+        listed.valid === requiredExample.valid,
+      `api/examples/manifest.json: 必需样例登记不符 ${requiredExample.file}（期望 ${requiredExample.document}#${requiredExample.schema} valid=${requiredExample.valid}）`,
+    );
+    const requiredPath = resolve(EXAMPLES_DIR, requiredExample.file);
+    let requiredStat;
+    try {
+      requiredStat = statSync(requiredPath);
+    } catch {
+      fail(`api/examples/${requiredExample.file}: 必需样例文件不存在`);
+    }
+    check(
+      requiredStat.isFile(),
+      `api/examples/${requiredExample.file}: 必需样例不是文件`,
+    );
+  }
 
   const listedFiles = new Set();
   const ajv = new Ajv2020({

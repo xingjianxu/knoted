@@ -2,7 +2,10 @@ openapi: 3.1.0
 info:
   title: Knoted API
   version: 1.0.0
-  description: Knoted 浏览器同源 HTTP 契约。所有业务路径位于 /api/v1 之下，路径模板不重复该前缀。ID 为 UUID，绝对时间为 UTC RFC3339；业务日期使用 DateValue。
+  description: |-
+    Knoted 浏览器同源 HTTP 契约。所有业务路径位于 /api/v1 之下，路径模板不重复该前缀。ID 为 UUID，绝对时间为 UTC RFC3339；业务日期使用 DateValue。
+
+    鉴权与写入：浏览器使用 HttpOnly、Secure、SameSite=Lax 的会话 cookie knoted_session（闲置 7 天、绝对 30 天过期）；CSRF token 取自 knoted_csrf cookie，写入请求由同源客户端中间件自动附加 X-CSRF-Token 头，服务端同时校验 Origin。详情响应返回 ETag，更新/删除/恢复以整数 expected_version 做 CAS。创建消息、资产登记和扫描提交使用 Idempotency-Key，按账号+操作+键保存请求摘要与结果，7 天过期；同键不同请求返回 409。
 servers:
   - url: /api/v1
 tags:
@@ -279,6 +282,8 @@ paths:
           $ref: "#/components/responses/TooManyRequests"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
   /auth/sessions:
     get:
       tags:
@@ -313,6 +318,7 @@ paths:
       operationId: deleteSession
       parameters:
         - $ref: "#/components/parameters/SessionId"
+        - $ref: "#/components/parameters/CsrfToken"
       responses:
         "204":
           description: 会话已撤销。
@@ -384,6 +390,8 @@ paths:
           $ref: "#/components/responses/TooManyRequests"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
   /auth/passkeys/finish:
     post:
       tags:
@@ -417,6 +425,8 @@ paths:
           $ref: "#/components/responses/TooManyRequests"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
   /auth/passkeys/{passkeyId}:
     delete:
       tags:
@@ -426,6 +436,7 @@ paths:
       description: 禁止删除最后一个 Passkey；账号恢复流程允许先替换再撤销旧凭据。
       parameters:
         - $ref: "#/components/parameters/PasskeyId"
+        - $ref: "#/components/parameters/CsrfToken"
       responses:
         "204":
           description: 凭据已删除。
@@ -507,6 +518,8 @@ paths:
           $ref: "#/components/responses/TooManyRequests"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
   /notes/{noteId}:
     get:
       tags:
@@ -545,6 +558,7 @@ paths:
       description: 必须携带 expected_version；SQL 条件同时匹配 ID/version/可写状态，零行区分 404 与 409。
       parameters:
         - $ref: "#/components/parameters/NoteId"
+        - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         required: true
         content:
@@ -586,6 +600,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/NoteId"
         - $ref: "#/components/parameters/ExpectedVersionQuery"
+        - $ref: "#/components/parameters/CsrfToken"
       responses:
         "204":
           description: 笔记已移入回收站。
@@ -612,6 +627,7 @@ paths:
       description: 事务重排同级 position；成环或父节点无效时拒绝且原结构不变。
       parameters:
         - $ref: "#/components/parameters/NoteId"
+        - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         required: true
         content:
@@ -653,6 +669,7 @@ paths:
       description: 省略 restore_parent 时保留原父；显式 parent_id=null 移到根；原父缺失返回 409。
       parameters:
         - $ref: "#/components/parameters/NoteId"
+        - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         required: true
         content:
@@ -722,6 +739,7 @@ paths:
       description: 离开编辑器或显式请求时生成快照；到期清理不删除当前正文。
       parameters:
         - $ref: "#/components/parameters/NoteId"
+        - $ref: "#/components/parameters/CsrfToken"
       responses:
         "201":
           description: 成功
@@ -755,6 +773,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/NoteId"
         - $ref: "#/components/parameters/SnapshotId"
+        - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         required: true
         content:
@@ -796,6 +815,7 @@ paths:
       description: multipart 上传完成后登记资产；Idempotency-Key 防止重复登记。图片只以 asset_id 被笔记引用。
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         required: true
         content:
@@ -927,6 +947,8 @@ paths:
           $ref: "#/components/responses/TooManyRequests"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
   /tags/{tagId}:
     patch:
       tags:
@@ -935,6 +957,7 @@ paths:
       operationId: updateTag
       parameters:
         - $ref: "#/components/parameters/TagId"
+        - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         required: true
         content:
@@ -975,6 +998,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/TagId"
         - $ref: "#/components/parameters/ExpectedVersionQuery"
+        - $ref: "#/components/parameters/CsrfToken"
       responses:
         "204":
           description: 标签已删除。
@@ -1026,6 +1050,8 @@ paths:
           $ref: "#/components/responses/TooManyRequests"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
   /links/{linkId}:
     delete:
       tags:
@@ -1035,6 +1061,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/LinkId"
         - $ref: "#/components/parameters/ExpectedVersionQuery"
+        - $ref: "#/components/parameters/CsrfToken"
       responses:
         "204":
           description: 关联已删除。
@@ -1115,6 +1142,8 @@ paths:
           $ref: "#/components/responses/TooManyRequests"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
   /projects/{projectId}:
     get:
       tags:
@@ -1152,6 +1181,7 @@ paths:
       operationId: updateProject
       parameters:
         - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         required: true
         content:
@@ -1192,6 +1222,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/ExpectedVersionQuery"
+        - $ref: "#/components/parameters/CsrfToken"
       responses:
         "204":
           description: 项目已移入回收站。
@@ -1218,6 +1249,7 @@ paths:
       description: 连带归档本项目尚未归档的终态事项并记录 archive_batch_id；归档后写入拒绝。
       parameters:
         - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         required: true
         content:
@@ -1258,6 +1290,7 @@ paths:
       operationId: restoreProject
       parameters:
         - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         required: true
         content:
@@ -1299,6 +1332,7 @@ paths:
       description: 仅恢复本归档批次内被连带归档的事项。
       parameters:
         - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         required: true
         content:
@@ -1398,6 +1432,8 @@ paths:
           $ref: "#/components/responses/TooManyRequests"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
   /tasks/{taskId}:
     get:
       tags:
@@ -1436,6 +1472,7 @@ paths:
       description: 支持 project、parent、status、priority 和日期字段；开始不得晚于截止。
       parameters:
         - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         required: true
         content:
@@ -1476,6 +1513,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/TaskId"
         - $ref: "#/components/parameters/ExpectedVersionQuery"
+        - $ref: "#/components/parameters/CsrfToken"
       responses:
         "204":
           description: 事项已移入回收站。
@@ -1530,6 +1568,7 @@ paths:
       operationId: createTaskActivity
       parameters:
         - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         required: true
         content:
@@ -1567,6 +1606,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/TaskId"
         - $ref: "#/components/parameters/ActivityId"
+        - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         required: true
         content:
@@ -1606,6 +1646,7 @@ paths:
         - $ref: "#/components/parameters/TaskId"
         - $ref: "#/components/parameters/ActivityId"
         - $ref: "#/components/parameters/ExpectedVersionQuery"
+        - $ref: "#/components/parameters/CsrfToken"
       responses:
         "204":
           description: 记录已删除。
@@ -1661,6 +1702,7 @@ paths:
       operationId: archiveTask
       parameters:
         - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         required: true
         content:
@@ -1701,6 +1743,7 @@ paths:
       operationId: unarchiveTask
       parameters:
         - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         required: true
         content:
@@ -1741,6 +1784,7 @@ paths:
       operationId: restoreTask
       parameters:
         - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         required: true
         content:
@@ -1889,6 +1933,7 @@ paths:
       description: PATCH 仅允许备注和标签；不修改源文件内容。
       parameters:
         - $ref: "#/components/parameters/FileId"
+        - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         required: true
         content:
@@ -1961,6 +2006,7 @@ paths:
       description: 移动标签/备注/关联到新来源；旧引用快照保持原版本。歧义未确认时 409。
       parameters:
         - $ref: "#/components/parameters/FileId"
+        - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         required: true
         content:
@@ -2002,6 +2048,7 @@ paths:
       description: 只读且短时有效；源变化或授权过期后不能获取新源或扩大目录访问。
       parameters:
         - $ref: "#/components/parameters/FileId"
+        - $ref: "#/components/parameters/CsrfToken"
       responses:
         "201":
           description: 成功
@@ -2032,6 +2079,7 @@ paths:
       operationId: deleteOfficePreview
       parameters:
         - $ref: "#/components/parameters/FileId"
+        - $ref: "#/components/parameters/CsrfToken"
       responses:
         "204":
           description: 预览配置已撤销。
@@ -2122,6 +2170,7 @@ paths:
       description: 创建新 job 并指向原 job；不复用原租约。
       parameters:
         - $ref: "#/components/parameters/JobId"
+        - $ref: "#/components/parameters/CsrfToken"
       responses:
         "201":
           description: 成功
@@ -2154,6 +2203,7 @@ paths:
       description: 没有取消确认不能释放资源并发配额；终态任务返回 409。
       parameters:
         - $ref: "#/components/parameters/JobId"
+        - $ref: "#/components/parameters/CsrfToken"
       responses:
         "200":
           description: 成功
@@ -2186,6 +2236,7 @@ paths:
       description: 幂等提交扫描任务；只有完整成功扫描才能据缺失判定来源消失。
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         required: true
         content:
@@ -2278,6 +2329,8 @@ paths:
           $ref: "#/components/responses/TooManyRequests"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
   /chat/sessions/{sessionId}:
     get:
       tags:
@@ -2295,7 +2348,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ChatSession"
+                $ref: "#/components/schemas/ChatSessionDetail"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -2315,6 +2368,7 @@ paths:
       operationId: updateChatSession
       parameters:
         - $ref: "#/components/parameters/SessionId"
+        - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         required: true
         content:
@@ -2355,6 +2409,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/SessionId"
         - $ref: "#/components/parameters/ExpectedVersionQuery"
+        - $ref: "#/components/parameters/CsrfToken"
       responses:
         "204":
           description: 会话已删除。
@@ -2382,6 +2437,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/SessionId"
         - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         required: true
         content:
@@ -2448,6 +2504,7 @@ paths:
       description: SSE 事件类型为 queued/started/delta/citation/completed/failed/cancelled；每条含 run_id 与递增 seq。响应体每行是 ChatEvent JSON。
       parameters:
         - $ref: "#/components/parameters/RunId"
+        - $ref: "#/components/parameters/CsrfToken"
       responses:
         "200":
           description: 成功
@@ -2455,7 +2512,11 @@ paths:
             text/event-stream:
               schema:
                 type: string
-                description: SSE 事件流。
+                description: SSE 事件流。每个 data 帧为 ChatEvent JSON（type/run_id/seq 及按类型可选的 delta/citation/error）；事件类型为 queued、started、delta、citation、completed、failed、cancelled。
+              example: |+
+                event: delta
+                data: {"type":"delta","run_id":"8b5f0c1e-2d3a-4c5b-8e7f-9a0b1c2d3e4f","seq":3,"delta":"基于当前笔记，"}
+
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -2479,6 +2540,7 @@ paths:
       description: 显式取消；断连不会隐式增加任务。失败/取消保留 partial 标记。
       parameters:
         - $ref: "#/components/parameters/RunId"
+        - $ref: "#/components/parameters/CsrfToken"
       responses:
         "200":
           description: 成功
@@ -2511,6 +2573,7 @@ paths:
       description: 创建新的 run，不把 interrupted/断流视为成功。
       parameters:
         - $ref: "#/components/parameters/RunId"
+        - $ref: "#/components/parameters/CsrfToken"
       responses:
         "201":
           description: 成功
@@ -2573,6 +2636,7 @@ paths:
       description: 显式创建独立内容并保留 provenance；不随原来源删除，也不静默级联删除用户笔记。
       parameters:
         - $ref: "#/components/parameters/MessageId"
+        - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         required: true
         content:
@@ -2759,9 +2823,11 @@ components:
         - document
         - format_version
         - content_version
+        - position
         - created_at
         - updated_at
         - deleted_at
+      description: 笔记详情。position 为同父节点下的服务端排序位置；服务端事务维护同级唯一且连续的顺序。
       properties:
         id:
           type: string
@@ -2782,6 +2848,10 @@ components:
           type: integer
           minimum: 1
           description: 语义内容版本，同时作为 ETag 与 expected_version；每次内容变化递增。
+        position:
+          type: integer
+          minimum: 0
+          description: 同父节点下的排序位置，只读；由服务端事务重排，客户端通过 move 修改。
         created_at:
           type: string
           format: date-time
@@ -4223,6 +4293,42 @@ components:
         created_at:
           type: string
           format: date-time
+    ChatSessionDetail:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - title
+        - version
+        - provider
+        - created_at
+        - updated_at
+        - messages
+      description: 会话详情，包含完整消息列表（按 created_at 升序）。历史页面在来源删除后仍展示快照并提示。
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        version:
+          type: integer
+          minimum: 1
+        provider:
+          type: string
+          minLength: 1
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_-]*$
+          description: local，或显式配置的外部服务名；禁止自动 fallback。
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatMessage"
     ChatRunState:
       type: string
       enum:
@@ -4585,6 +4691,14 @@ components:
         type: string
         minLength: 1
         maxLength: 255
+    CsrfToken:
+      name: X-CSRF-Token
+      in: header
+      required: false
+      description: 由同源客户端中间件自动附加，值取自 `knoted_csrf` cookie，服务端同时校验 Origin。
+      schema:
+        type: string
+        minLength: 16
     ParentIdFilter:
       name: parent_id
       in: query
