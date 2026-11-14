@@ -556,8 +556,9 @@ def _child_failure_message(exit_status: str, output_dir: Path) -> str:
     description = reason or "unknown error"
     if detail is not None:
         # Only exceptions that expose `public_message` get here; those messages
-        # are built without filesystem paths (see parsing/models.py).
-        description = f"{description}: {detail[:600]}"
+        # are built without filesystem paths (see parsing/models.py) and start
+        # with the lock summary, so this cap cannot cut the versions/revisions.
+        description = f"{description}: {detail[:2000]}"
     return f"child {exit_status}: compute failed ({description})"
 
 
@@ -689,16 +690,18 @@ def _compute(spec: dict[str, Any]) -> dict[str, Any]:
             options_revision=spec["options_revision"],
             models_dir=parsing_models.default_models_dir(),
         )
-        return {
+        payload = {
             **base,
             "text_length": len(document.full_text),
             "title": document.title,
             "source_format": document.source_format,
             "page_count": document.page_count,
-            "full_text": document.full_text,
             # A real parse never publishes a truncated document.
             "truncated": False,
             "parser": parsing_models.parser_summary(),
+            # The text lives in the blocks only: `ParsedDocument.full_text` is an
+            # in-process convenience, and copying it here would double the
+            # artifact volume for a 100 MiB input.
             "blocks": [
                 {
                     "ordinal": block.ordinal,
@@ -711,6 +714,8 @@ def _compute(spec: dict[str, Any]) -> dict[str, Any]:
                 for block in document.blocks
             ],
         }
+        parsing_models.check_artifact_size(len(json.dumps(payload, sort_keys=True).encode("utf-8")))
+        return payload
     if spec["kind"] == "embed":
         vector = _placeholder_vector(spec["input_sha256"])
         return {

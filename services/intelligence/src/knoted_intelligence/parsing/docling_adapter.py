@@ -95,6 +95,10 @@ class ParsedBlock:
     kind: BlockKind
     text: str
     page: int | None = None
+    #: ``(left, top, right, bottom)`` in Docling's page coordinate system:
+    #: origin at the **bottom-left**, y grows upwards, units are PDF points
+    #: (1/72 inch) for PDFs and the rendered raster size for images. A UI with
+    #: a top-left origin must flip y before drawing the box.
     bbox: tuple[float, float, float, float] | None = None
     #: Structure-only location (``line:12``) for formats without a page grid.
     structure: str | None = None
@@ -143,7 +147,6 @@ def parse_document(
         page_count = 1
     else:
         page_count = _pdf_page_count(source)
-        models.check_page_count(page_count)
 
     artifacts = models.require_artifacts(root)
     converter = _converter(str(artifacts))
@@ -195,6 +198,9 @@ def _converter(artifacts_path: str) -> DocumentConverter:
             do_cell_matching=True,
             mode=TableFormerMode.FAST,
         ),
+        # Locked (models.DOCLING_IMAGES_SCALE) because the PDF pixel admission
+        # check computes the rendered page size with exactly this factor.
+        images_scale=models.DOCLING_IMAGES_SCALE,
         generate_page_images=False,
         generate_picture_images=False,
     )
@@ -289,6 +295,13 @@ def _image_size(path: Path) -> tuple[int, int]:
 
 
 def _pdf_page_count(path: Path) -> int:
+    """Counts pages and applies the page / per-page pixel limits.
+
+    A small file can declare a huge MediaBox, so counting pages alone would
+    leave the 40M pixel ceiling bypassable through a PDF. Page sizes are in
+    points at 72 dpi, which is Docling's ``images_scale=1.0`` raster size.
+    """
+
     import pypdfium2
 
     try:
@@ -298,7 +311,20 @@ def _pdf_page_count(path: Path) -> int:
             "corrupt_input", f"pdf could not be opened ({type(exc).__name__})"
         ) from exc
     try:
-        return len(document)
+        pages = len(document)
+        models.check_page_count(pages)
+        for index in range(pages):
+            page = document[index]
+            try:
+                width_points, height_points = page.get_size()
+            finally:
+                page.close()
+            models.check_image_pixels(
+                round(width_points * models.DOCLING_IMAGES_SCALE),
+                round(height_points * models.DOCLING_IMAGES_SCALE),
+                page=index + 1,
+            )
+        return pages
     finally:
         document.close()
 

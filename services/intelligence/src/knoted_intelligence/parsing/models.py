@@ -130,6 +130,12 @@ REQUIRED_ARTIFACTS: tuple[tuple[str, int, str], ...] = (
 MAX_INPUT_BYTES = 100 * 1024 * 1024
 MAX_IMAGE_PIXELS = 40_000_000
 MAX_PDF_PAGES = 500
+#: Upper bound for the parse artifact. The artifact carries one copy of the text
+#: (the blocks, not a second `full_text`); 100 MiB of pathologically short lines
+#: can still inflate the JSON, so the bound is enforced, not just documented.
+MAX_ARTIFACT_BYTES = 128 * 1024 * 1024
+#: Docling's page raster scale. Locked here because the PDF pixel check uses it.
+DOCLING_IMAGES_SCALE = 1.0
 
 #: The value the worker sends as ``options_revision`` for parse executions.
 #: It names every component and revision that can change the output, so a
@@ -158,7 +164,9 @@ class ParseError(RuntimeError):
     def __init__(self, code: str, detail: str) -> None:
         self.code = code
         self.detail = detail
-        super().__init__(f"{code}: {detail} [locked: {locked_combination_summary()}]")
+        # The lock summary leads so no downstream truncation (records, logs,
+        # terminals) can ever drop the versions and revisions.
+        super().__init__(f"[locked: {locked_combination_summary()}] {code}: {detail}")
 
     @property
     def public_message(self) -> str:
@@ -260,14 +268,19 @@ def check_input_size(size_bytes: int) -> None:
         )
 
 
-def check_image_pixels(width: int, height: int) -> None:
-    """Refuses an image over 40M pixels from its header, before decoding."""
+def check_image_pixels(width: int, height: int, *, page: int | None = None) -> None:
+    """Refuses an image over 40M pixels from its header, before decoding.
+
+    ``page`` only labels a PDF page in the message; the limit is the same for
+    a standalone image and for every rasterised PDF page.
+    """
 
     pixels = width * height
     if pixels > MAX_IMAGE_PIXELS:
+        subject = f"pdf page {page}" if page is not None else "image"
         raise ParseError(
             "image_too_large",
-            f"image is {width}x{height} = {pixels} pixels; the limit is "
+            f"{subject} is {width}x{height} = {pixels} pixels; the limit is "
             f"{MAX_IMAGE_PIXELS} pixels (40M)",
         )
 
@@ -279,4 +292,15 @@ def check_page_count(pages: int) -> None:
         raise ParseError(
             "too_many_pages",
             f"document has {pages} pages; the limit is {MAX_PDF_PAGES} pages",
+        )
+
+
+def check_artifact_size(size_bytes: int) -> None:
+    """Refuses a parse artifact over 128 MiB with a stable error code."""
+
+    if size_bytes > MAX_ARTIFACT_BYTES:
+        raise ParseError(
+            "output_too_large",
+            f"parse artifact would be {size_bytes} bytes; the limit is "
+            f"{MAX_ARTIFACT_BYTES // (1024 * 1024)} MiB ({MAX_ARTIFACT_BYTES} bytes)",
         )
