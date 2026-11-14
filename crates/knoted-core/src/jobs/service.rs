@@ -30,6 +30,13 @@ pub enum DomainJobError {
     LeaseLost { job_id: Uuid },
     #[error("job {job_id} is `{state}` and cannot be retried")]
     NotRetryable { job_id: Uuid, state: String },
+    #[error("job {job_id} is `{state}` and has no cancellation to confirm")]
+    CancelNotRequested { job_id: Uuid, state: String },
+    #[error(
+        "cancellation for job {job_id} could not be applied because the state kept changing \
+         (last `{state}`)"
+    )]
+    CancelContended { job_id: Uuid, state: String },
     #[error(transparent)]
     Database(#[from] DbError),
 }
@@ -68,8 +75,8 @@ pub struct FinishExecution {
 
 /// Backoff before the attempt after `attempt`.
 ///
-/// Retries beyond the documented three keep the last delay instead of
-/// overflowing; a `max_attempts` above four is allowed by the schema.
+/// `enqueue` caps `max_attempts` at four, so the first three delays are the only
+/// reachable ones; the fallback keeps an inconsistent row from panicking.
 fn retry_delay(attempt: i32) -> Duration {
     let index = (attempt.max(1) - 1) as usize;
     let seconds = RETRY_BACKOFF_SECONDS
@@ -107,9 +114,21 @@ pub async fn request_cancel(ctx: &AppContext, job_id: Uuid) -> Result<Job, Domai
             _ => return Ok(job),
         }
     }
-    repository::load(ctx.pool(), job_id)
+    let job = repository::load(ctx.pool(), job_id)
         .await?
-        .ok_or(DomainJobError::NotFound(job_id))
+        .ok_or(DomainJobError::NotFound(job_id))?;
+    // The retries above are a race-tightening measure, not a proof: if the row
+    // keeps changing under us, fail instead of pretending that a still running
+    // (or still queued) job was cancelled.
+    match JobState::parse(&job.state) {
+        Some(JobState::Queued | JobState::RetryWait | JobState::Running) => {
+            Err(DomainJobError::CancelContended {
+                job_id,
+                state: job.state,
+            })
+        }
+        _ => Ok(job),
+    }
 }
 
 /// Records the result of one attempt, applying the retry policy.
@@ -121,6 +140,12 @@ pub async fn request_cancel(ctx: &AppContext, job_id: Uuid) -> Result<Job, Domai
 /// A `cancel_requested` job never becomes `succeeded`: without a confirmed child
 /// exit it stays `cancel_requested` with its lease, and with confirmation it
 /// becomes `cancelled`.
+///
+/// The expected state is part of every write instead of being trusted from the
+/// read above it: a cancellation request that lands between the read and the
+/// write makes the write affect zero rows, and the row is then returned as a
+/// still-pending cancellation. That is what stops a stale success or retry from
+/// overwriting the cancellation intent.
 pub async fn finish_execution(
     ctx: &AppContext,
     input: FinishExecution,
@@ -138,21 +163,34 @@ pub async fn finish_execution(
     // is also used on rows read outside a lease check.
     let lease = job.lease().ok_or(DomainJobError::LeaseLost { job_id })?;
 
-    // An explicit cancellation report or a confirmed exit wins over whatever
-    // the attempt produced.
-    if input.cancel_confirmed || input.outcome == ExecutionOutcome::Cancelled {
-        return finish_cancelled(ctx, &lease).await;
+    // An explicit cancellation report from the handler is a statement that the
+    // work ended as cancelled, so it may be written from a normal run or while a
+    // cancellation was already requested.
+    if input.outcome == ExecutionOutcome::Cancelled {
+        return finish_terminal(
+            ctx,
+            &lease,
+            JobOutcome::Cancelled,
+            &[JobState::Running, JobState::CancelRequested],
+        )
+        .await;
     }
 
-    // A cancellation was requested while the work was running, but the child
-    // process has not been confirmed dead: keep the lease and the slot. Writing
-    // a success here would make a cancelled execution look complete.
-    if lease.state == JobState::CancelRequested {
-        return Ok(job);
+    // A confirmation of the child exit is only accepted for a cancellation that
+    // was actually requested. The expected state is part of the write, so a
+    // request that lands after the read above is still honoured.
+    if input.cancel_confirmed {
+        return confirm_cancel(ctx, &lease, input.lease_token).await;
     }
 
+    // Normal outcomes only replace a `running` attempt. If a cancellation
+    // request arrived after the read above, the write matches zero rows and the
+    // cancellation intent wins.
+    let from_running = [JobState::Running];
     match &input.outcome {
-        ExecutionOutcome::Succeeded => finish_terminal(ctx, &lease, JobOutcome::Succeeded).await,
+        ExecutionOutcome::Succeeded => {
+            finish_terminal(ctx, &lease, JobOutcome::Succeeded, &from_running).await
+        }
         ExecutionOutcome::PermanentFailure { message } => {
             finish_terminal(
                 ctx,
@@ -160,14 +198,23 @@ pub async fn finish_execution(
                 JobOutcome::Failed {
                     error: message.clone(),
                 },
+                &from_running,
             )
             .await
         }
         ExecutionOutcome::TemporaryFailure { message } => {
             if job.attempts < job.max_attempts {
                 let available_at = ctx.now() + retry_delay(job.attempts);
-                if !repository::schedule_retry(ctx.pool(), &lease, message, available_at).await? {
-                    return Err(DomainJobError::LeaseLost { job_id });
+                if !repository::schedule_retry(
+                    ctx.pool(),
+                    &lease,
+                    message,
+                    available_at,
+                    &from_running,
+                )
+                .await?
+                {
+                    return reconcile_cancelled(ctx, &lease).await;
                 }
                 // Re-read the row so the caller sees `retry_wait` and the exact
                 // `available_at` that was persisted.
@@ -183,6 +230,7 @@ pub async fn finish_execution(
                     JobOutcome::Failed {
                         error: message.clone(),
                     },
+                    &from_running,
                 )
                 .await
             }
@@ -234,23 +282,80 @@ pub async fn retry_failed(ctx: &AppContext, job_id: Uuid) -> Result<Job, DomainJ
     Ok(retried)
 }
 
-/// Writes `cancelled` if the token still owns the job.
-async fn finish_cancelled(ctx: &AppContext, lease: &Lease) -> Result<Job, DomainJobError> {
-    finish_terminal(ctx, lease, JobOutcome::Cancelled).await
+/// Confirms a requested cancellation and releases the lease.
+///
+/// Only `cancel_requested` is accepted: a confirmation without a request is a
+/// caller error, not a way to cancel a running job that never asked to stop.
+async fn confirm_cancel(
+    ctx: &AppContext,
+    lease: &Lease,
+    lease_token: Uuid,
+) -> Result<Job, DomainJobError> {
+    let job_id = lease.job_id;
+    let cancelled = repository::finish_with_token(
+        ctx.pool(),
+        lease,
+        JobOutcome::Cancelled,
+        &[JobState::CancelRequested],
+    )
+    .await?;
+    if cancelled {
+        return repository::load(ctx.pool(), job_id)
+            .await?
+            .ok_or(DomainJobError::NotFound(job_id));
+    }
+
+    // Zero rows: the token moved, the request was never made, or the job is
+    // already terminal. Re-read to tell those apart instead of guessing.
+    let current = repository::load(ctx.pool(), job_id)
+        .await?
+        .ok_or(DomainJobError::NotFound(job_id))?;
+    if current.lease_token != Some(lease_token) {
+        return Err(DomainJobError::LeaseLost { job_id });
+    }
+    match JobState::parse(&current.state) {
+        // The request exists and the lease is still ours: keep the slot and let
+        // a later attempt confirm the exit.
+        Some(JobState::CancelRequested) => Ok(current),
+        Some(JobState::Running) => Err(DomainJobError::CancelNotRequested {
+            job_id,
+            state: current.state,
+        }),
+        _ => Err(DomainJobError::LeaseLost { job_id }),
+    }
 }
 
-/// Writes a terminal state if the token still owns the job, then re-reads it.
+/// Writes a terminal state if the token still owns a job in `from_states`,
+/// then re-reads it.
 async fn finish_terminal(
     ctx: &AppContext,
     lease: &Lease,
     outcome: JobOutcome,
+    from_states: &[JobState],
 ) -> Result<Job, DomainJobError> {
-    if !repository::finish_with_token(ctx.pool(), lease, outcome).await? {
-        return Err(DomainJobError::LeaseLost {
-            job_id: lease.job_id,
-        });
+    if !repository::finish_with_token(ctx.pool(), lease, outcome, from_states).await? {
+        return reconcile_cancelled(ctx, lease).await;
     }
     repository::load(ctx.pool(), lease.job_id)
         .await?
         .ok_or(DomainJobError::NotFound(lease.job_id))
+}
+
+/// Turns a zero-row write into the right answer.
+///
+/// When the token still owns the job and it is `cancel_requested`, a concurrent
+/// cancellation arrived first: return the row unchanged so the caller keeps the
+/// lease and the slot until the exit is confirmed. Every other reason means the
+/// lease is no longer usable.
+async fn reconcile_cancelled(ctx: &AppContext, lease: &Lease) -> Result<Job, DomainJobError> {
+    let job_id = lease.job_id;
+    let Some(current) = repository::load(ctx.pool(), job_id).await? else {
+        return Err(DomainJobError::NotFound(job_id));
+    };
+    if current.lease_token == Some(lease.token)
+        && current.state == JobState::CancelRequested.as_str()
+    {
+        return Ok(current);
+    }
+    Err(DomainJobError::LeaseLost { job_id })
 }

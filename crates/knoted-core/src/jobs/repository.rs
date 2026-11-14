@@ -9,7 +9,8 @@ use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use super::{
-    EnqueueOutcome, Job, JobOutcome, JobSpec, JobState, LEASE_SECONDS, Lease, enqueued_topic,
+    DEFAULT_MAX_ATTEMPTS, EnqueueOutcome, Job, JobOutcome, JobSpec, JobState, LEASE_SECONDS, Lease,
+    enqueued_topic,
 };
 use crate::db::DbError;
 
@@ -31,14 +32,15 @@ const DUE_PREDICATE: &str = "((state IN ('queued', 'retry_wait') AND available_a
 /// already have finished, so the caller must look at `created`/`job.state`
 /// instead of assuming the work will run. Jobs without a key always insert.
 ///
-/// `max_attempts` below 1 is rejected with [`DbError::InvalidMaxAttempts`]
-/// rather than silently clamped, so a caller cannot believe a job will be tried
-/// when it would have been tried zero times.
+/// `max_attempts` outside `1..=DEFAULT_MAX_ATTEMPTS` is rejected with
+/// [`DbError::InvalidMaxAttempts`] rather than silently clamped. Below 1 would
+/// mean a job that is never tried; above the contract's four executions would
+/// break the 5/30/120 second retry schedule, which only defines three waits.
 pub async fn enqueue(
     tx: &mut Transaction<'_, Postgres>,
     spec: JobSpec,
 ) -> Result<EnqueueOutcome, DbError> {
-    if spec.max_attempts < 1 {
+    if !(1..=DEFAULT_MAX_ATTEMPTS).contains(&spec.max_attempts) {
         return Err(DbError::InvalidMaxAttempts(spec.max_attempts));
     }
     let inserted: Option<Job> = sqlx::query_as(
@@ -213,23 +215,35 @@ pub async fn request_cancel(pool: &PgPool, job_id: Uuid) -> Result<Option<Job>, 
 /// The three lease columns are cleared in the same statement (the check
 /// constraint requires it), `attempts` is left untouched because the retry
 /// budget is consumed by claims, not by scheduling, and `last_error` keeps the
-/// reason for the next attempt. Returns `false` when the token no longer owns
-/// the job; the database is untouched in that case.
+/// reason for the next attempt.
+///
+/// `from_states` is the state set the caller read before deciding to retry; the
+/// statement only matches those states. A cancellation request that lands
+/// between the read and this write therefore wins: zero rows are affected, the
+/// cancellation intent stays and the caller must re-read instead of retrying a
+/// cancelled job. Returns `false` in that case.
 pub async fn schedule_retry(
     pool: &PgPool,
     lease: &Lease,
     error: &str,
     available_at: DateTime<Utc>,
+    from_states: &[JobState],
 ) -> Result<bool, DbError> {
     let result = sqlx::query(
         "UPDATE jobs SET state = 'retry_wait', last_error = $3, available_at = $4, \
              lease_token = NULL, lease_expires_at = NULL, locked_by = NULL, updated_at = now() \
-         WHERE id = $1 AND lease_token = $2 AND state IN ('running', 'cancel_requested')",
+         WHERE id = $1 AND lease_token = $2 AND state = ANY($5)",
     )
     .bind(lease.job_id)
     .bind(lease.token)
     .bind(error)
     .bind(available_at)
+    .bind(
+        from_states
+            .iter()
+            .map(|state| state.as_str())
+            .collect::<Vec<_>>(),
+    )
     .execute(pool)
     .await?;
 
@@ -253,23 +267,36 @@ pub async fn link_retry(
 
 /// Commits `outcome` if `lease` still owns the job, and releases the lease.
 ///
-/// Returns `false` when the token no longer matches (or the job already left
-/// `running`/`cancel_requested`), in which case the database is untouched. The
-/// caller must not treat `false` as success: the job belongs to another attempt.
+/// `from_states` is the state set the caller read before deciding the outcome;
+/// the statement only matches those states, so a cancellation request that
+/// lands between the read and this write is never overwritten by a success or a
+/// failure. Zero rows are affected in that case and the caller must re-read the
+/// row instead of treating the write as committed.
+///
+/// Returns `false` when the token no longer matches or the job left the expected
+/// states; the database is untouched either way. The caller must not treat
+/// `false` as success: the job belongs to another attempt or to a cancellation.
 pub async fn finish_with_token(
     pool: &PgPool,
     lease: &Lease,
     outcome: JobOutcome,
+    from_states: &[JobState],
 ) -> Result<bool, DbError> {
     let result = sqlx::query(
         "UPDATE jobs SET state = $3, last_error = $4, lease_token = NULL, \
              lease_expires_at = NULL, locked_by = NULL, updated_at = now() \
-         WHERE id = $1 AND lease_token = $2 AND state IN ('running', 'cancel_requested')",
+         WHERE id = $1 AND lease_token = $2 AND state = ANY($5)",
     )
     .bind(lease.job_id)
     .bind(lease.token)
     .bind(outcome.state())
     .bind(outcome.last_error())
+    .bind(
+        from_states
+            .iter()
+            .map(|state| state.as_str())
+            .collect::<Vec<_>>(),
+    )
     .execute(pool)
     .await?;
 

@@ -13,9 +13,10 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
 use knoted_core::context::{AppContext, FixedClock};
+use knoted_core::db::DbError;
 use knoted_core::db::testing::TestDb;
 use knoted_core::jobs::service::{self, DomainJobError, ExecutionOutcome, FinishExecution};
-use knoted_core::jobs::{self, Job, JobSpec};
+use knoted_core::jobs::{self, Job, JobOutcome, JobSpec, JobState};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -237,6 +238,27 @@ async fn t08_2_permanent_failure_is_terminal() {
         "a permanent failure must not leave a retry_wait job behind"
     );
 
+    // The contract bounds automatic execution at four tries. A larger budget
+    // would run past the last defined backoff, so it is rejected at enqueue
+    // instead of being silently clamped.
+    let mut tx = db.pool.begin().await.expect("a transaction must start");
+    let rejected = jobs::enqueue(
+        &mut tx,
+        JobSpec {
+            max_attempts: 5,
+            ..JobSpec::default()
+        },
+    )
+    .await
+    .expect_err("a budget above the contract must be rejected");
+    tx.commit()
+        .await
+        .expect("the rejected transaction must still be committable");
+    assert!(
+        matches!(rejected, DbError::InvalidMaxAttempts(5)),
+        "unexpected error: {rejected:?}"
+    );
+
     db.drop().await;
 }
 
@@ -386,6 +408,89 @@ async fn t08_3_unconfirmed_cancel_keeps_slot() {
         "the takeover lease must carry the cancellation intent"
     );
     assert_ne!(takeover.token, stale.token);
+    assert_eq!(
+        takeover.attempt,
+        stale.attempt + 1,
+        "a takeover consumes one attempt"
+    );
+
+    // Interleaving: the worker read `running`, then the cancellation request
+    // landed, and only then did the stale attempt try to write. A success or a
+    // retry must not overwrite the cancellation intent, and must not release
+    // the lease the cancelling worker still needs.
+    let interleaved = enqueue(&db.pool, 4).await;
+    let stale_lease = claim(&db.pool).await;
+    assert_eq!(stale_lease.state, JobState::Running);
+    service::request_cancel(&ctx, interleaved.id)
+        .await
+        .expect("the running job must be cancellable");
+    let before = load_job(&db.pool, interleaved.id).await;
+    assert_eq!(before.state, "cancel_requested");
+
+    assert!(
+        !jobs::finish_with_token(
+            &db.pool,
+            &stale_lease,
+            JobOutcome::Succeeded,
+            &[JobState::Running],
+        )
+        .await
+        .expect("the stale finish must not fail"),
+        "a stale success must not overwrite a cancellation request"
+    );
+    let after = load_job(&db.pool, interleaved.id).await;
+    assert_eq!(after.state, "cancel_requested");
+    assert_eq!(
+        after.lease_token,
+        Some(stale_lease.token),
+        "the rejected success must not release the lease"
+    );
+    assert_eq!(after.attempts, stale_lease.attempt);
+
+    assert!(
+        !jobs::schedule_retry(
+            &db.pool,
+            &stale_lease,
+            "transient",
+            ctx.now() + Duration::seconds(5),
+            &[JobState::Running],
+        )
+        .await
+        .expect("the stale retry must not fail"),
+        "a stale temporary failure must not schedule a retry over a cancellation"
+    );
+    let after = load_job(&db.pool, interleaved.id).await;
+    assert_eq!(after.state, "cancel_requested");
+    assert_eq!(after.lease_token, Some(stale_lease.token));
+    assert_eq!(
+        after.available_at, before.available_at,
+        "the rejected retry must not move the availability"
+    );
+
+    // Confirming a cancellation that was never requested must not cancel a
+    // healthy run: it is a caller error, not an implicit cancel button.
+    let healthy = enqueue(&db.pool, 4).await;
+    let healthy_lease = claim(&db.pool).await;
+    let rejected = service::finish_execution(
+        &ctx,
+        finish(
+            healthy.id,
+            healthy_lease.token,
+            ExecutionOutcome::Succeeded,
+            true,
+        ),
+    )
+    .await;
+    assert!(
+        matches!(
+            rejected,
+            Err(DomainJobError::CancelNotRequested { job_id, .. }) if job_id == healthy.id
+        ),
+        "a confirmation without a request must be rejected, got {rejected:?}"
+    );
+    let healthy = load_job(&db.pool, healthy.id).await;
+    assert_eq!(healthy.state, "running");
+    assert_eq!(healthy.lease_token, Some(healthy_lease.token));
 
     db.drop().await;
 }

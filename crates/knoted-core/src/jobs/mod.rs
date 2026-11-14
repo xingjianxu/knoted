@@ -18,7 +18,9 @@
 mod repository;
 pub mod service;
 
-pub use repository::{claim, enqueue, finish_with_token, heartbeat, heartbeat_state};
+pub use repository::{
+    claim, enqueue, finish_with_token, heartbeat, heartbeat_state, schedule_retry,
+};
 pub use service::{DomainJobError, ExecutionOutcome, FinishExecution};
 
 use std::fmt;
@@ -53,7 +55,7 @@ pub struct JobSpec {
     pub payload: Value,
     /// Higher values are claimed first.
     pub priority: i32,
-    /// Attempts including the first one; never below 1.
+    /// Attempts including the first one; `1..=DEFAULT_MAX_ATTEMPTS`.
     pub max_attempts: i32,
     /// Earliest claim time; `None` means "as soon as possible".
     pub available_at: Option<DateTime<Utc>>,

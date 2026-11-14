@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use knoted_core::db::DbError;
 use knoted_core::db::testing::{TestDb, test_database_url};
-use knoted_core::jobs::{self, Job, JobOutcome, JobSpec};
+use knoted_core::jobs::{self, Job, JobOutcome, JobSpec, JobState};
 use sqlx::{Connection, PgConnection, PgPool};
 use tokio::sync::Barrier;
 use uuid::Uuid;
@@ -348,9 +348,14 @@ async fn t07_3_stale_token_cannot_finish() {
         "a stale token must not extend the new lease"
     );
     assert!(
-        !jobs::finish_with_token(&db.pool, &stale, JobOutcome::Succeeded)
-            .await
-            .expect("finish must not fail"),
+        !jobs::finish_with_token(
+            &db.pool,
+            &stale,
+            JobOutcome::Succeeded,
+            &[JobState::Running, JobState::CancelRequested],
+        )
+        .await
+        .expect("finish must not fail"),
         "a stale token must not complete the job"
     );
 
@@ -384,7 +389,8 @@ async fn t07_3_stale_token_cannot_finish() {
             &takeover,
             JobOutcome::Failed {
                 error: "parser rejected the input".to_owned(),
-            }
+            },
+            &[JobState::Running, JobState::CancelRequested],
         )
         .await
         .expect("finish must not fail")
@@ -607,9 +613,14 @@ async fn t07_5_cancel_requested_keeps_the_lease() {
         "a cancel_requested job must still accept heartbeats"
     );
     assert!(
-        jobs::finish_with_token(&db.pool, &lease, JobOutcome::Cancelled)
-            .await
-            .expect("finish must not fail"),
+        jobs::finish_with_token(
+            &db.pool,
+            &lease,
+            JobOutcome::Cancelled,
+            &[JobState::Running, JobState::CancelRequested],
+        )
+        .await
+        .expect("finish must not fail"),
         "a cancel_requested job must still accept the owning token"
     );
 
@@ -666,9 +677,14 @@ async fn t07_5_expired_cancel_requested_lease_is_taken_over() {
         "the dead worker's token must stay invalid"
     );
     assert!(
-        jobs::finish_with_token(&db.pool, &takeover, JobOutcome::Cancelled)
-            .await
-            .expect("finish must not fail"),
+        jobs::finish_with_token(
+            &db.pool,
+            &takeover,
+            JobOutcome::Cancelled,
+            &[JobState::Running, JobState::CancelRequested],
+        )
+        .await
+        .expect("finish must not fail"),
         "the new holder must be able to confirm the cancellation"
     );
     let (state, _, token, _) = load_job(&db.pool, job.id).await;
