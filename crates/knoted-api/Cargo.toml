@@ -1,0 +1,7 @@
+[package]
+name = "knoted-api"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+knoted-core = { path = "../knoted-core" }
