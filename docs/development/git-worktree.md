@@ -76,7 +76,7 @@ gh pr checks "$PR_NUMBER"
 gh pr view "$PR_NUMBER" --json state,mergedAt,mergeCommit,baseRefName,reviewDecision,statusCheckRollup
 ```
 
-通过 CI 和必需的审查后，只有当前授权允许时才执行 `gh pr merge "$PR_NUMBER" --merge`；不要用 `--admin`、force push 或自行放宽检查。若仓库禁用 merge commit，遵循其既有策略。等待审批时保持 Worktree。
+仓库不使用 GitHub CI，`gh pr checks` 会为空，这不代表检查通过。合并前确认 PR 正文记录的命令输出是本任务真实运行的结果，再执行 `gh pr merge "$PR_NUMBER" --merge`（默认已授权）。不直推 `master`、不使用 `--admin`。若仓库禁用 merge commit，遵循其既有策略。用户要求先看 PR 时保持 Worktree 与待合并状态。
 
 ## 本地主线集成及清理
 
@@ -99,4 +99,4 @@ gh pr view "$PR_NUMBER" --json state,mergedAt,mergeCommit,baseRefName,reviewDeci
 8. 安全合并证据成立后 `git -C "$PROJECT_ROOT" branch -d "$TASK_BRANCH"`；远程分支遵从仓库策略和授权，不能因本地清理顺带删除。
 9. 再次查看 worktree list、主线状态和 `.worktrees/`。只核对本任务残留；只有没有其他活动任务时才能期待目录为空。
 
-分支保护、CI、权限、人工审批或用户要求仅创建 PR 阻止集成时，报告“待集成”；不能提前关闭 Issue，也不能提前清理未合并成果。
+仓库级设置限制、用户要求仅创建 PR 或无法证明合并时，报告“待集成”；不能提前关闭 Issue，也不能提前清理未合并成果。

@@ -10,8 +10,8 @@
 | 首次推送 | `refs/heads/master` → `c34db46` |
 | 标签 | 27 个 = GitHub 默认 10 个 + 新增 17 个 |
 | Projects | #1「Knoted Development」，已 link 到本仓库 |
-| 规则集 | `27256364` master protection（active，4 条规则） |
-| Quality CI | run `43576185739` 结论 success，check 名 `Rust baseline` |
+| 规则集 | `27256364` master protection（active；仅 `deletion`、`non_fast_forward`、`pull_request` 三条，已移除必需检查） |
+| Quality CI | **已移除**（不再运行 GitHub Actions 质量检查，改由本地检查把关） |
 | Actions | enabled，`allowed_actions: all`，`sha_pinning_required: false` |
 | 仓库合并策略 | 仅 merge commit；`delete_branch_on_merge: true` |
 
@@ -48,7 +48,7 @@ git push -u origin master
 | `e7bc8ed` | `chore(workflow): 建立 Agent 驱动开发管理体系` | AGENTS.md、六个 Skill、模板、CI、文档 |
 | `c34db46` | `docs(workflow): 记录初始化验证与本地集成结果` | 初始化记录与计划账本 |
 
-旧哈希 `e9c3363` / `9171137` / `d04ea56` / `ad6363d` 已不存在；`docs/development/initialization-report.md` 与 `docs/plans/2026-11-14-agent-workflow.md` 仍在引用它们，属已知文档偏差，需单独修订，不能当作有效证据。
+旧哈希 `e9c3363` / `9171137` / `d04ea56` / `ad6363d` 已不存在。`docs/development/initialization-report.md` 与 `docs/plans/2026-11-14-agent-workflow.md` 中的失效哈希已改为文字描述，本节是唯一保留映射的位置；引用旧值时不能当作有效证据。
 
 ## 3. 标签
 
@@ -81,7 +81,7 @@ for label in labels:
 
 ## 4. 远程验证结果
 
-- **push 触发 CI：** run `43576185739` = success。分支保护引用的 check 名称是 **job name `Rust baseline`**，不是 workflow 名 `Quality`；新增或重命名 job 会改变必需检查的名称。
+- **push 不再触发 CI：** 原 `Quality` 工作流（run `43576185739`）在 2026-11-14 确认可用后，按用户要求删除；仓库不再有质量门禁的远程环节，本地 `cargo fmt/test/clippy` 是唯一门禁。分支保护原先引用的必需检查 job 名 `Rust baseline` 已同步从 ruleset 移除，否则 PR 会永久卡在 “Expected — Waiting for status to be reported”。
 - **Issue 路径：** #1 以 CLI 创建并附加 `feature`、`agent-found`、`needs-triage`，验证后以 `not planned` 关闭，作为审计痕迹保留。
 - **PR 路径：** 本次修订即以 PR 提交，验证 PR 模板字段、`pull_request` 触发与必需检查。
 - **未验证项：** Issue Forms **选择页的渲染**只能由已登录浏览器人工确认；CLI 与 API 均不渲染表单，不能声称已验证。
@@ -154,9 +154,6 @@ gh api -X POST repos/xingjianxu/knoted/rulesets --input ruleset.json
   "rules": [
     { "type": "deletion" },
     { "type": "non_fast_forward" },
-    { "type": "required_status_checks",
-      "parameters": { "strict_required_status_checks_policy": true,
-                      "required_status_checks": [{ "context": "Rust baseline" }] } },
     { "type": "pull_request",
       "parameters": { "required_approving_review_count": 0,
                       "allowed_merge_methods": ["merge"],
@@ -170,18 +167,24 @@ gh api -X POST repos/xingjianxu/knoted/rulesets --input ruleset.json
 
 读回（`GET /repos/{owner}/{repo}/rulesets/{id}`）后可见服务端补全的默认值：`bypass_actors: []`、`current_user_can_bypass: never`、`do_not_enforce_on_create: false`、`required_reviewers: []`、`require_extra_approval_for_unattributed_changes: true`。也就是说本仓库 owner 也没有绕过通道。
 
-- **单维护者约束：** `required_approving_review_count` ≥ 1 时唯一账号无法自我批准，主线会被锁死。当前取 0，配合必需 CI 与禁止强推/删除；具备第二个审查者后再提高，由人工决定。
-- **无 bypass 列表**：规则对仓库 owner 同样生效，`git push` 直推 `master` 会被拒绝，必须走 PR 且检查通过。
+- **单维护者约束：** `required_approving_review_count` 保持 0，不要求人工审批；结合默认授权的 PR 合并，Agent 可在本地检查通过后自行合入。提高审批数前必须存在第二个可用审查者。
+- **无 bypass 列表**：`bypass_actors: []`、`current_user_can_bypass: never`，保留的 `deletion` 与 `non_fast_forward` 对仓库 owner 同样生效，即 push 直推 `master` 会被拒绝，必须走 PR。
 - 合并策略：`allow_squash_merge=false`、`allow_rebase_merge=false`、`delete_branch_on_merge=true`，即仅普通 merge commit。
-- 必需检查只在 CI 至少运行过一次后才出现在设置界面的候选列表中；先跑 CI 再配置保护，可避免配对不存在的 check 导致永久阻塞。
+- **已移除必需检查（2026-11-14 实测）：** 删除 `Quality` 工作流后，`required_status_checks` 会让 PR 永久停在 “Expected — Waiting for status to be reported”，因此同步执行：
+
+  ```bash
+  gh api -X PUT repos/xingjianxu/knoted/rulesets/27256364 --input ruleset.json
+  ```
+
+  请求体为上述完整四字段结构（`name`/`target`/`enforcement`/`conditions`/`rules`）。读回确认 `rules[].type` 现仅含 `deletion`、`non_fast_forward`、`pull_request`，响应 `updated_at` 为 `2026-11-14T20:50:32.010+08:00`。规则集修改属仓库设置类，不在默认授权范围。
 
 ## 7. 仍需人工决定
 
 - 是否提高审批数量、是否为人工操作配置 bypass 列表。
 - Issue Forms 选择页渲染的人工确认（提交一份真实表单 Issue）。
 - 是否建立 Projects 自动化，以及 Iteration 排期。
-- 修订仍引用旧提交哈希的 `docs/development/initialization-report.md`、`docs/plans/2026-11-14-agent-workflow.md`。
-- 修订把本文称为"待授权配置方案"的入向描述：`README.md`、`AGENTS.md`（第 12 条权限段落）与 `docs/development/initialization-report.md`。这属于规则/入口文件的措辞变更，需人工确认后另行处理，本次未改动。
+
+已处理（后续授权任务）：失效提交哈希已改为文字描述并指向本节映射表；`README.md` 与 `AGENTS.md` 的入向/授权措辞改为不绑定具体时间的通用规则；`Quality` 工作流已删除并同步移除 ruleset 必需检查，本地检查成为唯一门禁。
 
 ## 8. 复核命令（只读）
 
@@ -197,7 +200,7 @@ gh run list --repo xingjianxu/knoted --limit 5
 
 ## 9. 限制
 
-- Quality 工作流仅 `contents: read`，checkout 不持久化凭据，不执行 `pull_request_target`、不发布、不修改任务；checkout 仍固定到核验过的 v4 commit。
-- 仓库当前只有 Rust 骨架，`cargo test` 为 0 个测试；fmt/test/clippy 在本地与 CI 均通过，但**不代表业务覆盖**。
+- Quality 工作流已删除；仓库不再有 CI 任务，因此不存在 Actions 执行面风险。
+- 仓库当前只有 Rust 骨架，`cargo test` 为 0 个测试；fmt/test/clippy 在本地通过，但**不代表业务覆盖**。
 - 未设置组织级规则集、Actions 必需 pinning、分支/标签保护之外的仓库级策略。
 - 表单语法依据 [GitHub Issue Forms 文档](https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/syntax-for-issue-forms)，CLI 依据本机 `gh 2.103.3` 实测。
