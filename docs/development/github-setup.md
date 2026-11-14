@@ -1,31 +1,58 @@
-# GitHub 配置方案（尚未执行远程写操作）
+# GitHub 远程配置状态与操作记录
 
-本次仅完成本地模板与命令准备。仓库 `xingjianxu/knoted` 公开，origin 对应一致；检查时远程无分支/默认分支、无 Issues。gh 认证有效，拥有 repo/workflow 等 scope，但未看到 project scope；认证不代表当前任务已授权写操作或具备所有管理权限。
+远程配置已在 2026-11-14 经用户明确授权执行：首次推送、标签增补、Projects 建立、分支规则集配置。本文只记录**实际执行的命令、实测结果和仍待人工处理的项**；未实际运行的检查明确标注，不得把本文当成无条件脚本执行。任何后续写操作仍须重新取得对应授权。
 
-以下命令是**审核后由明确授权触发的操作**。取得范围内已有授权后可直接执行，不重复审批；本次没有该授权。不得把整个文档无条件当脚本执行。
+## 当前实际状态
 
-## 顺序与保留项
+| 项 | 实际值 |
+|---|---|
+| 默认分支 | `master`（GraphQL `defaultBranchRef` 实测） |
+| 首次推送 | `refs/heads/master` → `c34db46` |
+| 标签 | 27 个 = GitHub 默认 10 个 + 新增 17 个 |
+| Projects | #1「Knoted Development」，已 link 到本仓库 |
+| 规则集 | `27256364` master protection（active，4 条规则） |
+| Quality CI | run `43576185739` 结论 success，check 名 `Rust baseline` |
+| Actions | enabled，`allowed_actions: all`，`sha_pinning_required: false` |
+| 仓库合并策略 | 仅 merge commit；`delete_branch_on_merge: true` |
 
-1. 确认首次提交、目标主线名和原始文件纳管方式；完成本地验证。空远程不能直接创建正常 PR。
-2. 明确授权首次推送后，将审核过的主线推送到 origin，确认远程默认分支。只推送已审阅内容。
-3. 增补缺失标签，不改写已有 bug/enhancement 等标签，不删除用户现有分类。
-4. 检查默认分支上的三份 Issue Forms、PR 模板及 Quality 工作流是否可见，实际提交一个经授权的试验 Issue/PR 才能验证远端渲染和 Actions。未经授权不制造试验数据。
-5. 如需 Projects，先确认 owner、复用已有看板、project scope 和字段；再授权创建或增补。
-6. 仓库维护者决定 CI 必需检查和 PR 审批策略。本次不修改分支保护、不启用自动合并或自动审批标签。
+## 1. 身份与授权范围
 
-## 标签
-
-[github-labels.json](github-labels.json) 是待审阅的 19 个标签定义。优先级可以改用 Projects 字段；采用字段时不必创建 P0–P3 标签。来源标签和状态标签必须保留其语义，Agent 新任务固定 agent-found + needs-triage。
-
-先只读：
+`gh project` 需要 `project` scope，默认 OAuth 流程不含它：
 
 ```bash
-gh auth status
-gh repo view --json nameWithOwner,url,defaultBranchRef
-gh label list --repo xingjianxu/knoted --limit 100 --json name,color,description
+gh auth refresh -h github.com -s project
+gh auth status   # 实测 scopes: gist, project, read:org, repo, workflow
 ```
 
-获“增补标签”授权后，在仓库根执行以下代码。通过 argv 传参数，不执行正文或 shell 插值；已存在的标签保持原值：
+- 缺 scope 时 `gh project list` 直接失败：`missing required scopes [read:project]`。
+- Git 推送凭据与 gh token **互相独立**（本机 `credential.helper = store --file ${XDG_RUNTIME_DIR}/agenix/git-creds`）；刷新 gh scope 不影响推送凭据，反之亦然。
+- scope 具备不等于授权：远程写操作仍按具体任务取得许可。
+
+## 2. 首次推送与默认分支
+
+```bash
+git push -u origin master
+```
+
+- 空仓库上**第一个被推送的分支自动成为默认分支**，不需要 `gh repo edit --default-branch`；实测 `defaultBranchRef.name = master`。
+- **实测差异：** REST API `repos/{owner}/{repo}` 在空仓库会把 `default_branch` 返回为 `"master"`（占位值），即使该分支不存在。判断"是否已有主线"必须用 GraphQL `defaultBranchRef` 或 `git ls-remote`，不能依据 REST 字段。
+
+### 历史重建说明（必须保留的事实）
+
+执行本次配置前，本地 `.git` 已被重新初始化：`objects` 为空、无 `logs/`、无 `packed-refs`、无任何 ref，远程当时也为空，因此原 4 个提交对象无副本可恢复。现 `master` 的 4 个提交按文档记录的分组与提交信息重建：
+
+| 新哈希 | 提交 | 覆盖内容 |
+|---|---|---|
+| `096d2eb` | `chore: 纳管现有 Rust 项目骨架` | `Cargo.toml`、`Cargo.lock`、`src/main.rs`、原始 `.gitignore` |
+| `db39b2e` | `chore(skills): 纳管已安装的提交 Skill` | `.agents/skills/git-commit`、`.claude` 链接、`skills-lock.json` |
+| `e7bc8ed` | `chore(workflow): 建立 Agent 驱动开发管理体系` | AGENTS.md、六个 Skill、模板、CI、文档 |
+| `c34db46` | `docs(workflow): 记录初始化验证与本地集成结果` | 初始化记录与计划账本 |
+
+旧哈希 `e9c3363` / `9171137` / `d04ea56` / `ad6363d` 已不存在；`docs/development/initialization-report.md` 与 `docs/plans/2026-11-14-agent-workflow.md` 仍在引用它们，属已知文档偏差，需单独修订，不能当作有效证据。
+
+## 3. 标签
+
+`docs/development/github-labels.json` 的 19 项中，`bug`、`enhancement` 已由 GitHub 默认存在且配色一致，未覆盖；实际新增 17 项：`feature, tech-debt, refactor, performance, security, agent-found, human-reported, needs-triage, needs-info, agent-ready, in-progress, blocked, human-required, P0, P1, P2, P3`。
 
 ```python
 import json
@@ -45,48 +72,121 @@ for label in labels:
     names.add(label["name"].casefold())
 ```
 
-错误即停止；超时先读回远程状态再重试。不要添加 `--force` 去覆盖用户标签。表单引用 feature、tech-debt、needs-triage；标签未创建时无法期待自动加标成功。CLI `gh issue create --body-file` 不自动套用 YAML 表单字段或标签，因此项目 Skill 必须显式提供正文和标签。
+- 通过 argv 传参，不执行正文或 shell 插值；已存在的标签保持原值，不加 `--force`。
+- 错误即停止；超时先读回远程状态再重试。
+- **顺序约束：** Issue Forms 的 `labels:` 引用不存在的标签会被 GitHub **静默丢弃**（官方语法文档要求标签必须已存在于仓库），不报错也不自动创建。因此标签必须早于任何 Issue 创建。
+- `gh issue create --body-file` 不套用 YAML 表单字段、也不自动加标签，正文与标签必须显式提供。
 
-## Projects
+## 4. 远程验证结果
 
-建议复用一个看板，Status = Backlog / Ready / In Progress / Review / Done。Ready 由人工批准；Review 仍对应 in-progress；blocked/human-required 保留原阶段并显示阻塞标签；Done 仅在已合并后。
+- **push 触发 CI：** run `43576185739` = success。分支保护引用的 check 名称是 **job name `Rust baseline`**，不是 workflow 名 `Quality`；新增或重命名 job 会改变必需检查的名称。
+- **Issue 路径：** #1 以 CLI 创建并附加 `feature`、`agent-found`、`needs-triage`，验证后以 `not planned` 关闭，作为审计痕迹保留。
+- **PR 路径：** 本次修订即以 PR 提交，验证 PR 模板字段、`pull_request` 触发与必需检查。
+- **未验证项：** Issue Forms **选择页的渲染**只能由已登录浏览器人工确认；CLI 与 API 均不渲染表单，不能声称已验证。
 
-字段建议：Priority（P0–P3）、Type（七类任务）、Module（当前可用 core/docs/workflow，随实际模块调整）、Source（agent-found/human-reported）、Agent（文本），Iteration 仅有排期需要时启用。不要为了表格完整虚构模块或迭代。
+## 5. Projects
+
+看板 #1 <https://github.com/users/xingjianxu/projects/1>，已 link 本仓库；13 个默认字段 + 5 个新增字段。
+
+| 字段 | 类型 | 取值 |
+|---|---|---|
+| Status | SINGLE_SELECT | Backlog / Ready / In Progress / Review / Done |
+| Priority | SINGLE_SELECT | P0–P3 |
+| Task Type | SINGLE_SELECT | bug / feature / enhancement / tech-debt / refactor / performance / security |
+| Source | SINGLE_SELECT | agent-found / human-reported |
+| Module | TEXT | 当前可用 core/docs/workflow，随实际模块调整 |
+| Agent | TEXT | 执行者标识 |
+
+判读规则：Ready 由人工批准；Review 仍对应 in-progress；blocked / human-required 保留原阶段并显示标签；Done 仅在已合并后。
+
+实测修正（相对本文件早期版本）：
+
+- **字段名 `Type` 是保留名**，`gh project field-create --name Type` 返回 `Name cannot have a reserved value`；实际字段名为 `Task Type`。
+- **内置 Status 的选项可以脚本化改写**，无需在 UI 手工配置。`gh project` 只有 `field-create` / `field-delete` / `field-list`，没有 `field-edit`，必须走 GraphQL：
 
 ```bash
-# 只读先检查；若 scope 不足则报告，不自行 gh auth refresh
-gh project list --owner xingjianxu --format json
-# 以下命令分别需要明确写授权；先确认不存在合适的看板/字段
-gh project create --owner xingjianxu --title 'Knoted Development' --format json
-# PROJECT_NUMBER 从 create 返回或人工指定，不能猜测
-gh project field-list "$PROJECT_NUMBER" --owner xingjianxu --format json
-gh project field-create "$PROJECT_NUMBER" --owner xingjianxu \
-  --name Priority --data-type SINGLE_SELECT --single-select-options 'P0,P1,P2,P3'
-gh project field-create "$PROJECT_NUMBER" --owner xingjianxu \
-  --name Type --data-type SINGLE_SELECT \
-  --single-select-options 'bug,feature,enhancement,tech-debt,refactor,performance,security'
-gh project field-create "$PROJECT_NUMBER" --owner xingjianxu \
-  --name Source --data-type SINGLE_SELECT --single-select-options 'agent-found,human-reported'
-gh project field-create "$PROJECT_NUMBER" --owner xingjianxu --name Module --data-type TEXT
-gh project field-create "$PROJECT_NUMBER" --owner xingjianxu --name Agent --data-type TEXT
+# 先读回既有 fieldId、option id；再整表回写，仅新选项省略 id
+gh api graphql -f query='
+query { viewer { projectV2(number: 1) {
+  field(name: "Status") { ... on ProjectV2SingleSelectField { id options { id name } } } } } }'
+
+gh api graphql -f query='
+mutation {
+  updateProjectV2Field(input: {
+    fieldId: "<STATUS_FIELD_ID>"
+    singleSelectOptions: [
+      { id: "<EXISTING_ID>", name: "Backlog", color: GRAY }
+      { name: "Ready", color: BLUE }
+      { id: "<EXISTING_ID>", name: "In Progress", color: YELLOW }
+      { name: "Review", color: ORANGE }
+      { id: "<EXISTING_ID>", name: "Done", color: PURPLE }
+    ]
+  }) { projectV2Field { ... on ProjectV2SingleSelectField { id name options { id name } } } }
+}'
 ```
 
-Projects 自带 Status，不重复创建同名字段。由人工在看板设置中将其选项配置为上述五态；本机 `gh project field-create` 可新建字段，不能据此假设能重设既有 Status 选项。Iteration 同样由看板设置配置。需要自动化时另行审阅 API 方案，不在本次建立执行引擎。
+`singleSelectOptions` 是**覆盖式**写入：必须回写完整列表，并保留既有 option id，否则条目的已有取值会丢失。
 
-将 Issue 加入看板、修改字段也属于写操作。获授权后可用当前 CLI 的：
+- Iteration 未启用；需要排期时在看板设置中配置。Projects 自动化（自动加入看板、写字段）未建立执行引擎，`gh project item-add` / `item-edit` 属写操作，需单独授权。
+
+## 6. 分支规则集与合并策略
+
+公开个人仓库在 GitHub Free 即可使用 ruleset 与经典保护。`gh ruleset` 只有 `list` / `view` / `check`，**没有 create**，创建规则集必须用 REST：
 
 ```bash
-gh project item-add "$PROJECT_NUMBER" --owner xingjianxu --url "$ISSUE_URL"
-gh project item-edit "$PROJECT_NUMBER" --owner xingjianxu --url "$ISSUE_URL" \
-  --field Status --value 'In Progress'
+gh api -X POST repos/xingjianxu/knoted/rulesets --input ruleset.json
 ```
 
-旧版 gh 未提供按名称编辑时，用 field-list / item-list 读取 ID，再按 `gh project item-edit --help` 使用 ID 形式，不能硬编码别的项目 ID。
+```json
+{
+  "name": "master protection",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["refs/heads/master"], "exclude": [] } },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    { "type": "required_status_checks",
+      "parameters": { "strict_required_status_checks_policy": true,
+                      "required_status_checks": [{ "context": "Rust baseline" }] } },
+    { "type": "pull_request",
+      "parameters": { "required_approving_review_count": 0,
+                      "allowed_merge_methods": ["merge"],
+                      "dismiss_stale_reviews_on_push": true,
+                      "require_code_owner_review": false,
+                      "require_last_push_approval": false,
+                      "required_review_thread_resolution": true } }
+  ]
+}
+```
 
-## 模板、CI 与保护
+- **单维护者约束：** `required_approving_review_count` ≥ 1 时唯一账号无法自我批准，主线会被锁死。当前取 0，配合必需 CI 与禁止强推/删除；具备第二个审查者后再提高，由人工决定。
+- **无 bypass 列表**：规则对仓库 owner 同样生效，`git push` 直推 `master` 会被拒绝，必须走 PR 且检查通过。
+- 合并策略：`allow_squash_merge=false`、`allow_rebase_merge=false`、`delete_branch_on_merge=true`，即仅普通 merge commit。
+- 必需检查只在 CI 至少运行过一次后才出现在设置界面的候选列表中；先跑 CI 再配置保护，可避免配对不存在的 check 导致永久阻塞。
 
-Forms 默认 needs-triage，来源为显式输入；人工/Agent 的来源由分诊或已授权 Agent 添加，不自动把所有创建者标 human-reported。PR 必填 Issue、实现、验证、验收、ADR和限制，但模板复选框本身不是强制校验或批准。
+## 7. 仍需人工决定
 
-Quality 仅 contents: read，checkout 不持久化凭据，执行当前 Rust fmt/test/clippy，不执行 pull_request_target、不发布、不修改任务。checkout 固定到核验过的 v4 commit；未来升级单独审查。Actions 尚未远端运行，不能声称 CI 已通过。
+- 是否提高审批数量、是否为人工操作配置 bypass 列表。
+- Issue Forms 选择页渲染的人工确认（提交一份真实表单 Issue）。
+- 是否建立 Projects 自动化，以及 Iteration 排期。
+- 修订仍引用旧提交哈希的 `docs/development/initialization-report.md`、`docs/plans/2026-11-14-agent-workflow.md`。
 
-维护者确认远端 checks 名称后再设置保护规则、必需审查及合并策略。表单语法依据 [GitHub Issue Forms 文档](https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/syntax-for-issue-forms)，CLI 依据本机 2.103.3 的 `gh project --help` 和子命令帮助。
+## 8. 复核命令（只读）
+
+```bash
+gh auth status
+gh api graphql -f query='{repository(owner:"xingjianxu",name:"knoted"){defaultBranchRef{name}}}'
+gh label list --repo xingjianxu/knoted --limit 100 --json name --jq 'length'
+gh project field-list 1 --owner xingjianxu --format json
+gh ruleset list --repo xingjianxu/knoted
+gh api repos/xingjianxu/knoted/rulesets/27256364
+gh run list --repo xingjianxu/knoted --limit 5
+```
+
+## 9. 限制
+
+- Quality 工作流仅 `contents: read`，checkout 不持久化凭据，不执行 `pull_request_target`、不发布、不修改任务；checkout 仍固定到核验过的 v4 commit。
+- 仓库当前只有 Rust 骨架，`cargo test` 为 0 个测试；fmt/test/clippy 在本地与 CI 均通过，但**不代表业务覆盖**。
+- 未设置组织级规则集、Actions 必需 pinning、分支/标签保护之外的仓库级策略。
+- 表单语法依据 [GitHub Issue Forms 文档](https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/syntax-for-issue-forms)，CLI 依据本机 `gh 2.103.3` 实测。
