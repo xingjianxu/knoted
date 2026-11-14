@@ -3,7 +3,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use knoted_core::config::{AppConfig, ConfigError, LogFormat, LogLevel, ProcessKind};
+use knoted_core::config::{
+    AppConfig, ConfigError, DatabaseConfig, LogFormat, LogLevel, ProcessKind,
+};
 
 fn write_file(path: &Path, contents: &str) {
     std::fs::write(path, contents).unwrap();
@@ -20,6 +22,13 @@ fn config_with(path: &Path, database: Option<&str>, server: Option<&str>) -> Pat
     let config_path = path.join("knoted.toml");
     write_file(&config_path, &toml);
     config_path
+}
+
+fn assert_invalid_field(path: &Path, expected: &'static str) {
+    match AppConfig::load(path) {
+        Err(ConfigError::Invalid { field, .. }) => assert_eq!(field, expected),
+        other => panic!("expected invalid `{expected}`, got {other:?}"),
+    }
 }
 
 #[test]
@@ -41,6 +50,23 @@ fn t01_1_api_and_worker_require_database() {
             process: "worker",
         })
     ));
+
+    // A present but empty `[server]` table is valid TOML. It must be
+    // diagnosed as a missing required field for the API, not a syntax error,
+    // and it must not prevent the worker from loading.
+    let empty_server_path = dir.path().join("empty-server.toml");
+    write_file(
+        &empty_server_path,
+        "[server]\n\n[database]\nurl = \"postgres://knoted:secret@127.0.0.1:5432/knoted\"\n",
+    );
+    assert!(matches!(
+        AppConfig::load_for_process(&empty_server_path, ProcessKind::Api),
+        Err(ConfigError::Missing {
+            field: "server.bind",
+            process: "api",
+        })
+    ));
+    assert!(AppConfig::load_for_process(&empty_server_path, ProcessKind::Worker).is_ok());
 }
 
 #[test]
@@ -205,4 +231,101 @@ fn t01_4_valid_config_loads_for_each_process() {
 
     // The same bind value is irrelevant to the worker.
     assert!(AppConfig::load_for_process(&bad_path, ProcessKind::Worker).is_ok());
+}
+
+#[test]
+fn t01_5_redacts_malformed_database_urls() {
+    for url in [
+        "postgres://u:SENTINEL/pw@h/db",
+        "postgres://SENTINEL_TOKEN@h",
+    ] {
+        let config = DatabaseConfig {
+            url: url.to_owned(),
+            max_connections: 10,
+            connect_timeout_secs: 10,
+        };
+        let rendered = format!("{config:?}");
+        assert!(
+            !rendered.contains("SENTINEL"),
+            "malformed DSN leaked in Debug: {rendered}"
+        );
+    }
+}
+
+#[test]
+fn t01_6_rejects_invalid_values_unknown_keys_and_missing_credentials() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("knoted.toml");
+    let url = "postgres://knoted:secret@127.0.0.1:5432/knoted";
+
+    for value in [0, 65] {
+        write_file(
+            &path,
+            &format!("[database]\nurl = \"{url}\"\nmax_connections = {value}\n"),
+        );
+        assert_invalid_field(&path, "database.max_connections");
+    }
+
+    for value in [0, 301] {
+        write_file(
+            &path,
+            &format!("[database]\nurl = \"{url}\"\nconnect_timeout_secs = {value}\n"),
+        );
+        assert_invalid_field(&path, "database.connect_timeout_secs");
+    }
+
+    write_file(
+        &path,
+        &format!("[database]\nurl = \"{url}\"\nbogus = true\n"),
+    );
+    assert!(matches!(
+        AppConfig::load(&path),
+        Err(ConfigError::Parse { .. })
+    ));
+
+    write_file(
+        &path,
+        &format!("bogus = true\n\n[database]\nurl = \"{url}\"\n"),
+    );
+    assert!(matches!(
+        AppConfig::load(&path),
+        Err(ConfigError::Parse { .. })
+    ));
+
+    let missing_credential_path = dir.path().join("does-not-exist.toml");
+    write_file(
+        &path,
+        &format!(
+            "[credentials]\ncredential_file = \"{}\"\n",
+            missing_credential_path.display()
+        ),
+    );
+    assert!(matches!(
+        AppConfig::load(&path),
+        Err(ConfigError::CredentialRead { .. })
+    ));
+}
+
+#[test]
+fn t01_7_parse_errors_do_not_echo_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("broken.toml");
+    write_file(
+        &path,
+        "[database]\nurl = \"postgres://u:SENTINEL_DB_PW@h/db\n",
+    );
+
+    let error = AppConfig::load(&path).unwrap_err();
+    assert!(matches!(error, ConfigError::Parse { .. }));
+    let display = error.to_string();
+    let debug = format!("{error:?}");
+    assert!(
+        !display.contains("SENTINEL"),
+        "error Display leaked: {display}"
+    );
+    assert!(!debug.contains("SENTINEL"), "error Debug leaked: {debug}");
+    assert!(
+        std::error::Error::source(&error).is_some(),
+        "the TOML source must remain available programmatically"
+    );
 }

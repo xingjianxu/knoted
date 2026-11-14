@@ -109,6 +109,7 @@ pub struct AppConfig {
     pub database: Option<DatabaseConfig>,
     pub logging: LoggingConfig,
     pub credentials: CredentialsConfig,
+    server_section_without_bind: bool,
     secrets: BTreeMap<String, String>,
 }
 
@@ -119,6 +120,10 @@ impl fmt::Debug for AppConfig {
             .field("database", &self.database)
             .field("logging", &self.logging)
             .field("credentials", &self.credentials)
+            .field(
+                "server_section_without_bind",
+                &self.server_section_without_bind,
+            )
             .field("loaded_credentials", &self.secrets.len())
             .finish()
     }
@@ -129,6 +134,10 @@ impl AppConfig {
     ///
     /// Process-specific sections are not required; use
     /// [`AppConfig::load_for_process`] when starting an API or worker process.
+    ///
+    /// A relative `credentials.credential_file` is resolved against the process
+    /// working directory, not against the configuration file's directory;
+    /// deployment configurations should use absolute paths.
     pub fn load(path: impl AsRef<Path>) -> Result<AppConfig, ConfigError> {
         let path = path.as_ref();
         let contents = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
@@ -173,12 +182,20 @@ impl AppConfig {
             Some(path) => load_credentials(path)?,
             None => BTreeMap::new(),
         };
+        let (server, server_section_without_bind) = match file.server {
+            Some(raw) => match raw.bind {
+                Some(bind) => (Some(ServerConfig { bind }), false),
+                None => (None, true),
+            },
+            None => (None, false),
+        };
 
         Ok(AppConfig {
-            server: file.server,
+            server,
             database: file.database,
             logging: file.logging,
             credentials: file.credentials,
+            server_section_without_bind,
             secrets,
         })
     }
@@ -209,8 +226,14 @@ impl AppConfig {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct RawServer {
+    bind: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ConfigFile {
-    server: Option<ServerConfig>,
+    server: Option<RawServer>,
     database: Option<DatabaseConfig>,
     #[serde(default)]
     logging: LoggingConfig,
@@ -274,21 +297,19 @@ fn redact_userinfo(url: &str) -> String {
     };
     let authority_start = scheme_end + "://".len();
     let rest = &url[authority_start..];
-    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let authority = &rest[..authority_end];
-    let Some(at) = authority.rfind('@') else {
+    let Some(at) = rest.rfind('@') else {
         return url.to_owned();
     };
-    let userinfo = &authority[..at];
-    let Some(colon) = userinfo.find(':') else {
-        return url.to_owned();
-    };
-    format!(
-        "{}{}:***@{}",
-        &url[..authority_start],
-        &userinfo[..colon],
-        &rest[at + 1..]
-    )
+    let userinfo = &rest[..at];
+    match userinfo.find(':') {
+        Some(colon) => format!(
+            "{}{}:***@{}",
+            &url[..authority_start],
+            &userinfo[..colon],
+            &rest[at + 1..]
+        ),
+        None => format!("{}***@{}", &url[..authority_start], &rest[at + 1..]),
+    }
 }
 
 /// Replaces `password=...` query (or key/value) values with `***`.
@@ -311,8 +332,9 @@ fn redact_password_parameters(value: &str) -> String {
 
 /// Configuration loading failures.
 ///
-/// `Display` never includes credential values or TOML source fragments.
-#[derive(Debug, thiserror::Error)]
+/// `Display` never includes credential values or TOML source fragments, and
+/// `Debug` intentionally omits source payloads for the same reason.
+#[derive(thiserror::Error)]
 pub enum ConfigError {
     #[error("read config file {}: {source}", path.display())]
     Read {
@@ -344,4 +366,37 @@ pub enum ConfigError {
     },
     #[error("invalid credential file {}", path.display())]
     CredentialParse { path: PathBuf },
+}
+
+impl fmt::Debug for ConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Read { path, .. } => f
+                .debug_struct("Read")
+                .field("path", path)
+                .finish_non_exhaustive(),
+            Self::Parse { path, .. } => f
+                .debug_struct("Parse")
+                .field("path", path)
+                .finish_non_exhaustive(),
+            Self::Missing { field, process } => f
+                .debug_struct("Missing")
+                .field("field", field)
+                .field("process", process)
+                .finish(),
+            Self::Invalid { field, message } => f
+                .debug_struct("Invalid")
+                .field("field", field)
+                .field("message", message)
+                .finish(),
+            Self::CredentialRead { path, .. } => f
+                .debug_struct("CredentialRead")
+                .field("path", path)
+                .finish_non_exhaustive(),
+            Self::CredentialParse { path } => f
+                .debug_struct("CredentialParse")
+                .field("path", path)
+                .finish(),
+        }
+    }
 }
