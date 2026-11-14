@@ -5,3 +5,16 @@ edition.workspace = true
 
 [dependencies]
 knoted-core = { path = "../knoted-core" }
+axum.workspace = true
+http.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+tokio = { workspace = true, features = ["net"] }
+
+[dev-dependencies]
+serde_json.workspace = true
+tower.workspace = true
