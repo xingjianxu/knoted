@@ -183,6 +183,14 @@ pub enum DomainAuthError {
     CeremonyExpired,
     #[error("the account already has a Passkey; a recovery token is required")]
     BootstrapAlreadyCompleted,
+    #[error("this Passkey is already registered")]
+    DuplicateCredential,
+    #[error("the last Passkey of the account cannot be removed")]
+    LastCredential,
+    #[error("the Passkey does not exist")]
+    PasskeyNotFound,
+    #[error("a Passkey verification within the last five minutes is required")]
+    RecentVerificationRequired,
     #[error("stored authentication state is invalid")]
     InvalidState,
     #[error(transparent)]
@@ -209,6 +217,10 @@ impl DomainAuthError {
             DomainAuthError::CeremonyReplayed => "ceremony_replayed",
             DomainAuthError::CeremonyExpired => "ceremony_expired",
             DomainAuthError::BootstrapAlreadyCompleted => "bootstrap_already_completed",
+            DomainAuthError::DuplicateCredential => "duplicate_credential",
+            DomainAuthError::LastCredential => "last_credential",
+            DomainAuthError::PasskeyNotFound => "not_found",
+            DomainAuthError::RecentVerificationRequired => "recent_verification_required",
             DomainAuthError::InvalidState => "invalid_state",
             DomainAuthError::Database(_) => "database_error",
         }

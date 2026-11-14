@@ -45,14 +45,20 @@ pub const CEREMONY_TTL: Duration = Duration::minutes(5);
 
 /// Why a ceremony exists.
 ///
-/// The values are the database check constraint's vocabulary for T14; the
-/// recovery and add-Passkey purposes are added with their own routes.
+/// The values are the database check constraint's vocabulary: bootstrap creates
+/// the owner's first Passkey, login authenticates it, add-passkey "(`T16`)` adds a
+/// second one from a live session, and recovery "(`T16`)` replaces every
+/// credential from a CLI-issued recovery token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CeremonyPurpose {
     /// First registration of the owner's Passkey.
     Bootstrap,
     /// Passkey login for the existing owner.
     Login,
+    /// Registration of an additional Passkey from an authenticated session.
+    AddPasskey,
+    /// Replacement registration authorised by a recovery token.
+    Recovery,
 }
 
 impl CeremonyPurpose {
@@ -61,6 +67,8 @@ impl CeremonyPurpose {
         match self {
             CeremonyPurpose::Bootstrap => "bootstrap",
             CeremonyPurpose::Login => "login",
+            CeremonyPurpose::AddPasskey => "add_passkey",
+            CeremonyPurpose::Recovery => "recovery",
         }
     }
 }
