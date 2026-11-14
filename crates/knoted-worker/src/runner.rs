@@ -1,22 +1,24 @@
-//! Minimal job runner: claim → handle → (heartbeat while running) → finish.
+//! Job runner: claim → execute/cancel → commit through the T08 state machine.
 //!
 //! The runner deliberately knows nothing about job kinds. It claims one job at a
-//! time and hands the [`Lease`] to a [`Handler`], which does the work and
-//! returns a [`JobOutcome`]. While the handler runs, the runner heartbeats the
-//! lease; if the heartbeat fails, another worker has taken the job over, so the
-//! handler's result is discarded instead of committed. That rule is the reason
-//! this type exists: forgetting a heartbeat would silently let two workers
-//! commit the same job.
+//! time and hands the [`Lease`] to a [`Handler`], which executes the work and
+//! reports an [`ExecutionOutcome`]. While the handler runs, the runner
+//! heartbeats the lease. If the heartbeat fails, another worker has taken the
+//! job over, so the handler's result is discarded instead of committed. If the
+//! heartbeat observes `cancel_requested`, the handler is asked to cancel and
+//! wait for the execution to exit; only a confirmed exit is committed, so the
+//! execution slot is never released while a child may still be running.
 //!
-//! Handlers for the real job kinds are added by later cards; the state machine
-//! that decides retries sits between [`JobOutcome`] and the database (T08).
+//! Retry policy, backoff and terminal-state rules live in
+//! [`knoted_core::jobs::service`]; this module only drives them.
 
 use std::future::Future;
 use std::time::Duration;
 
+use knoted_core::context::AppContext;
 use knoted_core::db::DbError;
-use knoted_core::jobs::{self, HEARTBEAT_SECONDS, JobOutcome, Lease};
-use sqlx::PgPool;
+use knoted_core::jobs::service::{self, DomainJobError, ExecutionOutcome, FinishExecution};
+use knoted_core::jobs::{self, HEARTBEAT_SECONDS, Job, JobOutcome, JobState, Lease};
 use tokio::time::MissedTickBehavior;
 
 /// Idle delay between claim attempts when the queue is empty or a claim failed.
@@ -28,38 +30,62 @@ pub const IDLE_BACKOFF: Duration = Duration::from_secs(1);
 /// heartbeats before another worker may take the job over.
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(HEARTBEAT_SECONDS as u64);
 
-/// Work a claimed job. Returning an outcome is not a commit: the runner commits
-/// it only if the lease is still held.
+/// Work a claimed job.
+///
+/// `execute` runs one attempt. `cancel_and_wait` is called when the database
+/// reports `cancel_requested`; it must stop the execution and only return
+/// `true` after the child process has exited, because the runner commits the
+/// cancellation (and frees the slot) only on confirmation.
 pub trait Handler: Send + Sync {
-    /// Future returned by [`Handler::handle`].
-    type Run<'a>: Future<Output = JobOutcome> + Send + 'a
-    where
-        Self: 'a;
+    /// Runs the work behind `lease`.
+    fn execute<'a>(
+        &'a self,
+        lease: &'a Lease,
+    ) -> impl Future<Output = ExecutionOutcome> + Send + 'a;
 
-    /// Runs the job behind `lease`.
+    /// Stops the execution and waits for it to exit.
     ///
-    /// The returned future may borrow `lease` and `self`; the runner keeps both
-    /// alive until the future finishes or the lease is lost.
-    fn handle<'a>(&'a self, lease: &'a Lease) -> Self::Run<'a>;
+    /// The default is for handlers without an external process: there is
+    /// nothing left to wait for once the future is dropped.
+    fn cancel_and_wait<'a>(&'a self, _lease: &'a Lease) -> impl Future<Output = bool> + Send + 'a {
+        async { true }
+    }
 }
 
 /// Closures handle jobs too, as long as the returned future owns its data.
 ///
-/// A closure whose future borrows the lease cannot satisfy this blanket impl,
-/// so such handlers clone the token or are written as a named type.
+/// The closure reports a [`JobOutcome`]; the runner maps it onto the richer
+/// [`ExecutionOutcome`] (a `Failed` closure result is permanent, because a
+/// closure has no way to describe a retryable failure).
 impl<F, Fut> Handler for F
 where
     F: Fn(&Lease) -> Fut + Send + Sync,
     Fut: Future<Output = JobOutcome> + Send + 'static,
 {
-    type Run<'a>
-        = Fut
-    where
-        Self: 'a;
-
-    fn handle<'a>(&'a self, lease: &'a Lease) -> Fut {
-        self(lease)
+    async fn execute<'a>(&'a self, lease: &'a Lease) -> ExecutionOutcome {
+        match self(lease).await {
+            JobOutcome::Succeeded => ExecutionOutcome::Succeeded,
+            JobOutcome::Failed { error } => ExecutionOutcome::PermanentFailure { message: error },
+            JobOutcome::Cancelled => ExecutionOutcome::Cancelled,
+        }
     }
+}
+
+/// What one [`WorkerRunner::step`] did.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StepOutcome {
+    /// The attempt was committed; `job` is the row after the transition, which
+    /// may be `retry_wait` rather than terminal.
+    Finished {
+        job: Box<Job>,
+        outcome: ExecutionOutcome,
+    },
+    /// A cancellation request reached the handler, but the execution exit was
+    /// not confirmed. The lease is deliberately left in place: the slot stays
+    /// allocated until a later attempt observes and confirms the exit.
+    CancellationPending { job_id: uuid::Uuid },
+    /// No job was due.
+    Idle,
 }
 
 /// Errors that stop the runner from completing a job.
@@ -73,11 +99,23 @@ pub enum RunnerError {
         .lease.job_id
     )]
     LeaseLost { lease: Lease },
+    #[error(transparent)]
+    Job(#[from] DomainJobError),
+}
+
+/// Result of driving the handler while watching the lease.
+enum Attempt {
+    /// The handler produced an outcome.
+    Ready(ExecutionOutcome),
+    /// A cancellation request was observed in the database.
+    CancelRequested,
+    /// Another worker took the job over.
+    LeaseLost,
 }
 
 /// Claims and processes jobs one at a time for a single worker identity.
 pub struct WorkerRunner<H> {
-    pool: PgPool,
+    ctx: AppContext,
     worker: String,
     handler: H,
     idle_backoff: Duration,
@@ -85,11 +123,18 @@ pub struct WorkerRunner<H> {
 }
 
 impl<H: Handler> WorkerRunner<H> {
-    /// Creates a runner for `worker`; the name is stored in `jobs.locked_by`
-    /// and shows up in diagnostics.
-    pub fn new(pool: PgPool, worker: impl Into<String>, handler: H) -> Self {
+    /// Creates a runner for `worker` with the system clock.
+    ///
+    /// The name is stored in `jobs.locked_by` and shows up in diagnostics.
+    pub fn new(pool: sqlx::PgPool, worker: impl Into<String>, handler: H) -> Self {
+        Self::with_context(AppContext::new(pool), worker, handler)
+    }
+
+    /// Creates a runner with an explicit context, so tests can inject a fixed
+    /// clock and retry scheduling stays deterministic.
+    pub fn with_context(ctx: AppContext, worker: impl Into<String>, handler: H) -> Self {
         WorkerRunner {
-            pool,
+            ctx,
             worker: worker.into(),
             handler,
             idle_backoff: IDLE_BACKOFF,
@@ -109,28 +154,66 @@ impl<H: Handler> WorkerRunner<H> {
         self
     }
 
-    /// Claims one job and processes it.
+    /// Claims one job, drives it through the state machine and reports what
+    /// happened.
     ///
-    /// Returns `Ok(None)` when no job is due. `Err(RunnerError::LeaseLost)`
-    /// means the job was taken over while the handler ran; its outcome was not
-    /// written.
-    pub async fn run_once(&self) -> Result<Option<JobOutcome>, RunnerError> {
-        let Some(lease) = jobs::claim(&self.pool, &self.worker).await? else {
-            return Ok(None);
+    /// Unlike [`WorkerRunner::run_once`], this reports a pending cancellation
+    /// separately from an idle queue and returns the committed job row.
+    pub async fn step(&self) -> Result<StepOutcome, RunnerError> {
+        let Some(lease) = jobs::claim(self.ctx.pool(), &self.worker).await? else {
+            return Ok(StepOutcome::Idle);
         };
 
-        let outcome = self.execute(&lease).await?;
-
-        if !jobs::finish_with_token(&self.pool, &lease, outcome.clone()).await? {
-            return Err(RunnerError::LeaseLost { lease });
+        // A takeover of a cancellation request must not execute the work again;
+        // it continues where the dead worker stopped: confirming the exit.
+        if lease.state == JobState::CancelRequested {
+            return self.confirm_cancel(&lease).await;
         }
 
-        Ok(Some(outcome))
+        let outcome = match self.drive_handler(&lease).await? {
+            Attempt::Ready(outcome) => outcome,
+            Attempt::CancelRequested => return self.confirm_cancel(&lease).await,
+            Attempt::LeaseLost => return Err(RunnerError::LeaseLost { lease }),
+        };
+
+        // The handler may have finished between two heartbeats. Check once more
+        // so a cancellation that arrived in that window is not overwritten by a
+        // result the state machine would have to reject anyway.
+        if outcome != ExecutionOutcome::Cancelled {
+            match jobs::heartbeat_state(self.ctx.pool(), &lease).await? {
+                None => return Err(RunnerError::LeaseLost { lease }),
+                Some(JobState::CancelRequested) => {
+                    return self.confirm_cancel(&lease).await;
+                }
+                Some(_) => {}
+            }
+        }
+
+        self.commit(&lease, outcome, false).await
     }
 
-    /// Runs the handler while keeping the lease alive.
-    async fn execute(&self, lease: &Lease) -> Result<JobOutcome, RunnerError> {
-        let handler = self.handler.handle(lease);
+    /// Claims one job and processes it.
+    ///
+    /// This is a compatibility view over [`WorkerRunner::step`] for callers that
+    /// only need the reported outcome: only a terminal result (`succeeded`,
+    /// `failed`, `cancelled`) is returned. A scheduled retry and a pending
+    /// cancellation both look like `None`, exactly like an idle queue, because
+    /// the job did not reach a final state. New code should use `step` and
+    /// inspect [`StepOutcome`].
+    pub async fn run_once(&self) -> Result<Option<JobOutcome>, RunnerError> {
+        match self.step().await? {
+            StepOutcome::Finished { job, outcome } => match JobState::parse(&job.state) {
+                Some(state) if state.is_terminal() => Ok(Some(legacy_outcome(outcome))),
+                _ => Ok(None),
+            },
+            StepOutcome::CancellationPending { .. } | StepOutcome::Idle => Ok(None),
+        }
+    }
+
+    /// Runs the handler while keeping the lease alive and watching for
+    /// cancellation.
+    async fn drive_handler(&self, lease: &Lease) -> Result<Attempt, RunnerError> {
+        let handler = self.handler.execute(lease);
         tokio::pin!(handler);
 
         let mut ticker = tokio::time::interval(self.heartbeat_interval);
@@ -142,16 +225,95 @@ impl<H: Handler> WorkerRunner<H> {
 
         loop {
             tokio::select! {
-                outcome = &mut handler => return Ok(outcome),
+                outcome = &mut handler => return Ok(Attempt::Ready(outcome)),
                 _ = ticker.tick() => {
-                    if !jobs::heartbeat(&self.pool, lease).await? {
-                        return Err(RunnerError::LeaseLost {
-                            lease: lease.clone(),
-                        });
+                    match jobs::heartbeat_state(self.ctx.pool(), lease).await? {
+                        None => return Ok(Attempt::LeaseLost),
+                        Some(JobState::CancelRequested) => return Ok(Attempt::CancelRequested),
+                        Some(_) => {}
                     }
                 }
             }
         }
+    }
+
+    /// Asks the handler to stop and commits the cancellation only once the
+    /// execution confirms its exit.
+    async fn confirm_cancel(&self, lease: &Lease) -> Result<StepOutcome, RunnerError> {
+        if !self.handler.cancel_and_wait(lease).await {
+            // No confirmation: keep the lease. Returning without finishing is
+            // what preserves the slot; the lease is recovered by a takeover
+            // after it expires, which repeats the same confirmation attempt.
+            return Ok(StepOutcome::CancellationPending {
+                job_id: lease.job_id,
+            });
+        }
+
+        self.finish_confirmed_cancel(lease).await
+    }
+
+    /// Writes `cancelled` after the handler confirmed the exit.
+    async fn finish_confirmed_cancel(&self, lease: &Lease) -> Result<StepOutcome, RunnerError> {
+        let job = self.write(lease, ExecutionOutcome::Cancelled, true).await?;
+        if job.state == JobState::CancelRequested.as_str() {
+            // The confirmation write missed (for example the lease moved
+            // between the read and the write): keep the slot and let a later
+            // attempt retry the confirmation.
+            return Ok(StepOutcome::CancellationPending { job_id: job.id });
+        }
+        Ok(StepOutcome::Finished {
+            job: Box::new(job),
+            outcome: ExecutionOutcome::Cancelled,
+        })
+    }
+
+    /// Applies the state machine and maps a still-pending cancellation back to
+    /// [`StepOutcome::CancellationPending`] instead of reporting it finished.
+    async fn commit(
+        &self,
+        lease: &Lease,
+        outcome: ExecutionOutcome,
+        cancel_confirmed: bool,
+    ) -> Result<StepOutcome, RunnerError> {
+        let job = self.write(lease, outcome.clone(), cancel_confirmed).await?;
+
+        if job.state == JobState::CancelRequested.as_str() {
+            if cancel_confirmed {
+                return Ok(StepOutcome::CancellationPending { job_id: job.id });
+            }
+            // A cancellation arrived after the last heartbeat. The handler has
+            // finished, but the contract still needs an explicit exit
+            // confirmation before the lease may be released.
+            if !self.handler.cancel_and_wait(lease).await {
+                return Ok(StepOutcome::CancellationPending { job_id: job.id });
+            }
+            return self.finish_confirmed_cancel(lease).await;
+        }
+
+        Ok(StepOutcome::Finished {
+            job: Box::new(job),
+            outcome,
+        })
+    }
+
+    /// Sends one outcome to the state machine.
+    async fn write(
+        &self,
+        lease: &Lease,
+        outcome: ExecutionOutcome,
+        cancel_confirmed: bool,
+    ) -> Result<Job, RunnerError> {
+        service::finish_execution(
+            &self.ctx,
+            FinishExecution {
+                job_id: lease.job_id,
+                lease_token: lease.token,
+                outcome,
+                cancel_confirmed,
+            },
+        )
+        .await
+        .map_err(|error| runner_error(lease, error))
     }
 
     /// Claims and processes jobs forever, backing off while the queue is empty
@@ -162,15 +324,39 @@ impl<H: Handler> WorkerRunner<H> {
     /// process.
     pub async fn run(&self) {
         loop {
-            match self.run_once().await {
-                Ok(Some(_)) => {}
-                Ok(None) => tokio::time::sleep(self.idle_backoff).await,
+            match self.step().await {
+                Ok(StepOutcome::Finished { .. }) => {}
+                Ok(StepOutcome::CancellationPending { .. }) | Ok(StepOutcome::Idle) => {
+                    tokio::time::sleep(self.idle_backoff).await;
+                }
                 Err(error) => {
                     eprintln!("knoted-worker {}: {error}", self.worker);
                     tokio::time::sleep(self.idle_backoff).await;
                 }
             }
         }
+    }
+}
+
+/// Maps the runner's richer outcome onto the T07 `JobOutcome` view.
+fn legacy_outcome(outcome: ExecutionOutcome) -> JobOutcome {
+    match outcome {
+        ExecutionOutcome::Succeeded => JobOutcome::Succeeded,
+        ExecutionOutcome::Cancelled => JobOutcome::Cancelled,
+        ExecutionOutcome::TemporaryFailure { message }
+        | ExecutionOutcome::PermanentFailure { message } => JobOutcome::Failed { error: message },
+    }
+}
+
+/// Preserves [`RunnerError::LeaseLost`] for the lease errors the runner already
+/// handles, and keeps database failures in their own variant.
+fn runner_error(lease: &Lease, error: DomainJobError) -> RunnerError {
+    match error {
+        DomainJobError::LeaseLost { .. } => RunnerError::LeaseLost {
+            lease: lease.clone(),
+        },
+        DomainJobError::Database(error) => RunnerError::Database(error),
+        other => RunnerError::Job(other),
     }
 }
 

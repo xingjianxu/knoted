@@ -8,6 +8,4 @@ knoted-core = { path = "../knoted-core" }
 sqlx.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-
-[dev-dependencies]
 uuid.workspace = true
