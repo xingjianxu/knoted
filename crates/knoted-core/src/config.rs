@@ -109,7 +109,6 @@ pub struct AppConfig {
     pub database: Option<DatabaseConfig>,
     pub logging: LoggingConfig,
     pub credentials: CredentialsConfig,
-    server_section_without_bind: bool,
     secrets: BTreeMap<String, String>,
 }
 
@@ -120,10 +119,6 @@ impl fmt::Debug for AppConfig {
             .field("database", &self.database)
             .field("logging", &self.logging)
             .field("credentials", &self.credentials)
-            .field(
-                "server_section_without_bind",
-                &self.server_section_without_bind,
-            )
             .field("loaded_credentials", &self.secrets.len())
             .finish()
     }
@@ -182,20 +177,17 @@ impl AppConfig {
             Some(path) => load_credentials(path)?,
             None => BTreeMap::new(),
         };
-        let (server, server_section_without_bind) = match file.server {
-            Some(raw) => match raw.bind {
-                Some(bind) => (Some(ServerConfig { bind }), false),
-                None => (None, true),
-            },
-            None => (None, false),
-        };
+        // A `[server]` section without `bind` is the same diagnostic as an
+        // absent section: the API requires `server.bind`.
+        let server = file
+            .server
+            .and_then(|raw| raw.bind.map(|bind| ServerConfig { bind }));
 
         Ok(AppConfig {
             server,
             database: file.database,
             logging: file.logging,
             credentials: file.credentials,
-            server_section_without_bind,
             secrets,
         })
     }
