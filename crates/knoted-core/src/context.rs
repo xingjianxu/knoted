@@ -1,0 +1,162 @@
+//! The process-wide application context shared by every route handler.
+//!
+//! `AppContext` owns the PostgreSQL pool and the clock, so handlers depend on
+//! one injectable object instead of process globals. Tests replace the clock
+//! with [`FixedClock`] to make time-dependent behaviour deterministic; the API
+//! crate never constructs a second, parallel context.
+//!
+//! This module is transport agnostic: no Axum type appears here, per the
+//! architecture rule that `knoted-core` owns persistence and the API crate owns
+//! transport.
+
+use std::fmt;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
+use chrono::{DateTime, Duration, Utc};
+use sqlx::PgPool;
+
+/// Source of the current time.
+///
+/// Implementations must be cheap and thread-safe: every request may call this.
+pub trait Clock: Send + Sync {
+    /// Current instant in UTC.
+    fn now(&self) -> DateTime<Utc>;
+}
+
+/// Wall clock backed by the operating system.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> DateTime<Utc> {
+        Utc::now()
+    }
+}
+
+/// A clock that only moves when a test moves it.
+///
+/// `FixedClock` is cloneable and every clone observes the same instant, so a
+/// test can keep one handle while handlers hold a type-erased clone.
+#[derive(Debug, Clone)]
+pub struct FixedClock {
+    now: Arc<Mutex<DateTime<Utc>>>,
+}
+
+impl FixedClock {
+    /// Starts the clock at `now`.
+    pub fn new(now: DateTime<Utc>) -> Self {
+        Self {
+            now: Arc::new(Mutex::new(now)),
+        }
+    }
+
+    /// Moves the clock forward by `by`.
+    pub fn advance(&self, by: Duration) {
+        let mut now = self.lock();
+        *now += by;
+    }
+
+    /// Sets the clock to `now`, for tests that jump backwards or far ahead.
+    pub fn set(&self, now: DateTime<Utc>) {
+        *self.lock() = now;
+    }
+
+    fn lock(&self) -> MutexGuard<'_, DateTime<Utc>> {
+        // A test that panics while holding the lock must not wedge the clock;
+        // the stored instant is still a valid value.
+        self.now.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl Clock for FixedClock {
+    fn now(&self) -> DateTime<Utc> {
+        *self.lock()
+    }
+}
+
+/// Shared state handed to every request handler.
+#[derive(Clone)]
+pub struct AppContext {
+    pool: PgPool,
+    clock: Arc<dyn Clock>,
+}
+
+impl AppContext {
+    /// Builds a context with the system clock.
+    pub fn new(pool: PgPool) -> Self {
+        Self {
+            pool,
+            clock: Arc::new(SystemClock),
+        }
+    }
+
+    /// Replaces the clock, keeping the pool.
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    /// The PostgreSQL pool.
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+
+    /// Current instant according to the injected clock.
+    pub fn now(&self) -> DateTime<Utc> {
+        self.clock.now()
+    }
+}
+
+impl fmt::Debug for AppContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AppContext")
+            .field("pool", &self.pool)
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone;
+
+    use super::{AppContext, Clock, FixedClock};
+    use chrono::{Duration, Utc};
+    use sqlx::postgres::PgPoolOptions;
+
+    fn lazy_pool() -> sqlx::PgPool {
+        // Never connected: these tests only need a pool value, not a database.
+        PgPoolOptions::new()
+            .connect_lazy("postgres://knoted_test@127.0.0.1:1/knoted_test")
+            .expect("a lazy pool is built without connecting")
+    }
+
+    #[test]
+    fn t06_fixed_clock_advances_and_is_shared() {
+        let start = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
+        let clock = FixedClock::new(start);
+        let handle = clock.clone();
+
+        assert_eq!(clock.now(), start);
+        handle.advance(Duration::seconds(90));
+        assert_eq!(clock.now(), start + Duration::seconds(90));
+        assert_eq!(handle.now(), clock.now(), "clones share one instant");
+        handle.set(start);
+        assert_eq!(clock.now(), start);
+    }
+
+    #[tokio::test]
+    async fn t06_app_context_exposes_injected_clock_and_pool() {
+        let start = Utc.with_ymd_and_hms(2026, 6, 7, 8, 9, 10).unwrap();
+        let fixed = std::sync::Arc::new(FixedClock::new(start));
+        let pool = lazy_pool();
+        let ctx = AppContext::new(pool.clone()).with_clock(fixed.clone());
+
+        assert_eq!(ctx.now(), start);
+        fixed.advance(Duration::minutes(5));
+        assert_eq!(ctx.now(), start + Duration::minutes(5));
+        assert_eq!(
+            ctx.pool().options().get_max_connections(),
+            pool.options().get_max_connections()
+        );
+    }
+}
