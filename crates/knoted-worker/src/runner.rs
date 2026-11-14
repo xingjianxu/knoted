@@ -195,12 +195,17 @@ impl<H: Handler> WorkerRunner<H> {
     /// Claims one job and processes it.
     ///
     /// This is a compatibility view over [`WorkerRunner::step`] for callers that
-    /// only need the reported outcome: every non-terminal result (a scheduled
-    /// retry or a pending cancellation) looks like `None`, exactly like an idle
-    /// queue. New code should use `step` and inspect [`StepOutcome`].
+    /// only need the reported outcome: only a terminal result (`succeeded`,
+    /// `failed`, `cancelled`) is returned. A scheduled retry and a pending
+    /// cancellation both look like `None`, exactly like an idle queue, because
+    /// the job did not reach a final state. New code should use `step` and
+    /// inspect [`StepOutcome`].
     pub async fn run_once(&self) -> Result<Option<JobOutcome>, RunnerError> {
         match self.step().await? {
-            StepOutcome::Finished { outcome, .. } => Ok(Some(legacy_outcome(outcome))),
+            StepOutcome::Finished { job, outcome } => match JobState::parse(&job.state) {
+                Some(state) if state.is_terminal() => Ok(Some(legacy_outcome(outcome))),
+                _ => Ok(None),
+            },
             StepOutcome::CancellationPending { .. } | StepOutcome::Idle => Ok(None),
         }
     }
@@ -244,7 +249,22 @@ impl<H: Handler> WorkerRunner<H> {
             });
         }
 
-        self.commit(lease, ExecutionOutcome::Cancelled, true).await
+        self.finish_confirmed_cancel(lease).await
+    }
+
+    /// Writes `cancelled` after the handler confirmed the exit.
+    async fn finish_confirmed_cancel(&self, lease: &Lease) -> Result<StepOutcome, RunnerError> {
+        let job = self.write(lease, ExecutionOutcome::Cancelled, true).await?;
+        if job.state == JobState::CancelRequested.as_str() {
+            // The confirmation write missed (for example the lease moved
+            // between the read and the write): keep the slot and let a later
+            // attempt retry the confirmation.
+            return Ok(StepOutcome::CancellationPending { job_id: job.id });
+        }
+        Ok(StepOutcome::Finished {
+            job: Box::new(job),
+            outcome: ExecutionOutcome::Cancelled,
+        })
     }
 
     /// Applies the state machine and maps a still-pending cancellation back to
@@ -255,26 +275,45 @@ impl<H: Handler> WorkerRunner<H> {
         outcome: ExecutionOutcome,
         cancel_confirmed: bool,
     ) -> Result<StepOutcome, RunnerError> {
-        let job = service::finish_execution(
-            &self.ctx,
-            FinishExecution {
-                job_id: lease.job_id,
-                lease_token: lease.token,
-                outcome: outcome.clone(),
-                cancel_confirmed,
-            },
-        )
-        .await
-        .map_err(|error| runner_error(lease, error))?;
+        let job = self.write(lease, outcome.clone(), cancel_confirmed).await?;
 
         if job.state == JobState::CancelRequested.as_str() {
-            return Ok(StepOutcome::CancellationPending { job_id: job.id });
+            if cancel_confirmed {
+                return Ok(StepOutcome::CancellationPending { job_id: job.id });
+            }
+            // A cancellation arrived after the last heartbeat. The handler has
+            // finished, but the contract still needs an explicit exit
+            // confirmation before the lease may be released.
+            if !self.handler.cancel_and_wait(lease).await {
+                return Ok(StepOutcome::CancellationPending { job_id: job.id });
+            }
+            return self.finish_confirmed_cancel(lease).await;
         }
 
         Ok(StepOutcome::Finished {
             job: Box::new(job),
             outcome,
         })
+    }
+
+    /// Sends one outcome to the state machine.
+    async fn write(
+        &self,
+        lease: &Lease,
+        outcome: ExecutionOutcome,
+        cancel_confirmed: bool,
+    ) -> Result<Job, RunnerError> {
+        service::finish_execution(
+            &self.ctx,
+            FinishExecution {
+                job_id: lease.job_id,
+                lease_token: lease.token,
+                outcome,
+                cancel_confirmed,
+            },
+        )
+        .await
+        .map_err(|error| runner_error(lease, error))
     }
 
     /// Claims and processes jobs forever, backing off while the queue is empty
