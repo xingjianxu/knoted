@@ -117,7 +117,7 @@
 
 主线整体验证（T16 合并后 `6ad602e`）：`cargo fmt --check`、`cargo test --workspace --locked`（85 passed）、`cargo clippy --workspace --all-targets -- -D warnings` 全部 exit 0；Python 侧 `uv run --group dev pytest`（T09/T10/T11 共 40 passed，CPU 与 GPU 嵌入两种环境各跑一次）与 `ruff check/format --check` exit 0。逐卡证据与限制写在各任务卡「执行证据」及 `/data/knoted-dev/tasks/knoted-t06-t16/{reports,reviews,evidence}/`；过程记录见 `/data/knoted-dev/tasks/knoted-t06-t16/ledger.md`。
 
-尚未执行：T17 起的后续任务；测试实例部署（T21 才建立，T06—T16 均为库/契约/Python 服务，无对外部署）。仍存在的跨任务限制：无真实硬件 Passkey 人工验证；Docling Office 格式由 T46—T48 承接；Strata 与 Knoted 的 provider 模块尚未统一（见 T12 证据 §9，待人工裁决）。
+尚未执行：T17 起的后续任务；测试实例部署（T21 才建立，T06—T16 均为库/契约/Python 服务，无对外部署）。仍存在的跨任务限制：无真实硬件 Passkey 人工验证；Docling Office 格式由 T46—T48 承接；Strata 与 Knoted 的 provider 模块**已裁决统一**（2026-11-15：host 独占部署 + app 侧纯客户端契约，待 `nixos-rebuild switch` 激活，见 T12 证据 §11）。
 
 ## 阶段交付
 
