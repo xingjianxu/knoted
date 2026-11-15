@@ -1,10 +1,10 @@
 # RFC: Docling 与 BGE-M3 模型数据改为机器级共享目录并按 revision 分层
 
 - Date: 2026-11-15
-- Status: Draft
-- Owner: 待指定（本文由当前会话 Agent 起草，需要人工确认后才进入实施）
-- Related issues / ADRs: [#32](https://github.com/xingjianxu/knoted/issues/32)；现有 ADR 无（`docs/decisions/` 为空）；本方案属跨模块存储契约，Resolved 后另记 Accepted ADR
-- Decision record: 尚未决定
+- Status: Resolved
+- Owner: 待指定（本文由当前会话 Agent 起草）
+- Related issues / ADRs: [#32](https://github.com/xingjianxu/knoted/issues/32)、[PR #33](https://github.com/xingjianxu/knoted/pull/33)、[ADR 0001](../decisions/0001-machine-level-model-artifact-roots.md)
+- Decision record: 已决定 → [ADR 0001：模型 artifact 采用机器级共享根](../decisions/0001-machine-level-model-artifact-roots.md)（Accepted，2026-11-15）
 
 ## 问题、目标与非目标
 
@@ -146,6 +146,10 @@ Docling 解析所需的 artifact 是 layout-heron（transformers engine）、Tab
 | 环境变量 | A1（专用变量 + upstream 兜底） | 人工，2026-11-15 会话 |
 | 读策略 | D1（全体可读 0755/0644） | 人工，2026-11-15 会话 |
 | 范围 | Docling artifact 与 BGE-M3 快照一起外置，两套共享根用同一套规则 | 人工，2026-11-15 会话 |
+| 共享根属主 | host 用户（`xingjian`）拥有并执行 provision；不引入专用属主 | 人工，2026-11-15 会话 |
+| 旧路径兼容 | 不留 symlink，直接切换 | 人工，2026-11-15 会话 |
+| 共享根声明 | 由 `/etc/nixos` 的 tmpfiles 声明两个共享根与 revision 目录的权限 | 人工，2026-11-15 会话 |
+| 预处理路径形状 | 两棵根平行：`/data/llm/docling` 与 `/data/llm/bge-m3`，不合并成 `/data/llm/models/*` | 人工，2026-11-15 会话 |
 
 以下为 Agent 的默认判断，可被推翻：provision 脚本与 `MANIFEST.json` 模板**移入仓库**受审查（数据目录只放字节与生成物）；迁移采用**先复制、后切换、最后删除**，不留 symlink（当前无运行中的 Knoted 服务，只有 `knoted-api-key.service`，不存在需要兼容的常驻进程）；未配置环境变量时**fail-fast**，不静默退回旧路径。
 
@@ -231,8 +235,9 @@ def model_dir() -> Path:              # 取代 models_dir()/MODEL_DIRNAME 拼接
 
 ### 3. 读策略
 
-- `/data/llm/docling` 与 `/data/llm/bge-m3` 两个共享根及其各 revision 目录 `0755`，artifact 文件 `0644`，属主为执行 provision 的账号（host 用户）。
+- `/data/llm/docling` 与 `/data/llm/bge-m3` 两个共享根及其各 revision 目录 `0755`，artifact 文件 `0644`，属主为 host 用户（`xingjian`），由属主执行 provision。
 - 消费者（`knoted` 及其他服务账号）只有读权限；共享根内不出现任何凭据。
+- 两个共享根与 revision 目录的权限由 `/etc/nixos` 声明式保证（见 §6），不依赖手工 `mkdir` 的偶然正确性。
 
 ### 4. provisioning 归属
 
@@ -263,7 +268,7 @@ def model_dir() -> Path:              # 取代 models_dir()/MODEL_DIRNAME 拼接
 
 - `features/server/knoted.nix` 的 `dirs` 移除 `/models`、`/models/ocr`、`/models/bge-m3`（两棵模型树都不再位于实例数据根），并删除默认值里对应的条目与描述。
 - `AGENTS.md` 中 `knoted.*` 那一行的「模型权重由 Knoted 的 host 任务预拉到 dataRoot/models/」描述要改写为「Docling artifact 在 `/data/llm/docling/<revision>`、BGE-M3 快照在 `/data/llm/bge-m3/<revision>`」。
-- 两棵共享根与各自的 revision 目录若需要声明式保证，应在此新增 tmpfiles 规则（`0755`，属主 host 用户），而不是让应用假定它们存在。
+- **新增 tmpfiles 声明**（人工已确认）：两个共享根与当前锁版 revision 目录由模块声明 `0755`、属主 `cfg.user`，位置可以是新增的 module option（例：`artifactRoots = [ "/data/llm/docling" "/data/llm/bge-m3" ]`）而不写死常量。未启用的新 revision 目录不在声明内，由 provision 脚本自己 `install -d -m 0755`。
 
 ## 影响与迁移
 
@@ -324,13 +329,13 @@ def model_dir() -> Path:              # 取代 models_dir()/MODEL_DIRNAME 拼接
 - 迁移验证：两棵树搬迁前后逐文件 sha256 + size 比对生成的 `MANIFEST.json`，再对 `LOCK.md` §4/§2 的必需项单独比对；`sudo -u knoted` 与非属主账号各读一遍两棵树的全部 artifact。
 - 结构检查：`grep -rn "/data/knoted-dev/service/models" services docs` 在改动后只剩历史记录类文档。
 
-### 开放问题
+### 已决定的事项（原先的开放问题）
 
-1. **共享根的属主**：host 用户（现状可行）还是引入专用属主（如 `docling-data`）？D1 下两者都能读，差别在于谁有权 provision。两个共享根（docling / bge-m3）建议用同一属主。
-2. **旧路径是否留一段 symlink**：当前没有常驻服务，倾向不留；若有未记录的消费者，需要先确认。
-3. **`/etc/nixos` 的 tmpfiles 是否声明共享根**：声明则 rebuild 时自动保证权限，不声明则依赖 host 任务的约定。
-4. **谁批准 ADR**：跨模块存储契约，按 AGENTS.md 规则 7/12 需人工确认。
-5. **两棵共享根是否合并成一个 `/data/llm/models/{docling,bge-m3}`**：目前按你给出的 `/data/llm/docling` 起头，用 `/data/llm/bge-m3` 平行摆放；若 `/data/llm` 下还有其它项目放置同名目录的风险，可改成子目录形式。此选择只影响路径前缀，不影响其余设计。
+1. **共享根属主** → host 用户（`xingjian`）。provision 以属主身份执行；不引入 `docling-data` 类专用属主（D1 下消费者只需读）。
+2. **旧路径是否留 symlink** → **不留**，直接切换；旧树在验证通过后删除。依赖旧路径的未记录消费者不存在（当前只有 `knoted-api-key.service`，无 Python 常驻单元）。
+3. **`/etc/nixos` 的 tmpfiles** → **声明**两个共享根与当前 revision 目录（`0755`，属主 host 用户）；新 revision 目录由 provision 脚本创建。
+4. **两棵根的路径形状** → 平行：`/data/llm/docling` 与 `/data/llm/bge-m3`，不合并成 `/data/llm/models/*`。
+5. **ADR** → 已写入并标记 Accepted：`docs/decisions/0001-machine-level-model-artifact-roots.md`，确认依据记录在 ADR 与本文「评审记录」。
 
 ## 评审记录
 
@@ -354,4 +359,8 @@ def model_dir() -> Path:              # 取代 models_dir()/MODEL_DIRNAME 拼接
 | 4 | bash 脚本怎么拿到 revision 目录名而不手写 | 脚本自带 `--print-revision-id`，不依赖 venv；测试断言 bash / Python / `LOCK.md` 三处一致 | Agent 定（保持了「provision 不依赖 Python」） |
 | 5 | `MANIFEST.json` 谁写、什么 schema、迁移拿什么当判据 | 脚本生成；schema 升为 `knoted-docling-artifacts/2`；路径改为相对 revision 根；迁移用「14 个文件的生成清单 + `LOCK.md` §4 的 9 行」双判据 | Agent 定（该文件运行时不被校验，不改变解析行为） |
 
-以上 Agent 自定的五项均已在正文标注为可推翻的默认判断；若人工不同意，只需回改对应小节，不影响其余选型。
+### 2026-11-15 PR review 与 ADR 确认（人工）
+
+- 人工 review 完 PR #33 并逐项确认：共享根属主 = host 用户；不留 symlink；由 `/etc/nixos` 声明共享根；两棵根 `/data/llm/{docling,bge-m3}` 平行摆放。
+- ADR 批准方式：人工明确表示「你批准 ADR」，即授权 Agent 将本文决定写入并标记为 Accepted。ADR 的 `Confirmation` 字段记录了该会话指令与本次逐项确认。
+- 因此本文状态由 Draft 置为 Resolved，决定记入 [ADR 0001](../decisions/0001-machine-level-model-artifact-roots.md)。
