@@ -1,10 +1,10 @@
 """T10 acceptance tests: Docling + RapidOCR parsing of Chinese/English input.
 
 These tests run the **real** parser: Docling's layout model, TableFormer and
-RapidOCR are loaded from the locally provisioned, revision-locked artifacts
-under ``KNOTED_INTELLIGENCE_MODELS_DIR`` (default
-``/data/knoted-dev/service/models``). Nothing here mocks a model, a download or
-an OCR result.
+RapidOCR are loaded from the machine-level, revision-locked artifact root named
+by ``KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR`` (or Docling's own
+``DOCLING_ARTIFACTS_PATH``); there is no default path. Nothing here mocks a
+model, a download or an OCR result.
 
 ``t10_1`` additionally forbids every socket connection while the parse runs, so
 a hidden Hugging Face download would fail instead of silently succeeding. If the
@@ -54,14 +54,16 @@ EXECUTIONS_PATH = "/internal/v1/executions"
 def require_artifacts() -> Path:
     """Fails with the provisioning command when the locked models are absent."""
 
-    artifacts = locked.docling_artifacts_path(locked.default_models_dir())
-    problems = locked.artifact_problems(locked.default_models_dir())
+    artifacts = locked.docling_artifacts_path(locked.artifacts_dir())
+    problems = locked.artifact_problems(locked.artifacts_dir())
     if problems:
         pytest.fail(
             "the revision-locked OCR artifacts are not provisioned under "
             f"{artifacts}:\n  " + "\n  ".join(problems) + "\n"
-            "Install them with /data/knoted-dev/service/models/ocr/fetch-models.sh "
-            "(see services/intelligence/src/knoted_intelligence/parsing/LOCK.md)."
+            "Provision them with "
+            "services/intelligence/scripts/fetch-docling-artifacts.sh --verify "
+            "(see services/intelligence/src/knoted_intelligence/parsing/LOCK.md), "
+            f"using {locked.ARTIFACTS_DIR_ENV} or {locked.UPSTREAM_ARTIFACTS_ENV}."
         )
     return artifacts
 
@@ -70,7 +72,7 @@ def parse_sample() -> Any:
     return parse_document(
         SAMPLE_PNG,
         options_revision=locked.OPTIONS_REVISION,
-        models_dir=locked.default_models_dir(),
+        models_dir=locked.artifacts_dir(),
     )
 
 
@@ -154,7 +156,6 @@ def test_t10_1b_offline_parse_in_child_process() -> None:
         document = parse_document(
             Path(sys.argv[1]),
             options_revision=models.OPTIONS_REVISION,
-            models_dir=models.default_models_dir(),
         )
         assert attempts == [], attempts
         assert "知识库" in document.full_text
@@ -249,7 +250,7 @@ def test_t10_3_failure_reports_locked_combination(tmp_path: Path) -> None:
         parse_document(
             truncated,
             options_revision=locked.OPTIONS_REVISION,
-            models_dir=locked.default_models_dir(),
+            models_dir=locked.artifacts_dir(),
         )
     assert corrupt.value.code in {"corrupt_input", "unsupported_format"}
     # The summary leads the message, so a downstream truncation can never cut
@@ -267,7 +268,7 @@ def test_t10_3_failure_reports_locked_combination(tmp_path: Path) -> None:
         parse_document(
             unsupported,
             options_revision=locked.OPTIONS_REVISION,
-            models_dir=locked.default_models_dir(),
+            models_dir=locked.artifacts_dir(),
         )
     assert garbage.value.code == "unsupported_format"
     for part in summary_parts:
@@ -313,7 +314,7 @@ def test_t10_3b_missing_models_reported_via_execution(
 
     empty_models = tmp_path / "empty-models"
     empty_models.mkdir()
-    monkeypatch.setenv(locked.MODELS_DIR_ENV, str(empty_models))
+    monkeypatch.setenv(locked.ARTIFACTS_DIR_ENV, str(empty_models))
 
     with running_service(tmp_path) as (client, settings):
         object_id = "sample-zh-en.png"
@@ -368,7 +369,7 @@ def test_t10_4_limits_enforced(tmp_path: Path) -> None:
         parse_document(
             bomb,
             options_revision=locked.OPTIONS_REVISION,
-            models_dir=locked.default_models_dir(),
+            models_dir=locked.artifacts_dir(),
         )
     assert too_many_pixels.value.code == "image_too_large"
     assert "40" in str(too_many_pixels.value) and "pixel" in str(too_many_pixels.value).lower()
@@ -451,6 +452,87 @@ def test_t10_4b_artifact_volume_is_bounded(tmp_path: Path, monkeypatch: pytest.M
         executor._compute(spec)
     assert artifact_too_large.value.code == "output_too_large", artifact_too_large.value
     assert str(artifact_too_large.value).startswith("[locked: ")
+
+
+# -- t10_6: the artifact root comes from the environment ---------------------
+
+
+def test_t10_6_artifacts_dir_requires_an_explicit_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No default path: an unset environment is a loud, path-free failure."""
+
+    monkeypatch.delenv(locked.ARTIFACTS_DIR_ENV, raising=False)
+    monkeypatch.delenv(locked.UPSTREAM_ARTIFACTS_ENV, raising=False)
+
+    with pytest.raises(ParseError) as excinfo:
+        locked.artifacts_dir()
+
+    assert excinfo.value.code == "artifacts_unset"
+    message = excinfo.value.public_message
+    assert locked.ARTIFACTS_DIR_ENV in message
+    assert locked.UPSTREAM_ARTIFACTS_ENV in message
+    assert "/data/" not in message
+
+
+def test_t10_6b_upstream_variable_is_honoured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A consumer that only knows Docling's own variable can still locate it."""
+
+    monkeypatch.delenv(locked.ARTIFACTS_DIR_ENV, raising=False)
+    monkeypatch.setenv(locked.UPSTREAM_ARTIFACTS_ENV, str(tmp_path))
+
+    assert locked.artifacts_dir() == tmp_path
+
+
+def test_t10_6c_dedicated_variable_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    preferred = tmp_path / "preferred"
+    monkeypatch.setenv(locked.UPSTREAM_ARTIFACTS_ENV, str(tmp_path))
+    monkeypatch.setenv(locked.ARTIFACTS_DIR_ENV, str(preferred))
+
+    assert locked.artifacts_dir() == preferred
+
+
+def test_t10_6d_revision_dirname_follows_the_lock() -> None:
+    """The shared-root directory name is derived, never hand-written."""
+
+    assert locked.revision_dirname() == "heron-8f39ad3c_tf-fc0f2d45-fast_rapidocr-3.10.0"
+    assert locked.LAYOUT_REVISION[:8] in locked.revision_dirname()
+    assert locked.TABLEFORMER_REVISION[:8] in locked.revision_dirname()
+    assert locked.RAPIDOCR_VERSION in locked.revision_dirname()
+
+
+# -- t10_7: parsing stays lazy -----------------------------------------------
+
+
+def test_t10_7_text_parse_needs_no_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Plain text never touches the artifact root, so it works without models."""
+
+    monkeypatch.delenv(locked.ARTIFACTS_DIR_ENV, raising=False)
+    monkeypatch.delenv(locked.UPSTREAM_ARTIFACTS_ENV, raising=False)
+
+    source = tmp_path / "note.txt"
+    source.write_text("Knoted T09 input\nsecond line\n", encoding="utf-8")
+
+    document = parse_document(source, options_revision=locked.OPTIONS_REVISION)
+    assert "second line" in document.full_text
+
+
+def test_t10_7b_image_parse_without_artifacts_is_explicit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(locked.ARTIFACTS_DIR_ENV, raising=False)
+    monkeypatch.delenv(locked.UPSTREAM_ARTIFACTS_ENV, raising=False)
+
+    image = tmp_path / "tiny.png"
+    image.write_bytes(png_header(width=8, height=8))
+
+    with pytest.raises(ParseError) as excinfo:
+        parse_document(image, options_revision=locked.OPTIONS_REVISION)
+    assert excinfo.value.code == "artifacts_unset"
 
 
 # -- helpers -----------------------------------------------------------------

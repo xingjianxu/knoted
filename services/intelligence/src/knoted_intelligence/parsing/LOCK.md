@@ -9,11 +9,11 @@ host 实测依据。**改任何一个值都必须同时更新本节与 `OPTIONS_
 
 | 项 | 值 |
 | --- | --- |
-| 模型根 | `KNOTED_INTELLIGENCE_MODELS_DIR`，默认 `/data/knoted-dev/service/models` |
-| OCR 模型目录 | `<模型根>/ocr` |
-| Docling artifacts 根 | `<模型根>/ocr/docling`（即 `DOCLING_ARTIFACTS_PATH`） |
-| 机器可读清单 | `/data/knoted-dev/service/models/ocr/MANIFEST.json` |
-| 复现/校验脚本 | `/data/knoted-dev/service/models/ocr/fetch-models.sh`（幂等；sha256/size 不符即失败，不覆盖） |
+| 共享根 | `/data/llm/docling`（机器级，多个消费者只读共用；**代码里没有默认值**） |
+| revision 目录 | `<共享根>/heron-8f39ad3c_tf-fc0f2d45-fast_rapidocr-3.10.0`，由 `parsing.models.revision_dirname()` 从锁版常量派生，不可变（只增不删） |
+| Docling artifacts 根 | 环境变量 `KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR` → 兜底 Docling 自己的 `DOCLING_ARTIFACTS_PATH` → 都没有则 `artifacts_unset` |
+| 机器可读清单 | `<revision>/MANIFEST.json`（`schema: knoted-docling-artifacts/2`，由脚本生成） |
+| 复现/校验脚本 | `services/intelligence/scripts/fetch-docling-artifacts.sh`（仓库内；`--verify` 只校验，provision 幂等，sha256/size 不符即失败、不覆盖） |
 | 解析时下载 | **禁止**。`parsing/offline.py` 强制 `HF_HUB_OFFLINE=1`、`HF_DATASETS_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`、`HF_HUB_DISABLE_TELEMETRY=1`；Docling 始终收到显式 `artifacts_path`，缺文件直接 `models_missing`，不会退化为在线下载 |
 
 代码里没有任何 `/home/...`、任务临时目录或 `/nix/store` 路径；Nix store 只出现在
@@ -39,9 +39,11 @@ fixture 的生成脚本里作为字体示例。
 | TableFormer（`v2.3.0` tag，**fast** 模式） | `docling-project/docling-models` @ `fc0f2d45e2218ea24bce5045f58a389aed16dc23` |
 | RapidOCR det/cls/rec + 字典 | `RapidAI/RapidOCR` @ tag `v3.10.0` |
 
-## 4. 必需 artifact（相对 `<模型根>/ocr/docling`）
+## 4. 必需 artifact（相对共享 revision 目录）
 
-运行时只校验**存在性与 size**（便宜）；sha256 由 `fetch-models.sh` 校验，值记录如下。
+运行时只校验**存在性与 size**（便宜）；sha256 由 `fetch-docling-artifacts.sh --verify` 校验，值记录如下。
+本表是**运行时必需**的 9 项；同一 revision 目录里还随脚本 provision 了 layout-onnx（3 个）与
+TableFormer accurate（2 个）共 5 个未启用文件，因此脚本与 `MANIFEST.json` 记录 **14 项**。
 
 | 文件 | size (B) | sha256 |
 | --- | ---: | --- |
@@ -131,11 +133,14 @@ corrupt_input: docling could not parse the input (UnidentifiedImageError)
 [locked: ...]
 models_missing: the locked OCR artifacts are incomplete
 (RapidOcr/PP-OCRv6_rec_small.onnx: missing); provision them with
-.../models/ocr/fetch-models.sh as described in parsing/LOCK.md
+services/intelligence/scripts/fetch-docling-artifacts.sh --verify as described in
+parsing/LOCK.md
 ```
 
-安装/修复：`/data/knoted-dev/service/models/ocr/fetch-models.sh`（无参数验证现有目录，
-传目标目录则按固定 revision 下载并逐文件校验）。换机器必须重跑，模型不进 git，也不进
+安装/修复：`services/intelligence/scripts/fetch-docling-artifacts.sh`
+（`--verify` 只校验；无参数按固定 revision 装到 `/data/llm/docling`，传目标根则装到
+`<目标根>/<revision>`，逐文件校验后生成 `MANIFEST.json`）。共享根由 `/etc/nixos` 的
+tmpfiles 声明 `0755`、属主 host 用户，消费者只读。换机器必须重跑，模型不进 git，也不进
 Nix store。
 
 ## 8. 验证记录

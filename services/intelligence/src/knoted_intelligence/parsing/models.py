@@ -1,10 +1,11 @@
 """Revision-locked Docling / RapidOCR artifacts, versions and parsing limits.
 
-Everything here is derived from ``KNOTED_INTELLIGENCE_MODELS_DIR`` (default
-``/data/knoted-dev/service/models``); no path points into a user home or a
-per-task scratch directory. The values are the host facts verified in
-``LOCK.md``: changing any of them is a new parsing option revision, not a
-runtime choice.
+Everything here is derived from the environment (``ARTIFACTS_DIR_ENV`` or
+Docling's own ``UPSTREAM_ARTIFACTS_ENV``); there is no built-in path, so a
+missing configuration fails loudly instead of silently reading another tree. No
+path points into a user home or a per-task scratch directory. The values are the
+host facts verified in ``LOCK.md``: changing any of them is a new parsing option
+revision, not a runtime choice.
 
 Two kinds of constants live together on purpose:
 
@@ -24,13 +25,10 @@ import os
 import re
 from pathlib import Path
 
-#: Environment variable an operator uses to relocate the model tree.
-MODELS_DIR_ENV = "KNOTED_INTELLIGENCE_MODELS_DIR"
-#: Deployment default; the service runs on the host that owns this tree.
-DEFAULT_MODELS_DIR = Path("/data/knoted-dev/service/models")
-#: Model tree layout: ``<models>/ocr/docling`` is Docling's artifacts root.
-OCR_DIRNAME = "ocr"
-DOCLING_DIRNAME = "docling"
+#: Environment variable an operator uses to relocate the artifact root.
+ARTIFACTS_DIR_ENV = "KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR"
+#: Docling's own variable, accepted so non-Knoted consumers share one contract.
+UPSTREAM_ARTIFACTS_ENV = "DOCLING_ARTIFACTS_PATH"
 
 # -- inference device --------------------------------------------------------
 
@@ -71,7 +69,7 @@ RAPIDOCR_BACKEND = "onnxruntime"
 RAPIDOCR_LANG = ("ch",)
 RAPIDOCR_MODEL_SIZE = "small"
 
-# -- artifact layout, relative to ``<models>/ocr/docling`` -------------------
+# -- artifact layout, relative to the shared revision directory --------------
 
 LAYOUT_DIR = "docling-project--docling-layout-heron"
 LAYOUT_CONFIG = f"{LAYOUT_DIR}/config.json"
@@ -88,9 +86,10 @@ RAPIDOCR_REC = f"{RAPIDOCR_DIR}/PP-OCRv6_rec_small.onnx"
 RAPIDOCR_DICT = f"{RAPIDOCR_DIR}/ppocrv6_dict.txt"
 
 #: Files the parser needs, with the size and sha256 recorded by the host task.
-#: Sizes are checked on every start (cheap); sha256 is verified by
-#: ``/data/knoted-dev/service/models/ocr/fetch-models.sh`` and documented in
-#: ``LOCK.md`` rather than re-hashed for every execution.
+#: Sizes are checked on every start (cheap); sha256 is verified by the
+#: repository's ``services/intelligence/scripts/fetch-docling-artifacts.sh``
+#: (``--verify``) and documented in ``LOCK.md`` rather than re-hashed for every
+#: execution.
 REQUIRED_ARTIFACTS: tuple[tuple[str, int, str], ...] = (
     (
         LAYOUT_CONFIG,
@@ -246,23 +245,45 @@ def docling_device() -> str:
     )
 
 
-def default_models_dir() -> Path:
-    """The configured model tree, from ``KNOTED_INTELLIGENCE_MODELS_DIR``."""
+def artifacts_dir() -> Path:
+    """The Docling artifact root, from the environment only.
 
-    raw = os.environ.get(MODELS_DIR_ENV)
-    if raw is not None and raw.strip():
-        return Path(raw).expanduser()
-    return DEFAULT_MODELS_DIR
+    The root is machine-level and shared: a missing configuration is an explicit
+    failure, never a fallback to a built-in path. A consumer that only knows
+    Docling's own variable can use it without importing anything from this
+    project.
+    """
 
-
-def ocr_dir(root: Path | None = None) -> Path:
-    return (root or default_models_dir()) / OCR_DIRNAME
+    for name in (ARTIFACTS_DIR_ENV, UPSTREAM_ARTIFACTS_ENV):
+        raw = os.environ.get(name, "").strip()
+        if raw:
+            return Path(raw).expanduser()
+    raise ParseError(
+        "artifacts_unset",
+        "neither "
+        f"{ARTIFACTS_DIR_ENV} nor {UPSTREAM_ARTIFACTS_ENV} is set; both name the "
+        "shared Docling artifact root (see parsing/LOCK.md, provisioned by "
+        "services/intelligence/scripts/fetch-docling-artifacts.sh)",
+    )
 
 
 def docling_artifacts_path(root: Path | None = None) -> Path:
-    """Docling's ``artifacts_path`` (``<models>/ocr/docling``)."""
+    """Docling's ``artifacts_path``: the shared root or an explicit override."""
 
-    return ocr_dir(root) / DOCLING_DIRNAME
+    return root or artifacts_dir()
+
+
+def revision_dirname() -> str:
+    """The immutable directory name of this locked revision in the shared root.
+
+    Derived from the same constants as :data:`OPTIONS_REVISION` so the two can
+    never drift; the provisioning script must print the same string.
+    """
+
+    return (
+        f"heron-{LAYOUT_REVISION[:8]}_tf-{TABLEFORMER_REVISION[:8]}-fast"
+        f"_rapidocr-{RAPIDOCR_VERSION}"
+    )
 
 
 def artifact_problems(root: Path | None = None) -> list[str]:
@@ -290,8 +311,9 @@ def require_artifacts(root: Path | None = None) -> Path:
             "models_missing",
             "the locked OCR artifacts are incomplete ("
             + "; ".join(problems)
-            + "); provision them with .../models/ocr/fetch-models.sh as described in "
-            "parsing/LOCK.md",
+            + "); provision them with "
+            "services/intelligence/scripts/fetch-docling-artifacts.sh --verify as "
+            "described in parsing/LOCK.md",
         )
     return docling_artifacts_path(root)
 

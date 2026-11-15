@@ -716,7 +716,6 @@ def _compute(spec: dict[str, Any]) -> dict[str, Any]:
         document = parse_document(
             Path(spec["input_path"]),
             options_revision=spec["options_revision"],
-            models_dir=parsing_models.default_models_dir(),
         )
         payload = {
             **base,

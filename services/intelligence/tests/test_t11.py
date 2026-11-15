@@ -1,10 +1,10 @@
 """T11 acceptance tests: the real BGE-M3 dense embedding path.
 
-These tests load the model that the host task provisioned under
-``KNOTED_INTELLIGENCE_MODELS_DIR`` (default ``/data/knoted-dev/service/models``)
-and run it: no model is mocked, no result is faked, and nothing is skipped when
-the snapshot is missing — a missing or incomplete snapshot fails with the
-``fetch-model.sh --check`` command from ``embedding/LOCK.md``.
+These tests load the model provisioned under the machine-level snapshot root
+named by ``KNOTED_INTELLIGENCE_BGE_M3_DIR`` (no default path) and run it: no
+model is mocked, no result is faked, and nothing is skipped when the snapshot is
+missing — a missing or incomplete snapshot fails with the
+``fetch-bge-m3-artifacts.sh --verify`` command from ``embedding/LOCK.md``.
 
 ``t11_2`` is the one exception by design: it injects **fabricated outputs** into
 the validator to prove NaN/Inf/wrong-dimension refusals. That is a validation
@@ -52,18 +52,24 @@ INPUT_OBJECT_ID = "t11-embed-input"
 def require_model() -> Path:
     """Fails with the provisioning command when the locked snapshot is absent."""
 
-    root = bge.model_dir()
+    try:
+        root = bge.model_dir()
+    except bge.EmbeddingError as exc:
+        pytest.fail(
+            f"{exc.public_message}\nProvision it with "
+            f"{bge.FETCH_SCRIPT} --verify (see embedding/LOCK.md)"
+        )
     if not root.is_dir():
         pytest.fail(
             f"the BGE-M3 snapshot is not provisioned at {root}; run "
-            f"{root}/fetch-model.sh --check (see embedding/LOCK.md) after installing it"
+            f"{bge.FETCH_SCRIPT} --verify (see embedding/LOCK.md) after installing it"
         )
     problems = bge.artifact_problems()
     if problems:
         pytest.fail(
             "the locked BGE-M3 snapshot is incomplete:\n  "
             + "\n  ".join(problems)
-            + f"\nRe-run {root}/fetch-model.sh (see embedding/LOCK.md)."
+            + f"\nRe-run {bge.FETCH_SCRIPT} --verify (see embedding/LOCK.md)."
         )
     return root
 
@@ -560,6 +566,40 @@ def test_t11_6_embed_input_admission(tmp_path: Path) -> None:
             assert record["state"] == "failed", record
             assert record["error"]["code"] == "execution_failed", record
             assert expected_code in record["error"]["message"], record["error"]["message"]
+
+
+# -- t11_9: the snapshot root comes from the environment ---------------------
+
+
+def test_t11_9_snapshot_dir_requires_the_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No default path: an unset environment is a loud, path-free failure."""
+
+    monkeypatch.delenv(bge.SNAPSHOT_DIR_ENV, raising=False)
+
+    with pytest.raises(bge.EmbeddingError) as excinfo:
+        bge.model_dir()
+
+    assert excinfo.value.code == "snapshot_unset"
+    assert bge.SNAPSHOT_DIR_ENV in excinfo.value.public_message
+    assert "/data/" not in excinfo.value.public_message
+
+
+def test_t11_9b_snapshot_dirname_follows_the_lock() -> None:
+    """The shared-root directory name is derived, never hand-written."""
+
+    assert bge.snapshot_dirname() == "bge-m3-5617a9f6-dense"
+    assert bge.MODEL_REVISION[:8] in bge.snapshot_dirname()
+    assert "dense" in bge.snapshot_dirname()
+
+
+def test_t11_9c_model_dir_uses_the_configured_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(bge.SNAPSHOT_DIR_ENV, str(tmp_path / "snapshot"))
+
+    assert bge.model_dir() == tmp_path / "snapshot"
 
 
 # -- helpers -----------------------------------------------------------------

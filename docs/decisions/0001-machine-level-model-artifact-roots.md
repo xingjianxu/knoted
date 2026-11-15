@@ -11,7 +11,7 @@
 
 ## 背景与问题
 
-Docling artifact（layout-heron + TableFormer fast + RapidOCR ONNX 与字典，运行时必需 9 个文件、provision 共 14 个文件 / 733,054,339 B）与 BGE-M3 稠密嵌入快照（13 个文件 / 2,295,354,503 B）原本按实例放在 `/data/knoted-dev/service/models/`，路径以硬编码默认值存在于 `parsing/models.py:30` 与 `embedding/bge.py:51`。
+Docling artifact（layout-heron + TableFormer fast + RapidOCR ONNX 与字典，运行时必需 9 个文件、provision 共 14 个文件，合计 732,934,742 B；`du -sb` 的目录占用为 733,054,339 B）与 BGE-M3 稠密嵌入快照（13 个文件 / 2,295,354,503 B）原本按实例放在 `/data/knoted-dev/service/models/`，路径以硬编码默认值存在于 `parsing/models.py:30` 与 `embedding/bge.py:51`。
 
 观察到的三个问题：
 
@@ -33,7 +33,7 @@ Provisioning 脚本还有一个约束：`fetch-models.sh` 对已存在但 sha256
    - `KNOTED_INTELLIGENCE_MODELS_DIR` **整体移除**。设旧变量不再有任何效果。
 3. **每个 revision 目录承载该 revision 的完整内容**（docling 14 个文件、BGE 13 个文件），运行时仍只校验各自必需项（docling 9 个文件的 size；BGE 10 个文件的 size 与 sha256）。
 4. **读策略**：目录 `0755`、文件 `0644`，属主为 host 用户，消费者只读；共享根由 `/etc/nixos` 的 tmpfiles 声明，新 revision 目录由 provision 脚本创建。
-5. **Provisioning 归属**：`services/intelligence/scripts/fetch-{docling,bge-m3}-artifacts.sh` 进仓库受审查，不依赖 venv；数据目录只放 artifact 字节与脚本生成的 `MANIFEST.json`。
+5. **Provisioning 归属**：`services/intelligence/scripts/fetch-{docling,bge-m3}-artifacts.sh` 进仓库受审查，不依赖 venv；数据目录只放 artifact 字节、脚本生成的 `MANIFEST.json`，以及 provision 用的 `.provision.lock`。
 6. **解析保持惰性**：纯文本解析不需要模型，未配置变量时仍成功；只有 OCR/PDF 才解析 artifact 根。
 7. **迁移**：先复制、后切换、最后删除，不留 symlink。
 

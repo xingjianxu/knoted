@@ -6,7 +6,6 @@ The revision, file digests and runtime versions are locked in ``bge.py`` and
 """
 
 from .bge import (
-    DEFAULT_MODELS_DIR,
     GPU_UUID_ENV,
     HIDDEN_SIZE,
     MAX_BATCH_SIZE,
@@ -17,6 +16,7 @@ from .bge import (
     NORMALIZATION_TOLERANCE,
     OPTIONS_REVISION,
     OUTPUT_DTYPE,
+    SNAPSHOT_DIR_ENV,
     TOKENIZER_REVISION,
     EmbeddingError,
     configured_device,
@@ -28,13 +28,13 @@ from .bge import (
     locked_model_revision,
     manifest,
     model_dir,
-    models_dir,
     require_model_dir,
+    snapshot_dirname,
     validate_embeddings,
 )
 
 __all__ = [
-    "DEFAULT_MODELS_DIR",
+    "SNAPSHOT_DIR_ENV",
     "GPU_UUID_ENV",
     "HIDDEN_SIZE",
     "MAX_BATCH_SIZE",
@@ -56,7 +56,7 @@ __all__ = [
     "locked_model_revision",
     "manifest",
     "model_dir",
-    "models_dir",
+    "snapshot_dirname",
     "require_model_dir",
     "validate_embeddings",
 ]
