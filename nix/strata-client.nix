@@ -55,7 +55,7 @@ in
     };
 
     contextSize = lib.mkOption {
-      type = lib.types.port;
+      type = lib.types.ints.positive;
       default = 32768;
       readOnly = true;
       description = ''
@@ -168,6 +168,5 @@ in
     };
   };
 
-  # 纯契约：不产生任何 system 配置。部署、账号、密钥、preflight 全在 host 侧模块里。
-  config = { };
+  # 纯契约：故意没有任何 config 段 —— 部署、账号、密钥、preflight 全在 host 侧模块里。
 }
