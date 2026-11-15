@@ -1,10 +1,10 @@
 """T10 acceptance tests: Docling + RapidOCR parsing of Chinese/English input.
 
 These tests run the **real** parser: Docling's layout model, TableFormer and
-RapidOCR are loaded from the locally provisioned, revision-locked artifacts
-under ``KNOTED_INTELLIGENCE_MODELS_DIR`` (default
-``/data/knoted-dev/service/models``). Nothing here mocks a model, a download or
-an OCR result.
+RapidOCR are loaded from the machine-level, revision-locked artifact root named
+by ``KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR`` (or Docling's own
+``DOCLING_ARTIFACTS_PATH``); there is no default path. Nothing here mocks a
+model, a download or an OCR result.
 
 ``t10_1`` additionally forbids every socket connection while the parse runs, so
 a hidden Hugging Face download would fail instead of silently succeeding. If the

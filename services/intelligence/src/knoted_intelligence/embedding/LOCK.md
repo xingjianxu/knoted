@@ -10,10 +10,11 @@ tokenizer revision、推理依赖版本、`model_revision` 配置键、GPU UUID 
 
 | 项 | 值 |
 | --- | --- |
-| 模型根 | `KNOTED_INTELLIGENCE_MODELS_DIR`，默认 `/data/knoted-dev/service/models` |
-| 快照目录 | `<模型根>/bge-m3`（`SentenceTransformer(<dir>)` 直接加载，无 `.git`、无 ONNX） |
-| 机器可读清单 | `<快照>/MANIFEST.json`，`schema: knoted-bge-m3-models/1` |
-| 校验/重建脚本 | `<快照>/fetch-model.sh`（`--check` 只校验；sha256/size 不符即失败，不覆盖） |
+| 共享根 | `/data/llm/bge-m3`（机器级，多个消费者只读共用；**代码里没有默认值**） |
+| revision 目录 | `<共享根>/bge-m3-5617a9f6-dense`，由 `bge.snapshot_dirname()` 从 `MODEL_REVISION` 派生，不可变（只增不删） |
+| 快照目录 | 环境变量 `KNOTED_INTELLIGENCE_BGE_M3_DIR` **直接**指向 `<共享根>/<revision>`（`SentenceTransformer(<dir>)` 加载，无 `.git`、无 ONNX）；未设置则 `snapshot_unset`，没有兜底变量 |
+| 机器可读清单 | `<快照>/MANIFEST.json`，`schema: knoted-bge-m3-models/1`（该 schema **不变**：`bge.manifest()` 在运行时校验它） |
+| 校验/重建脚本 | `services/intelligence/scripts/fetch-bge-m3-artifacts.sh`（仓库内；`--verify` 只校验，含逐 tensor 摘要；sha256/size 不符即失败、不覆盖） |
 | 运行时下载 | **禁止**。`bge.py` 在导入 `sentence_transformers`/`torch` 前设置 `HF_HUB_OFFLINE=1`、`HF_DATASETS_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`、`HF_HUB_DISABLE_TELEMETRY=1`，并显式传入本地路径；缺文件即 `models_missing`，不回退 hub（快照里也没有 `pytorch_model.bin`） |
 | 模型 revision 配置键 | `model_revision`，固定为 `BAAI/bge-m3@5617a9f61b028005a4858fdac845db406aefb181`；本地快照没有 `.git`，该 revision 只能来自本文件/`MANIFEST.json`/`bge.MODEL_REVISION`，三者由 `bge.manifest()` 交叉校验，不一致即 `manifest_mismatch` |
 | tokenizer revision | 与模型同一 commit：`5617a9f61b028005a4858fdac845db406aefb181`（tokenizer 文件在本快照内，不二次下载） |
@@ -29,7 +30,7 @@ tokenizer revision、推理依赖版本、`model_revision` 配置键、GPU UUID 
 
 快照 = 13 个文件 / `2,295,354,503` B。上游只发布 `pytorch_model.bin`；本地
 `model.safetensors` 由 host 无损转换（391 tensors、fp32、逐 tensor 摘要一致），
-`fetch-model.sh` 用纯标准库重算 tensor 摘要。
+`fetch-bge-m3-artifacts.sh --verify` 用纯标准库重算 tensor 摘要。
 
 | 文件（相对 `<快照>/`） | size (B) | sha256 |
 | --- | ---: | --- |
@@ -171,7 +172,7 @@ max_seq_length/runtime 版本/`gpu_uuid_env`/`options_revision`），消费方�
 - 不做性能/吞吐/显存/召回率基准；t11 只验证可运行性与契约。
 - 不做 sparse / ColBERT；快照里的两个头未加载。
 - 输入行格式是 T11 临时约定，T58 负责 `ChunkSet → EmbeddingSet` 的最终批处理契约。
-- 模型不参与备份/迁移、不进 Nix store；换机器或删目录后重跑 `fetch-model.sh --check`。
+- 模型不参与备份/迁移、不进 Nix store；换机器或删目录后重跑 `fetch-bge-m3-artifacts.sh --verify`（或直接 provision）。
 - 本卡不改 T09 的账本/状态机语义，只把 `kind=embed` 的占位计算替换为真实 dense 模型。
 - OCR 设备由 `KNOTED_INTELLIGENCE_DOCLING_DEVICE` 显式控制（默认 `cpu`，见
   `parsing/LOCK.md`）；嵌入仍按 `KNOTED_EMBED_GPU_UUID` 选卡，两者共用 `gpu_slots`。

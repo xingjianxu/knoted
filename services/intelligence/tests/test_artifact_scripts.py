@@ -84,3 +84,17 @@ def test_bge_verify_does_not_create_the_revision_directory(tmp_path: Path) -> No
 
     assert result.returncode != 0
     assert not target.exists()
+
+
+def test_lock_documents_name_the_same_revision_directory() -> None:
+    """The third place the name lives is the lock document itself."""
+
+    parsing_lock = (
+        Path(__file__).resolve().parents[1] / "src/knoted_intelligence/parsing/LOCK.md"
+    ).read_text(encoding="utf-8")
+    embedding_lock = (
+        Path(__file__).resolve().parents[1] / "src/knoted_intelligence/embedding/LOCK.md"
+    ).read_text(encoding="utf-8")
+
+    assert locked.revision_dirname() in parsing_lock
+    assert bge.snapshot_dirname() in embedding_lock

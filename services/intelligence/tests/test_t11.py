@@ -1,10 +1,10 @@
 """T11 acceptance tests: the real BGE-M3 dense embedding path.
 
-These tests load the model that the host task provisioned under
-``KNOTED_INTELLIGENCE_MODELS_DIR`` (default ``/data/knoted-dev/service/models``)
-and run it: no model is mocked, no result is faked, and nothing is skipped when
-the snapshot is missing — a missing or incomplete snapshot fails with the
-``fetch-model.sh --check`` command from ``embedding/LOCK.md``.
+These tests load the model provisioned under the machine-level snapshot root
+named by ``KNOTED_INTELLIGENCE_BGE_M3_DIR`` (no default path) and run it: no
+model is mocked, no result is faked, and nothing is skipped when the snapshot is
+missing — a missing or incomplete snapshot fails with the
+``fetch-bge-m3-artifacts.sh --verify`` command from ``embedding/LOCK.md``.
 
 ``t11_2`` is the one exception by design: it injects **fabricated outputs** into
 the validator to prove NaN/Inf/wrong-dimension refusals. That is a validation

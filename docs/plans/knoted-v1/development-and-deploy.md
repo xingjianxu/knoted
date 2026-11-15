@@ -15,7 +15,7 @@
 | 临时任务目录 | /data/knoted-dev/tasks/<task-id>/{tmp,cache,build,evidence} |
 | 隔离恢复演练 | /data/knoted-dev/tasks/<task-id>/restore |
 | Strata独立安装 | /data/llm/strata |
-| OCR/嵌入模型 | /data/knoted-dev/service/models |
+| OCR/嵌入模型 | 共享根 /data/llm/docling 与 /data/llm/bge-m3（按 revision 分目录，由环境变量指向） |
 | 现有证书 | /var/lib/acme/wlab.132140.xyz/fullchain.pem 和 key.pem |
 
 不复制私钥进仓库、模型目录、日志或Nix store；只配置受控读取。Nix store及/run运行凭据是声明式部署例外，临时脚本和构建/浏览器缓存不得散落/tmp或用户家目录。每任务配置TMPDIR、CARGO_TARGET_DIR、UV_CACHE_DIR、PLAYWRIGHT_BROWSERS_PATH及包管理缓存到任务区；测试实例持久状态不得指向任务Worktree。不清理其他任务目录。

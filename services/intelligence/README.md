@@ -24,7 +24,9 @@ under `/data/knoted-dev/service`:
 | `KNOTED_INTELLIGENCE_CANCEL_GRACE_SECONDS` | `5` | How long a cancellation lets a child honour SIGTERM before its process group gets SIGKILL. |
 | `KNOTED_INTELLIGENCE_CHILD_HOLD_MS` | `0` | Delay the child before it computes; it exists so cancellation tests observe a live process group. |
 | `KNOTED_INTELLIGENCE_CHILD_IGNORE_SIGTERM` | `0` | Makes the child ignore SIGTERM; it exists so the SIGKILL escalation is tested against a genuinely unresponsive child. |
-| `KNOTED_INTELLIGENCE_MODELS_DIR` | `/data/knoted-dev/service/models` | Provisioned model tree; `ocr/docling` is `parsing/LOCK.md`, `bge-m3` is `embedding/LOCK.md`. |
+| `KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR` | unset (**required** for OCR/PDF) | Shared Docling artifact root, `<revision>` under `/data/llm/docling` (`parsing/LOCK.md`). No default path. |
+| `DOCLING_ARTIFACTS_PATH` | unset | Docling's own variable, accepted as a fallback so non-Knoted consumers share one contract. |
+| `KNOTED_INTELLIGENCE_BGE_M3_DIR` | unset (**required** for embeddings) | Shared BGE-M3 snapshot root, `<revision>` under `/data/llm/bge-m3` (`embedding/LOCK.md`). No fallback. |
 | `KNOTED_EMBED_GPU_UUID` | unset (CPU) | `nvidia-smi -L` UUID copied to `CUDA_VISIBLE_DEVICES` before torch loads; there is no default index. |
 | `KNOTED_INTELLIGENCE_GPU_SLOTS` | `1` | Slots for parse + embed work. Both kinds acquire it before a child starts, so OCR and embeddings never resident together. |
 | `KNOTED_INTELLIGENCE_DOCLING_DEVICE` | `cpu` | Explicit Docling device (`cpu`, `cuda`, `cuda:N`). `auto` is refused: it would pick index 0, Strata's card. |
