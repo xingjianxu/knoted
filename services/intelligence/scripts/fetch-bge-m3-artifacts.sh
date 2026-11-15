@@ -36,7 +36,7 @@ for arg in "$@"; do
   case "$arg" in
     --verify|-c) VERIFY_ONLY=1 ;;
     --print-revision-id) PRINT_REVISION=1 ;;
-    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     -*) echo "unknown option: $arg" >&2; exit 2 ;;
     *) TARGET_ROOT="$arg" ;;
   esac
@@ -56,7 +56,7 @@ DEST="$TARGET_ROOT/$REVISION_ID"
 if [ "$VERIFY_ONLY" = 0 ]; then
   install -d -m 0755 "$TARGET_ROOT" "$DEST"
   exec 9>"$TARGET_ROOT/.provision.lock"
-  flock 9
+  flock -w 300 9
 fi
 
 # 上游文件（相对路径 字节数 sha256）。LFS 文件的 sha256 == HF API 的 lfs.oid。
@@ -157,20 +157,30 @@ echo "dest    = $DEST"
 echo "check   = $VERIFY_ONLY"
 
 # 1) 上游文件
+fail=0
 while read -r rel size sha; do
   [ -n "${rel:-}" ] || continue
-  if verify_plain "$rel" "$size" "$sha"; then log_ok "$rel"; continue; fi
+  rc=0
+  verify_plain "$rel" "$size" "$sha" || rc=$?
+  if [ "$rc" = 0 ]; then log_ok "$rel"; continue; fi
   if [ "$VERIFY_ONLY" = 1 ]; then
-    echo "MISSING/CORRUPT: $DEST/$rel (expected $size B, sha256 $sha)" >&2
+    if [ "$rc" = 2 ]; then what=MISSING; else what=MISMATCH; fi
+    echo "$what: $DEST/$rel (expected $size B, sha256 $sha)" >&2
     exit 1
   fi
+  if [ "$rc" = 1 ]; then
+    # The revision directory is immutable and shared: report, do not overwrite.
+    echo "MISMATCH $rel (on disk differs from the pinned sha256; not overwriting)" >&2
+    fail=1
+    continue
+  fi
   log_get "$rel"
-  rm -f "$DEST/$rel" "$DEST/$rel.part"
   fetch "$rel" "$DEST/$rel.part"
   if ! verify_file "$DEST/$rel.part" "$size" "$sha"; then
     echo "ERROR: $rel failed size/sha256 verification (kept as $rel.part)" >&2
     exit 1
   fi
+  chmod 0644 "$DEST/$rel.part"
   mv -f "$DEST/$rel.part" "$DEST/$rel"
   log_ok "$rel"
 done <<< "$FILES"
@@ -186,14 +196,19 @@ else
     echo "MISSING: $DEST/$SAFE (run without --verify to convert from $BIN)" >&2
     exit 1
   fi
-  if ! verify_plain "$BIN" "$BIN_SIZE" "$BIN_SHA256"; then
+  rc=0
+  verify_plain "$BIN" "$BIN_SIZE" "$BIN_SHA256" || rc=$?
+  if [ "$rc" = 1 ]; then
+    echo "MISMATCH $BIN (on disk differs from the pinned sha256; not overwriting)" >&2
+    fail=1
+  elif [ "$rc" = 2 ]; then
     log_get "$BIN"
-    rm -f "$DEST/$BIN" "$DEST/$BIN.part"
     fetch "$BIN" "$DEST/$BIN.part"
     if ! verify_file "$DEST/$BIN.part" "$BIN_SIZE" "$BIN_SHA256"; then
       echo "ERROR: $BIN failed size/sha256 verification (kept as $BIN.part)" >&2
       exit 1
     fi
+    chmod 0644 "$DEST/$BIN.part"
     mv -f "$DEST/$BIN.part" "$DEST/$BIN"
   fi
   log_ok "$BIN"
@@ -201,6 +216,48 @@ else
   verify_safetensors "$DEST/$SAFE" "$SAFE_DIGEST" "$SAFE_TENSORS" "$SAFE_TENSOR_BYTES"
   log_ok "$SAFE"
   if [ "$KEEP_BIN" = 1 ]; then log_ok "$BIN (kept, KEEP_BIN=1)"; else rm -f "$DEST/$BIN"; echo "rm      $BIN (derived; KEEP_BIN=1 to keep)"; fi
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo "one or more artifacts could not be provisioned under $DEST" >&2
+  exit 1
+fi
+
+if [ "$VERIFY_ONLY" = 1 ]; then
+  # MANIFEST.json is a runtime contract, not documentation: bge.manifest()
+  # validates it before every embed, so --verify must validate it too. This
+  # branch never writes: verification is read-only by contract.
+  python3 - "$DEST/MANIFEST.json" "$REPO" "$REV" <<'MANIFEST_CHECK'
+import json, sys
+
+path, want_repo, want_rev = sys.argv[1], sys.argv[2], sys.argv[3]
+contract = {
+    "embedding_dim": 1024,
+    "normalize_embeddings": True,
+    "max_seq_length": 8192,
+    "dtype": "float32",
+}
+try:
+    payload = json.load(open(path, encoding="utf-8"))
+except FileNotFoundError:
+    sys.exit(f"MISSING: {path} (bge.manifest() requires it)")
+except ValueError as exc:
+    sys.exit(f"MISMATCH: {path} is not readable JSON ({type(exc).__name__})")
+problems = []
+if payload.get("schema") != "knoted-bge-m3-models/1":
+    problems.append(f"schema is {payload.get('schema')!r}")
+if payload.get("repo") != want_repo:
+    problems.append(f"repo is {payload.get('repo')!r}")
+if payload.get("revision") != want_rev:
+    problems.append(f"revision is {payload.get('revision')!r}")
+if payload.get("runtime_contract") != contract:
+    problems.append(f"runtime_contract is {payload.get('runtime_contract')!r}")
+if problems:
+    sys.exit("MISMATCH: MANIFEST.json drifted from the lock (" + "; ".join(problems) + ")")
+print("ok      MANIFEST.json")
+MANIFEST_CHECK
+  echo "all $(($(printf '%s\n' "$FILES" | grep -c .) + 1)) artifacts verified under $DEST (read-only)"
+  exit 0
 fi
 
 # Generated manifest: bge.manifest() validates schema/repo/revision and the

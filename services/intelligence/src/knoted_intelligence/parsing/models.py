@@ -69,7 +69,7 @@ RAPIDOCR_BACKEND = "onnxruntime"
 RAPIDOCR_LANG = ("ch",)
 RAPIDOCR_MODEL_SIZE = "small"
 
-# -- artifact layout, relative to ``<models>/ocr/docling`` -------------------
+# -- artifact layout, relative to the shared revision directory --------------
 
 LAYOUT_DIR = "docling-project--docling-layout-heron"
 LAYOUT_CONFIG = f"{LAYOUT_DIR}/config.json"

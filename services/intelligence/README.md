@@ -7,12 +7,24 @@ ledger (not the business database).
 
 ```bash
 uv sync
-uv run pytest -q
+
+# Model roots are machine-level and shared; there is no default path. Point at
+# the locked revision directories (parsing/LOCK.md, embedding/LOCK.md):
+export KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR=/data/llm/docling/heron-8f39ad3c_tf-fc0f2d45-fast_rapidocr-3.10.0
+export KNOTED_INTELLIGENCE_BGE_M3_DIR=/data/llm/bge-m3/bge-m3-5617a9f6-dense
+
+uv run pytest -q                      # t10/t11 need the two exports above
 uv run knoted-intelligence            # uvicorn on KNOTED_INTELLIGENCE_HOST:PORT
 ```
 
+`tests/test_t09.py` (execution protocol, plain text) runs without the model
+variables; `tests/test_t10.py` (Docling) fails with `artifacts_unset` and
+`tests/test_t11.py` (BGE-M3) with `snapshot_unset` until they are exported. Both
+shared roots are provisioned by `scripts/fetch-{docling,bge-m3}-artifacts.sh` and
+are read-only for every consumer.
+
 Configuration is environment only; every default matches the deployment layout
-under `/data/knoted-dev/service`:
+under `/data/knoted-dev/service` (state, staging, logs — not the model roots):
 
 | Variable | Default | Purpose |
 | --- | --- | --- |

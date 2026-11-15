@@ -52,18 +52,24 @@ INPUT_OBJECT_ID = "t11-embed-input"
 def require_model() -> Path:
     """Fails with the provisioning command when the locked snapshot is absent."""
 
-    root = bge.model_dir()
+    try:
+        root = bge.model_dir()
+    except bge.EmbeddingError as exc:
+        pytest.fail(
+            f"{exc.public_message}\nProvision it with "
+            f"{bge.FETCH_SCRIPT} --verify (see embedding/LOCK.md)"
+        )
     if not root.is_dir():
         pytest.fail(
             f"the BGE-M3 snapshot is not provisioned at {root}; run "
-            f"{root}/fetch-model.sh --check (see embedding/LOCK.md) after installing it"
+            f"{bge.FETCH_SCRIPT} --verify (see embedding/LOCK.md) after installing it"
         )
     problems = bge.artifact_problems()
     if problems:
         pytest.fail(
             "the locked BGE-M3 snapshot is incomplete:\n  "
             + "\n  ".join(problems)
-            + f"\nRe-run {root}/fetch-model.sh (see embedding/LOCK.md)."
+            + f"\nRe-run {bge.FETCH_SCRIPT} --verify (see embedding/LOCK.md)."
         )
     return root
 

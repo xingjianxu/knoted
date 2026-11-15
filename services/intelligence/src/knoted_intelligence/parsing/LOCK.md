@@ -39,7 +39,7 @@ fixture 的生成脚本里作为字体示例。
 | TableFormer（`v2.3.0` tag，**fast** 模式） | `docling-project/docling-models` @ `fc0f2d45e2218ea24bce5045f58a389aed16dc23` |
 | RapidOCR det/cls/rec + 字典 | `RapidAI/RapidOCR` @ tag `v3.10.0` |
 
-## 4. 必需 artifact（相对 `<模型根>/ocr/docling`）
+## 4. 必需 artifact（相对共享 revision 目录）
 
 运行时只校验**存在性与 size**（便宜）；sha256 由 `fetch-docling-artifacts.sh --verify` 校验，值记录如下。
 本表是**运行时必需**的 9 项；同一 revision 目录里还随脚本 provision 了 layout-onnx（3 个）与

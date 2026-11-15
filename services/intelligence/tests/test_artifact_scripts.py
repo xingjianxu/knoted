@@ -9,6 +9,7 @@ directory or overwrite a byte.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -20,12 +21,15 @@ DOCLING_SCRIPT = SCRIPTS / "fetch-docling-artifacts.sh"
 BGE_SCRIPT = SCRIPTS / "fetch-bge-m3-artifacts.sh"
 
 
-def run(script: Path, *args: object) -> subprocess.CompletedProcess[str]:
+def run(
+    script: Path, *args: object, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", str(script), *(str(arg) for arg in args)],
         capture_output=True,
         text=True,
         check=False,
+        env={**os.environ, **(env or {})},
     )
 
 
@@ -98,3 +102,37 @@ def test_lock_documents_name_the_same_revision_directory() -> None:
 
     assert locked.revision_dirname() in parsing_lock
     assert bge.snapshot_dirname() in embedding_lock
+
+
+#: Nothing listens here, so a provisioning copy fails fast instead of downloading.
+NO_NETWORK = {"HF_ENDPOINT": "http://127.0.0.1:9", "MODELSCOPE_ENDPOINT": "http://127.0.0.1:9"}
+
+
+def test_docling_provisioning_refuses_to_overwrite_a_mismatched_file(tmp_path: Path) -> None:
+    """A drifted file in an immutable revision directory is reported, never replaced."""
+
+    target = tmp_path / "docling"
+    revision = target / locked.revision_dirname()
+    victim = revision / locked.RAPIDOCR_DICT
+    victim.parent.mkdir(parents=True)
+    victim.write_bytes(b"tampered dictionary")
+
+    result = run(DOCLING_SCRIPT, target, env=NO_NETWORK)
+
+    assert result.returncode != 0
+    assert f"MISMATCH {locked.RAPIDOCR_DICT}" in result.stdout + result.stderr
+    assert victim.read_bytes() == b"tampered dictionary"
+
+
+def test_bge_provisioning_refuses_to_overwrite_a_mismatched_file(tmp_path: Path) -> None:
+    target = tmp_path / "bge"
+    revision = target / bge.snapshot_dirname()
+    revision.mkdir(parents=True)
+    victim = revision / "config.json"
+    victim.write_bytes(b"tampered config")
+
+    result = run(BGE_SCRIPT, target, env=NO_NETWORK)
+
+    assert result.returncode != 0
+    assert "MISMATCH config.json" in result.stdout + result.stderr
+    assert victim.read_bytes() == b"tampered config"

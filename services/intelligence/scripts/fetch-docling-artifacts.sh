@@ -36,7 +36,7 @@ for arg in "$@"; do
   case "$arg" in
     --verify|-c) VERIFY_ONLY=1 ;;
     --print-revision-id) PRINT_REVISION=1 ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
     -*) echo "unknown option: $arg" >&2; exit 2 ;;
     *) TARGET_ROOT="$arg" ;;
   esac
@@ -99,19 +99,23 @@ if [ "$VERIFY_ONLY" = 1 ]; then
     echo "$problems artifact(s) failed verification under $DEST" >&2
     exit 1
   fi
-  echo "all 14 artifacts verified under $DEST"
+  echo "all $(printf '%s\n' "$ARTIFACTS" | grep -c .) artifacts verified under $DEST (read-only)"
   exit 0
 fi
 
 install -d -m 0755 "$TARGET_ROOT" "$DEST"
 # One writer at a time: two consumers may provision the same new revision.
 exec 9>"$TARGET_ROOT/.provision.lock"
-flock 9
+flock -w 300 9
 
 fetch() { # fetch <url> <dest> <sha256> <size>
   local url="$1" dest="$2" sha="$3" size="$4" got
   mkdir -p "$(dirname "$dest")"
-  curl -fsSL --retry 3 --retry-delay 2 -o "$dest.part" "$url"
+  if ! curl -fsSL --retry 3 --retry-delay 2 -o "$dest.part" "$url"; then
+    rm -f "$dest.part"
+    printf 'DOWNLOAD FAIL %s\n' "$dest" >&2
+    return 1
+  fi
   got="$(sha256_of "$dest.part")"
   if [ "$got" != "$sha" ] || [ "$(size_of "$dest.part")" != "$size" ]; then
     printf 'SHA256/SIZE FAIL %s: expected %s B %s, got %s B %s\n' \
@@ -119,6 +123,7 @@ fetch() { # fetch <url> <dest> <sha256> <size>
     rm -f "$dest.part"
     return 1
   fi
+  chmod 0644 "$dest.part"
   mv "$dest.part" "$dest"
 }
 

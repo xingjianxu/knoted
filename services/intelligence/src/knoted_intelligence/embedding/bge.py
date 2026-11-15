@@ -382,7 +382,7 @@ def require_model_dir(root: Path | None = None) -> Path:
         raise EmbeddingError(
             "models_missing",
             "the BGE-M3 snapshot is not installed; provision it with "
-            f"{snapshot}/{FETCH_SCRIPT} as described in embedding/LOCK.md",
+            f"{FETCH_SCRIPT} as described in embedding/LOCK.md",
         )
     manifest()
     problems = artifact_problems(snapshot)
@@ -391,7 +391,7 @@ def require_model_dir(root: Path | None = None) -> Path:
             "models_missing",
             "the locked BGE-M3 snapshot is incomplete ("
             + "; ".join(problems)
-            + f"); re-run {snapshot}/{FETCH_SCRIPT} --check as described in "
+            + f"); re-run {FETCH_SCRIPT} --verify as described in "
             "embedding/LOCK.md",
         )
     return snapshot
@@ -461,7 +461,7 @@ def _get_model() -> Any:
             raise EmbeddingError(
                 "model_load_failed",
                 f"the locked snapshot could not be loaded ({type(exc).__name__}); "
-                f"verify it with {snapshot}/{FETCH_SCRIPT} --check",
+                f"verify it with {FETCH_SCRIPT} --verify",
             ) from exc
         model.max_seq_length = MAX_SEQ_LENGTH
         loaded_dims = _embedding_dimension(model)
