@@ -261,7 +261,7 @@ host 已实测：长生成进行中 `systemctl stop strata.service`（实际单�
 | --- | --- | --- |
 | base URL | `http://127.0.0.1:15604` | 仅回环；客户端自行拼 `/v1/chat/completions` |
 | 模型别名 | `qwen3.8-flash-next-iq3_s` | 必须与 `/v1/models` 和响应 `model` 字段一致 |
-| 凭据文件 | `/run/knoted/strata-api-key` | root:knoted 0440；服务端 LoadCredential 与 Knoted 客户端共用 |
+| 凭据文件 | `/run/knoted/strata-api-key` | root:knoted 0440；服务端 LoadCredential 与 Knoted 客户端共用。**2026-11-15 起已被取代**：`/run/strata/api-key`（root:strata-clients 0440，客户端入 `strata-clients` 组），见 §11.1 偏差 3/9；本行保留为当轮记录 |
 | 认证头 | `Authorization: Bearer <key>` | 也接受 `x-api-key`，Knoted 只固定一种 |
 | 流式 | `stream:true` + SSE | `delta.content` 是答案；`delta.reasoning_content` 不进入答案 |
 | 结束 | `data: [DONE]`，且流内没有 `error` 块 | 未收到 `[DONE]` 视为失败/取消；**收到 `[DONE]` 但先出现 `error` 块也必须判失败**（停机实测，§8.6）。客户端不能只看 `[DONE]` |
@@ -285,13 +285,15 @@ wks-lab 有 3 张 3090，默认分配如下：
 
 | nvidia-smi 序号 | UUID | 用途 |
 | --- | --- | --- |
-| 0 | `GPU-6bc31459-053f-60ef-0615-3aec9593c9e7` | Strata（`knoted.strata.gpus` 的唯一默认项） |
+| 0 | `GPU-6bc31459-053f-60ef-0615-3aec9593c9e7` | Strata（host `features.server.strata.gpuUuids` 的唯一默认项；旧模块的 `knoted.strata.gpus` 已随 §11 删除） |
 | 1 | `GPU-9e2b6db5-acef-fa85-a28a-7214d1f4c6c0` | Python（由 Python 服务按 UUID 配置，不在本模块） |
 | 2 | `GPU-bf8d2065-6d30-4a83-d9a7-efb41ab26cef` | 不使用 |
 
 `knoted.strata.gpus` 接受 1—2 条 UUID，默认 1 条；列 2 条必须同时有 R30/计划变更记录。断言拒绝 0 条、
 3 条和数字索引；UUID 只归一化十六进制部分，`GPU-` 前缀保持大写。模块用 `CUDA_VISIBLE_DEVICES` 把 UUID
 重编号为 0..n-1，Strata 的 `gpu` 字段仍按进程内索引工作，不依赖主机上的永久 0/1。
+（本段描述的是 2026-11-14 的旧模块选项；该选项已删除，等价断言现在位于 host
+`features.server.strata.gpuUuids`，语义相同：1—2 卡、UUID 形式、`CUDA_VISIBLE_DEVICES` 重编号。）
 
 ### 3.2 若 host 采用 llama.cpp 承载（等价映射，未验证）
 
@@ -315,6 +317,8 @@ llama.cpp 而不是 Strata 承载它们，必须保持下列等价映射，否�
 以下任一项缺失都视为部署失败，不得把服务标为“可用”；模块的 preflight 也会拒绝启动。
 **实际 host 走的是另一套声明（`features.server.strata`），下列第 7 条的“用本模块启用”未被执行；
 差异与影响见 §9 偏差 1、2、8、9。本节保留为契约与将来统一时的对齐清单，不代表当前落点。**
+（2026-11-15 更新：裁决为 host 独占部署，`nix/strata-client.nix` 已不再声明 unit，“将来统一”已不成立；
+本节只剩标为“host 侧仍需满足”的条目有效，现行落点见 §11.1/§11.2。）
 
 1. **账号**：创建 `knoted` 系统用户/组（与 API、Python 服务共用）；模块的 tmpfiles 规则假设该组已存在。
 2. **目录**：`install -d -o root -g root -m 0755 /data/llm/strata`，以及 model/config 子目录；
@@ -338,6 +342,8 @@ llama.cpp 而不是 Strata 承载它们，必须保持下列等价映射，否�
 7. **单元**：用 `nix/strata-client.nix` 的 `knoted.strata` 选项启用 `knoted-strata.service`；默认
    `CUDA_VISIBLE_DEVICES=GPU-6bc31459-…`（单卡 Strata，Python 用另一张，第三张不用），
    `strata serve` 只绑定 `127.0.0.1:15604`。
+   **（已废止：模块不再声明 unit；承载单元为 host 的 `strata.service`，`User=strata`，
+   `CUDA_VISIBLE_DEVICES` 由 host 模块从 `gpuUuids` 生成，仍只绑回环。见 §11.1 偏差 1/2。）**
 8. **回报**：host 提交 SHA、实际 `strata --version`、组件版本、实测模型摘要、`/v1/models` 的 `id`、
    `ss -ltnp` 的 15604 行、一次流式调用记录与断连取消记录。
 
@@ -456,7 +462,10 @@ $ sudo curl -sS -H @/run/knoted/strata-auth-header http://127.0.0.1:15604/v1/sta
 | 4 断连取消 | `timeout 1 curl …` + `/v1/status` + `nvidia-smi` | 由 host 证据 §5 提供，**本轮未复跑** |
 | 5 单元停止不残留引擎 | `systemctl stop …` + `nvidia-smi` | 由 host 证据 §6 提供，**本轮未复跑**；实际单元名是 `strata.service`（§9 偏差 2） |
 
-## 7. Nix 模块验证（已实际执行）
+## 7. Nix 模块验证（2026-11-14 实际执行，旧模块版本）
+
+> **本节记录的是旧模块（含 unit/tmpfiles/preflight）。2026-11-15 起 `knoted.strata.enable` 已删除，
+> 下面的命令不再可复现（AST 由 13,574 bytes 变为 4,598 bytes）；现有契约的求值见 §11.2。**
 
 文件：`nix/strata-client.nix`。它是标准 NixOS module（`options.knoted.strata`），host 可 `imports` 后启用，
 不 fetch 二进制、不写密钥。以下命令均在仓库根目录执行（`$(pwd)` 换成实际 worktree 根即可复现）。
@@ -852,8 +861,9 @@ in builtins.toJSON { baseUrl = sys.config.knoted.strata.provider.baseUrl; …; }
 ```
 
 `systemd.services` 里没有任何 strata 单元，tmpfiles 规则里也没有 `/run/strata` 或 `/run/knoted` 条目——
-即“这个模块不参与部署”是可以核对的，而不是叙述。反向检查：`knoted.strata.listen.port = 19095` →
-`error: The option 'knoted.strata.listen.port' is read-only, but it's set multiple times`（契约值不可按主机改）。
+即“这个模块不参与部署”是可以核对的，而不是叙述。反向检查（下列报错为**转述**，完整输出还带
+`Definition values:` 列表与文件/行号）：`knoted.strata.listen.port = 19095` →
+`The option 'knoted.strata.listen.port' is read-only, but it's set multiple times`（契约值不可按主机改）。
 
 ### 11.3 待激活验证（尚未执行）
 
