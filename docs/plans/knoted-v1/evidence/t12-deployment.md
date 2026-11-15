@@ -811,9 +811,9 @@ $ sudo nix-env --list-generations --profile /nix/var/nix/profiles/system | tail 
 
 ## 11. 共享服务化：偏差裁决与契约收敛（2026-11-15）
 
-§9 中六条遗留偏差的裁决与随之落地的改动。**host 侧配置已改并构建成功，但尚未 switch**：
-本节因此不主张任何新的运行时事实——此刻运行的仍是旧部署（`/run/knoted/strata-api-key`、服务账号
-`knoted`、单元 `knoted-api-key.service`）。凡是 switch 之后才能观察的值都显式标为“待激活验证”。
+§9 中六条遗留偏差的裁决与随之落地的改动。**2026-11-15 已 switch 生效**：旧部署（`/run/knoted/strata-api-key`、
+服务账号 `knoted`、单元 `knoted-api-key.service`）已由共享服务（`/run/strata/api-key`、`strata` 账号、
+`strata-api-key.service`）取代，运行时实测见 §11.3。
 
 ### 11.1 裁决
 
@@ -865,20 +865,38 @@ in builtins.toJSON { baseUrl = sys.config.knoted.strata.provider.baseUrl; …; }
 `Definition values:` 列表与文件/行号）：`knoted.strata.listen.port = 19095` →
 `The option 'knoted.strata.listen.port' is read-only, but it's set multiple times`（契约值不可按主机改）。
 
-### 11.3 待激活验证（尚未执行）
+### 11.3 激活实测（2026-11-15 已执行）
 
-host 侧改动：`/etc/nixos` 提交 `bfa758a`（`features/server/strata.nix`、`features/server/knoted.nix`、
-`hosts/wks-lab/default.nix`、`AGENTS.md`）；`nixos-rebuild build --flake .#wks-lab` 成功，
-`systemd-analyze verify` 对 `strata.service` 与 `strata-api-key.service` 无告警。**未 switch。**
-switch 后必须复跑：
+host 侧提交：`bfa758a`（共享服务化）、`f53d729`（`contextSize` 类型）、`4d3089f`（切换时暴露的三处启动缺陷）。
+**首次 switch 失败两次，修复后才成功**；两次失败都是真实缺陷，不是环境噪声：
 
-- `/run/strata/api-key`、`/run/strata/auth-header` 存在，均 `root:strata-clients 0440`；
-- `/var/lib/strata/api-key` 由旧副本迁移而来（与 `/var/lib/knoted/strata-api-key` 内容相同，**不打印密钥**）；
-- `/data/llm/strata/state` 属主变为 `strata:strata`（tmpfiles `Z` 递归）；
-- `systemctl status strata` 的主进程与引擎子进程仍在，`ss -ltnp` 只有 `127.0.0.1:15604`；
-- `curl -H @/run/strata/auth-header http://127.0.0.1:15604/v1/models` 返回
-  `id=qwen3.8-flash-next-iq3_s`、`meta.n_ctx=32768`；无密钥仍 401（t12_1 断言不变）；
-- `knoted` 账号在 `strata-clients` 组内（`id knoted`），旧路径软链可用。
+| # | 现象 | 根因 | 修复 |
+| --- | --- | --- | --- |
+| 1 | `ExecStartPre` 失败：`strata: API key file is not readable by the service user: /run/strata/api-key` | preflight 以服务身份运行，而密钥是 `0440 root:strata-clients`，`strata` 账号不在该组（它也不需要读：LoadCredential 由 root 读） | `ExecStartPre` 加 `+` 前缀以 root 校验主机前置条件，而不是把服务账号塞进客户端组 |
+| 2 | `strata: runtime directory must be owner-only (mode 0700)`（退出码 5） | tmpfiles 的 `Z` 在本机被**静默跳过**：`state` 的父目录 `/data/llm/strata` 属 `xingjian`、`state` 属 `strata`，systemd-tmpfiles 判为 `Detected unsafe path transition` 并跳过整棵子树；旧 `state/strata/runtime`（0700 `knoted`）没被 chown，于是对 `strata` 不是 owner-only | 改由 `strata-api-key` 单元以 root 执行 `chown -R`（**不改 mode**，否则 0700 会被改成 0750 而同样拒启）；删掉 `Z` 规则 |
+
+第三个观察：旧部署在 `/run/knoted/` 留的是同一把密钥的**真文件**，原实现的过渡软链“真文件不碰”会留一份陈旧副本。
+改为逐字节相同即换成软链、不同则保留并报警（本次已换成软链）。另外 `dataAccess` 默认开启的 `A+` ACL
+会让主机用户经 mask 读到 `/var/lib/strata/api-key`，每次启动 `chmod 0400` 把 mask 压回 `---`。
+
+最终一次 `nixos-rebuild switch --flake .#wks-lab`：成功（exit 0）；再 `systemctl restart strata-api-key strata`
+复验一遍启动路径，25 s 内 `active`。实测结果：
+
+| 检查 | 命令 | 结果 |
+| --- | --- | --- |
+| 单元 | `systemctl is-active strata strata-api-key` | `active` / `active`；`Main PID` 与引擎子进程均在；`systemctl --failed` 为空 |
+| 回环与卡 | `ss -ltnp \| grep 15604`、`nvidia-smi --query-compute-apps` | 只有 `127.0.0.1:15604`；引擎单卡 `23592 MiB` |
+| 运行期密钥 | `ls -l /run/strata/` | `api-key`、`auth-header` 均 `root:strata-clients 0440`，每次启动重建 |
+| 持久副本 | `ls -l`、`getfacl`、`sudo sha256sum` 两文件 | `/var/lib/strata/api-key` = `0400 root:root`，ACL mask `---`（主机用户不可读）；与 `/var/lib/knoted/strata-api-key` 的 sha256 **相同**（值未打印） |
+| 状态目录 | `stat -c '%U:%G %a'` | `state` `strata:strata 750`；`state/strata/runtime` `strata:strata 700`（上游要求的 owner-only 保住了）；`state/logs` `strata:strata 750` |
+| 组 | `id knoted`、`getent group strata-clients` | `uid=988(knoted) … groups=…,980(strata-clients)` |
+| 模型 | `curl -H @/run/strata/auth-header …/v1/models`（以 `knoted` 身份） | `id=qwen3.8-flash-next-iq3_s`、`meta.n_ctx=32768`、`status=loaded` |
+| 认证 | 不带密钥 `/v1/models` | `401`（t12_1 断言不变） |
+| 状态 | `…/v1/status` | `model` 同名、`loaded=true`、`engine=0.1.59` |
+| 流式 | `stream:true, max_tokens=16` | SSE 正常：首块 `delta.role`，随后 `reasoning_content` 增量 + `: keep-alive`，`model` 同名 |
+| 旧路径 | `ls -l /run/knoted/` | `strata-api-key`、`strata-auth-header` 已是指向 `/run/strata/…` 的软链 |
+
+未复跑：真实重启（reboot）后的开机路径、长上下文与并发（T12 本就不测性能）。
 
 ### 11.4 对 T61/T62 的要求
 
