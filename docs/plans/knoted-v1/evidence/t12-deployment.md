@@ -261,7 +261,7 @@ host 已实测：长生成进行中 `systemctl stop strata.service`（实际单�
 | --- | --- | --- |
 | base URL | `http://127.0.0.1:15604` | 仅回环；客户端自行拼 `/v1/chat/completions` |
 | 模型别名 | `qwen3.8-flash-next-iq3_s` | 必须与 `/v1/models` 和响应 `model` 字段一致 |
-| 凭据文件 | `/run/knoted/strata-api-key` | root:knoted 0440；服务端 LoadCredential 与 Knoted 客户端共用 |
+| 凭据文件 | `/run/knoted/strata-api-key` | root:knoted 0440；服务端 LoadCredential 与 Knoted 客户端共用。**2026-11-15 起已被取代**：`/run/strata/api-key`（root:strata-clients 0440，客户端入 `strata-clients` 组），见 §11.1 偏差 3/9；本行保留为当轮记录 |
 | 认证头 | `Authorization: Bearer <key>` | 也接受 `x-api-key`，Knoted 只固定一种 |
 | 流式 | `stream:true` + SSE | `delta.content` 是答案；`delta.reasoning_content` 不进入答案 |
 | 结束 | `data: [DONE]`，且流内没有 `error` 块 | 未收到 `[DONE]` 视为失败/取消；**收到 `[DONE]` 但先出现 `error` 块也必须判失败**（停机实测，§8.6）。客户端不能只看 `[DONE]` |
@@ -285,13 +285,15 @@ wks-lab 有 3 张 3090，默认分配如下：
 
 | nvidia-smi 序号 | UUID | 用途 |
 | --- | --- | --- |
-| 0 | `GPU-6bc31459-053f-60ef-0615-3aec9593c9e7` | Strata（`knoted.strata.gpus` 的唯一默认项） |
+| 0 | `GPU-6bc31459-053f-60ef-0615-3aec9593c9e7` | Strata（host `features.server.strata.gpuUuids` 的唯一默认项；旧模块的 `knoted.strata.gpus` 已随 §11 删除） |
 | 1 | `GPU-9e2b6db5-acef-fa85-a28a-7214d1f4c6c0` | Python（由 Python 服务按 UUID 配置，不在本模块） |
 | 2 | `GPU-bf8d2065-6d30-4a83-d9a7-efb41ab26cef` | 不使用 |
 
 `knoted.strata.gpus` 接受 1—2 条 UUID，默认 1 条；列 2 条必须同时有 R30/计划变更记录。断言拒绝 0 条、
 3 条和数字索引；UUID 只归一化十六进制部分，`GPU-` 前缀保持大写。模块用 `CUDA_VISIBLE_DEVICES` 把 UUID
 重编号为 0..n-1，Strata 的 `gpu` 字段仍按进程内索引工作，不依赖主机上的永久 0/1。
+（本段描述的是 2026-11-14 的旧模块选项；该选项已删除，等价断言现在位于 host
+`features.server.strata.gpuUuids`，语义相同：1—2 卡、UUID 形式、`CUDA_VISIBLE_DEVICES` 重编号。）
 
 ### 3.2 若 host 采用 llama.cpp 承载（等价映射，未验证）
 
@@ -315,6 +317,8 @@ llama.cpp 而不是 Strata 承载它们，必须保持下列等价映射，否�
 以下任一项缺失都视为部署失败，不得把服务标为“可用”；模块的 preflight 也会拒绝启动。
 **实际 host 走的是另一套声明（`features.server.strata`），下列第 7 条的“用本模块启用”未被执行；
 差异与影响见 §9 偏差 1、2、8、9。本节保留为契约与将来统一时的对齐清单，不代表当前落点。**
+（2026-11-15 更新：裁决为 host 独占部署，`nix/strata-client.nix` 已不再声明 unit，“将来统一”已不成立；
+本节只剩标为“host 侧仍需满足”的条目有效，现行落点见 §11.1/§11.2。）
 
 1. **账号**：创建 `knoted` 系统用户/组（与 API、Python 服务共用）；模块的 tmpfiles 规则假设该组已存在。
 2. **目录**：`install -d -o root -g root -m 0755 /data/llm/strata`，以及 model/config 子目录；
@@ -338,6 +342,8 @@ llama.cpp 而不是 Strata 承载它们，必须保持下列等价映射，否�
 7. **单元**：用 `nix/strata-client.nix` 的 `knoted.strata` 选项启用 `knoted-strata.service`；默认
    `CUDA_VISIBLE_DEVICES=GPU-6bc31459-…`（单卡 Strata，Python 用另一张，第三张不用），
    `strata serve` 只绑定 `127.0.0.1:15604`。
+   **（已废止：模块不再声明 unit；承载单元为 host 的 `strata.service`，`User=strata`，
+   `CUDA_VISIBLE_DEVICES` 由 host 模块从 `gpuUuids` 生成，仍只绑回环。见 §11.1 偏差 1/2。）**
 8. **回报**：host 提交 SHA、实际 `strata --version`、组件版本、实测模型摘要、`/v1/models` 的 `id`、
    `ss -ltnp` 的 15604 行、一次流式调用记录与断连取消记录。
 
@@ -456,7 +462,10 @@ $ sudo curl -sS -H @/run/knoted/strata-auth-header http://127.0.0.1:15604/v1/sta
 | 4 断连取消 | `timeout 1 curl …` + `/v1/status` + `nvidia-smi` | 由 host 证据 §5 提供，**本轮未复跑** |
 | 5 单元停止不残留引擎 | `systemctl stop …` + `nvidia-smi` | 由 host 证据 §6 提供，**本轮未复跑**；实际单元名是 `strata.service`（§9 偏差 2） |
 
-## 7. Nix 模块验证（已实际执行）
+## 7. Nix 模块验证（2026-11-14 实际执行，旧模块版本）
+
+> **本节记录的是旧模块（含 unit/tmpfiles/preflight）。2026-11-15 起 `knoted.strata.enable` 已删除，
+> 下面的命令不再可复现（AST 由 13,574 bytes 变为 4,598 bytes）；现有契约的求值见 §11.2。**
 
 文件：`nix/strata-client.nix`。它是标准 NixOS module（`options.knoted.strata`），host 可 `imports` 后启用，
 不 fetch 二进制、不写密钥。以下命令均在仓库根目录执行（`$(pwd)` 换成实际 worktree 根即可复现）。
@@ -775,6 +784,10 @@ $ sudo nix-env --list-generations --profile /nix/var/nix/profiles/system | tail 
 | 9 | **`/run` 凭据需开机重建**：host 加持久副本 `/var/lib/knoted/strata-api-key` + `knoted-api-key.service` 每次开机重建 `/run/knoted/strata-api-key`（`root:knoted 0440`，`Before=strata.service`） | 契约把 `/run/knoted/strata-api-key` 当静态路径；重建顺序或权限不对则 preflight 拒绝启动、客户端 401；轮换 key 需重启 `knoted-api-key` + `strata` + 客户端 | 记录（运维前提），当前部署已满足 |
 | 10 | **验证便利文件**：`/run/knoted/strata-auth-header`（`Authorization: Bearer …`，0600）是 host 手工一次性创建，不在 Nix 声明里 | 重启后消失，需要时按 §4 第 6 条重建；不得为了“可复现”在 Nix 里再存一份密钥副本 | 记录；不要把它当成已声明的部署产物 |
 
+> **2026-11-15 裁决（本表之后追加，不改动上表文字）**：偏差 1/2/3/8/9/10 已由人工裁决为
+> 「host 独占部署 + Strata 系统级共享服务 + app 侧纯客户端契约」，处置与待激活验证见 **§11**。
+> 上表保持为当轮记录：它描述的是 2026-11-14 的部署，不因后一次改动而重写。
+
 ## 10. 未执行 / 限制
 
 - **单卡性能未测**：吞吐、首 token 延迟分布、长上下文都只有一次性观察（§8.4），不是性能测试；
@@ -793,4 +806,101 @@ $ sudo nix-env --list-generations --profile /nix/var/nix/profiles/system | tail 
   不写入任何系统配置，仍不能替代真实端点验证。
 - **本轮没有修改 `nix/strata-client.nix`**：偏差 1/2/3/8 需要的是契约/统一决定，不是单方面改模块；待人工
   裁决后再改，避免“先改契约再补证据”。
+  （2026-11-15 更新：裁决已下，模块已按 §11.2 收敛为纯客户端契约；上面的描述仅指 2026-11-14 那一轮。）
 - 未 push、未做任何 GitHub 操作；本文只做本地 docs 提交。
+
+## 11. 共享服务化：偏差裁决与契约收敛（2026-11-15）
+
+§9 中六条遗留偏差的裁决与随之落地的改动。**2026-11-15 已 switch 生效**：旧部署（`/run/knoted/strata-api-key`、
+服务账号 `knoted`、单元 `knoted-api-key.service`）已由共享服务（`/run/strata/api-key`、`strata` 账号、
+`strata-api-key.service`）取代，运行时实测见 §11.3。
+
+### 11.1 裁决
+
+| 偏差 | 裁决 |
+| --- | --- |
+| 1 承载来源 | **host 独占部署**。`nix/strata-client.nix` 收敛为纯客户端契约（不再声明 unit / tmpfiles / 账号 / preflight），所以“两边各起一个 `strata serve` 抢 15604”的路径已不存在。host 侧：`strata-api-key.service`（oneshot，重建 `/run/strata/api-key` 与 `/run/strata/auth-header`，新持久副本缺失时从 `/var/lib/knoted/strata-api-key` 一次性拷贝**保留现值**）+ `strata.service`（`User=strata`）。 |
+| 2 单元名 | 以 host 为准：`strata.service`。契约导出 `serviceUnit = "strata.service"`、`credentialUnit = "strata-api-key.service"`；`knoted-strata.service` 这个名字不再存在。 |
+| 3 凭据传递 | 保持 LoadCredential → `STRATA_API_KEY`（`serve` 仍无 `--api-key-file`）。共享化后客户端不再“共用某个账号的密钥文件”，而是**入组** `strata-clients` 读 `/run/strata/api-key`（0440）。暴露面：同机同组即同权，因此端口必须留回环，也不要把这个组给不可信进程。 |
+| 8 NixOS 运行前提 | `LD_LIBRARY_PATH=/run/opengl-driver/lib`、`XDG_DATA_HOME=/data/llm/strata/share`、`XDG_*`/`STRATA_DATA_DIR` 属 host 单元职责；契约模块不再产生 unit，“import 后启动失败”这个条件随之消失。 |
+| 9 `/run` 凭据重建 | 保留，但路径改为 `/run/strata/api-key`；持久副本 `/var/lib/strata/api-key`（root:root 0400）。`/var/lib/knoted/strata-api-key` 仅作一次性迁移来源，旧文件保留以便回滚；迁移完成后 host 把 `legacyApiKeyMaster` 置空并删旧文件。 |
+| 10 验证便利文件 | 从“手工创建、重启即失”改为**声明式生成**：`/run/strata/auth-header`（0440 root:strata-clients），与密钥同组同暴露面；host 保留过渡软链 `/run/knoted/strata-auth-header`（父目录存在时才建）。 |
+
+偏差 4（`[DONE]` ≠ 成功）与 5/6/7 不在本次裁决范围，保持原状。
+
+### 11.2 契约模块（已执行）
+
+`nix/strata-client.nix` 由“既声明 unit 又当契约”改为纯契约，只读导出
+`listen.{address,port}`、`model.alias`、`contextSize`、`clientGroup`、`credentialFile`、
+`authHeaderFile`、`authScheme`、`serviceUnit`、`credentialUnit`、`endpoints.*`、
+`provider.{baseUrl,model,credentialFile}`；删除 `enable`/`package`/`dataDir`/`stateDir`/
+`runConfig`/`user`/`group`/`gpus`/`apiKeyFile`/`model.files`/`upstream.*`/`extraArgs` 与全部 `config` 段。
+
+本 worktree 实际执行的验证：
+
+```sh
+nix-instantiate --parse nix/strata-client.nix      # exit 0
+# 求值（--impure 仅为允许 <nixpkgs> 与 $(pwd)）
+nix eval --impure --raw --expr "let sys = import <nixpkgs/nixos> { configuration = {
+  imports = [ $(pwd)/nix/strata-client.nix ];
+  nixpkgs.hostPlatform = \"x86_64-linux\"; system.stateVersion = \"24.11\"; }; };
+in builtins.toJSON { baseUrl = sys.config.knoted.strata.provider.baseUrl; …; }
+  services = builtins.filter (n: builtins.match \".*(strata).*\" n != null)
+    (builtins.attrNames sys.config.systemd.services); }"
+```
+
+输出（节选，原样）：
+
+```json
+{"authHeaderFile":"/run/strata/auth-header","authScheme":"Bearer","baseUrl":"http://127.0.0.1:15604",
+ "clientGroup":"strata-clients","contextSize":32768,"credentialFile":"/run/strata/api-key",
+ "credentialUnit":"strata-api-key.service","model":"qwen3.8-flash-next-iq3_s",
+ "serviceUnit":"strata.service","services":[],
+ "endpoints":{"chatCompletions":"/v1/chat/completions","health":"/health",
+              "models":"/v1/models","status":"/v1/status"}}
+```
+
+`systemd.services` 里没有任何 strata 单元，tmpfiles 规则里也没有 `/run/strata` 或 `/run/knoted` 条目——
+即“这个模块不参与部署”是可以核对的，而不是叙述。反向检查（下列报错为**转述**，完整输出还带
+`Definition values:` 列表与文件/行号）：`knoted.strata.listen.port = 19095` →
+`The option 'knoted.strata.listen.port' is read-only, but it's set multiple times`（契约值不可按主机改）。
+
+### 11.3 激活实测（2026-11-15 已执行）
+
+host 侧提交：`bfa758a`（共享服务化）、`f53d729`（`contextSize` 类型）、`4d3089f`（切换时暴露的三处启动缺陷）。
+**首次 switch 失败两次，修复后才成功**；两次失败都是真实缺陷，不是环境噪声：
+
+| # | 现象 | 根因 | 修复 |
+| --- | --- | --- | --- |
+| 1 | `ExecStartPre` 失败：`strata: API key file is not readable by the service user: /run/strata/api-key` | preflight 以服务身份运行，而密钥是 `0440 root:strata-clients`，`strata` 账号不在该组（它也不需要读：LoadCredential 由 root 读） | `ExecStartPre` 加 `+` 前缀以 root 校验主机前置条件，而不是把服务账号塞进客户端组 |
+| 2 | `strata: runtime directory must be owner-only (mode 0700)`（退出码 5） | tmpfiles 的 `Z` 在本机被**静默跳过**：`state` 的父目录 `/data/llm/strata` 属 `xingjian`、`state` 属 `strata`，systemd-tmpfiles 判为 `Detected unsafe path transition` 并跳过整棵子树；旧 `state/strata/runtime`（0700 `knoted`）没被 chown，于是对 `strata` 不是 owner-only | 改由 `strata-api-key` 单元以 root 执行 `chown -R`（**不改 mode**，否则 0700 会被改成 0750 而同样拒启）；删掉 `Z` 规则 |
+
+第三个观察：旧部署在 `/run/knoted/` 留的是同一把密钥的**真文件**，原实现的过渡软链“真文件不碰”会留一份陈旧副本。
+改为逐字节相同即换成软链、不同则保留并报警（本次已换成软链）。另外 `dataAccess` 默认开启的 `A+` ACL
+会让主机用户经 mask 读到 `/var/lib/strata/api-key`，每次启动 `chmod 0400` 把 mask 压回 `---`。
+
+最终一次 `nixos-rebuild switch --flake .#wks-lab`：成功（exit 0）；再 `systemctl restart strata-api-key strata`
+复验一遍启动路径，25 s 内 `active`。实测结果：
+
+| 检查 | 命令 | 结果 |
+| --- | --- | --- |
+| 单元 | `systemctl is-active strata strata-api-key` | `active` / `active`；`Main PID` 与引擎子进程均在；`systemctl --failed` 为空 |
+| 回环与卡 | `ss -ltnp \| grep 15604`、`nvidia-smi --query-compute-apps` | 只有 `127.0.0.1:15604`；引擎单卡 `23592 MiB` |
+| 运行期密钥 | `ls -l /run/strata/` | `api-key`、`auth-header` 均 `root:strata-clients 0440`，每次启动重建 |
+| 持久副本 | `ls -l`、`getfacl`、`sudo sha256sum` 两文件 | `/var/lib/strata/api-key` = `0400 root:root`，ACL mask `---`（主机用户不可读）；与 `/var/lib/knoted/strata-api-key` 的 sha256 **相同**（值未打印） |
+| 状态目录 | `stat -c '%U:%G %a'` | `state` `strata:strata 750`；`state/strata/runtime` `strata:strata 700`（上游要求的 owner-only 保住了）；`state/logs` `strata:strata 750` |
+| 组 | `id knoted`、`getent group strata-clients` | `uid=988(knoted) … groups=…,980(strata-clients)` |
+| 模型 | `curl -H @/run/strata/auth-header …/v1/models`（以 `knoted` 身份） | `id=qwen3.8-flash-next-iq3_s`、`meta.n_ctx=32768`、`status=loaded` |
+| 认证 | 不带密钥 `/v1/models` | `401`（t12_1 断言不变） |
+| 状态 | `…/v1/status` | `model` 同名、`loaded=true`、`engine=0.1.59` |
+| 流式 | `stream:true, max_tokens=16` | SSE 正常：首块 `delta.role`，随后 `reasoning_content` 增量 + `: keep-alive`，`model` 同名 |
+| 旧路径 | `ls -l /run/knoted/` | `strata-api-key`、`strata-auth-header` 已是指向 `/run/strata/…` 的软链 |
+
+未复跑：真实重启（reboot）后的开机路径、长上下文与并发（T12 本就不测性能）。
+
+### 11.4 对 T61/T62 的要求
+
+客户端实现改用 `credentialFile`（`/run/strata/api-key`）与 `serviceUnit`（`strata.service`）；
+代码与文档里不得再出现 `/run/knoted/…` 或 `knoted-strata.service`。readiness 用
+`strata.service` + `endpoints.health` 判断。停机语义（偏差 4）不变：收到 `[DONE]` 仍需先检查
+`error` 块。

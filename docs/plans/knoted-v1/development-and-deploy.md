@@ -15,6 +15,8 @@
 | 临时任务目录 | /data/knoted-dev/tasks/<task-id>/{tmp,cache,build,evidence} |
 | 隔离恢复演练 | /data/knoted-dev/tasks/<task-id>/restore |
 | Strata独立安装 | /data/llm/strata |
+| Strata共享服务 | `strata.service`（`User=strata`，127.0.0.1:15604）+ `strata-api-key.service`（oneshot）；客户端组 `strata-clients` |
+| Strata运行凭据 | `/run/strata/api-key`、`/run/strata/auth-header`（root:strata-clients 0440；持久副本 `/var/lib/strata/api-key`） |
 | OCR/嵌入模型 | 共享根 /data/llm/docling 与 /data/llm/bge-m3（按 revision 分目录，由环境变量指向） |
 | 现有证书 | /var/lib/acme/wlab.132140.xyz/fullchain.pem 和 key.pem |
 
