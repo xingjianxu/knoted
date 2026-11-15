@@ -1,0 +1,86 @@
+"""The provisioning scripts and the Python lock must agree, and --verify must not write.
+
+The shared model roots are written only by these scripts. The revision directory
+name exists in three places — the script, the Python derivation and ``LOCK.md`` —
+so a drift would file the same weights under a second name. `--verify` is the
+read-only path used by operators and by the host task; it must never create a
+directory or overwrite a byte.
+"""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+from knoted_intelligence.embedding import bge
+from knoted_intelligence.parsing import models as locked
+
+SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
+DOCLING_SCRIPT = SCRIPTS / "fetch-docling-artifacts.sh"
+BGE_SCRIPT = SCRIPTS / "fetch-bge-m3-artifacts.sh"
+
+
+def run(script: Path, *args: object) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(script), *(str(arg) for arg in args)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_docling_revision_id_matches_the_lock() -> None:
+    result = run(DOCLING_SCRIPT, "--print-revision-id")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == locked.revision_dirname()
+
+
+def test_bge_revision_id_matches_the_lock() -> None:
+    result = run(BGE_SCRIPT, "--print-revision-id")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == bge.snapshot_dirname()
+
+
+def test_docling_verify_reports_a_tampered_file_without_overwriting(tmp_path: Path) -> None:
+    target = tmp_path / "docling"
+    revision = target / locked.revision_dirname()
+    victim = revision / locked.RAPIDOCR_DICT
+    victim.parent.mkdir(parents=True)
+    victim.write_bytes(b"not the locked dictionary")
+
+    result = run(DOCLING_SCRIPT, target, "--verify")
+
+    assert result.returncode != 0
+    assert "MISMATCH" in result.stdout + result.stderr
+    assert victim.read_bytes() == b"not the locked dictionary"
+
+
+def test_docling_verify_does_not_create_the_revision_directory(tmp_path: Path) -> None:
+    target = tmp_path / "absent"
+
+    result = run(DOCLING_SCRIPT, target, "--verify")
+
+    assert result.returncode != 0
+    assert "MISSING" in result.stdout + result.stderr
+    assert not target.exists()
+
+
+def test_bge_verify_fails_on_an_incomplete_snapshot(tmp_path: Path) -> None:
+    target = tmp_path / "bge"
+    (target / bge.snapshot_dirname()).mkdir(parents=True)
+
+    result = run(BGE_SCRIPT, target, "--verify")
+
+    assert result.returncode != 0
+    assert "MISSING" in result.stdout + result.stderr
+
+
+def test_bge_verify_does_not_create_the_revision_directory(tmp_path: Path) -> None:
+    target = tmp_path / "absent"
+
+    result = run(BGE_SCRIPT, target, "--verify")
+
+    assert result.returncode != 0
+    assert not target.exists()
