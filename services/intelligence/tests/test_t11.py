@@ -562,6 +562,40 @@ def test_t11_6_embed_input_admission(tmp_path: Path) -> None:
             assert expected_code in record["error"]["message"], record["error"]["message"]
 
 
+# -- t11_9: the snapshot root comes from the environment ---------------------
+
+
+def test_t11_9_snapshot_dir_requires_the_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No default path: an unset environment is a loud, path-free failure."""
+
+    monkeypatch.delenv(bge.SNAPSHOT_DIR_ENV, raising=False)
+
+    with pytest.raises(bge.EmbeddingError) as excinfo:
+        bge.model_dir()
+
+    assert excinfo.value.code == "snapshot_unset"
+    assert bge.SNAPSHOT_DIR_ENV in excinfo.value.public_message
+    assert "/data/" not in excinfo.value.public_message
+
+
+def test_t11_9b_snapshot_dirname_follows_the_lock() -> None:
+    """The shared-root directory name is derived, never hand-written."""
+
+    assert bge.snapshot_dirname() == "bge-m3-5617a9f6-dense"
+    assert bge.MODEL_REVISION[:8] in bge.snapshot_dirname()
+    assert "dense" in bge.snapshot_dirname()
+
+
+def test_t11_9c_model_dir_uses_the_configured_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(bge.SNAPSHOT_DIR_ENV, str(tmp_path / "snapshot"))
+
+    assert bge.model_dir() == tmp_path / "snapshot"
+
+
 # -- helpers -----------------------------------------------------------------
 
 

@@ -6,8 +6,9 @@ is 1.0. The snapshot also ships ``sparse_linear.pt`` and ``colbert_linear.pt``;
 those heads are deliberately not loaded (T11 contract: dense only), and their
 presence is not a runtime requirement.
 
-The snapshot lives at ``KNOTED_INTELLIGENCE_MODELS_DIR/bge-m3`` (default
-``/data/knoted-dev/service/models/bge-m3``) and is never downloaded at runtime:
+The snapshot lives at the root named by ``KNOTED_INTELLIGENCE_BGE_M3_DIR`` (a
+machine-level shared directory, see ``embedding/LOCK.md``) and is never
+downloaded at runtime:
 ``HF_HUB_OFFLINE``/``TRANSFORMERS_OFFLINE``/``HF_HUB_DISABLE_TELEMETRY`` are set
 before ``sentence_transformers`` (and therefore ``torch``) is imported, and the
 snapshot path is passed explicitly. A missing, wrongly-sized or tampered file is
@@ -45,17 +46,13 @@ logger = logging.getLogger(__name__)
 
 # -- paths -------------------------------------------------------------------
 
-#: Environment variable an operator uses to relocate the model tree.
-MODELS_DIR_ENV = "KNOTED_INTELLIGENCE_MODELS_DIR"
-#: Deployment default; the service runs on the host that owns this tree.
-DEFAULT_MODELS_DIR = Path("/data/knoted-dev/service/models")
-#: Snapshot directory name below the model tree.
-MODEL_DIRNAME = "bge-m3"
-#: Machine-readable inventory written by the host task.
+#: Environment variable naming the shared snapshot root; there is no default.
+SNAPSHOT_DIR_ENV = "KNOTED_INTELLIGENCE_BGE_M3_DIR"
+#: Machine-readable inventory written by the provisioning script.
 MANIFEST_FILENAME = "MANIFEST.json"
 MANIFEST_SCHEMA = "knoted-bge-m3-models/1"
-#: Re-verification script shipped next to the snapshot (``--check`` is read-only).
-FETCH_SCRIPT = "fetch-model.sh"
+#: Re-verification entry point shipped in the repository.
+FETCH_SCRIPT = "services/intelligence/scripts/fetch-bge-m3-artifacts.sh"
 
 # -- pinned model ------------------------------------------------------------
 
@@ -202,7 +199,8 @@ os.environ.update(OFFLINE_ENV)
 class EmbeddingError(RuntimeError):
     """A dense-embedding refusal whose message is safe to hand to the worker.
 
-    ``code`` is stable: ``models_missing``, ``manifest_mismatch``,
+    ``code`` is stable: ``models_missing``, ``snapshot_unset``,
+    ``manifest_mismatch``,
     ``invalid_gpu_uuid``, ``cuda_unavailable``, ``model_load_failed``,
     ``invalid_input``, ``empty_input``, ``empty_text``, ``batch_too_large``,
     ``input_too_large``, ``text_too_long``, ``invalid_output``,
@@ -261,19 +259,27 @@ def lock_summary() -> dict[str, Any]:
 # -- snapshot layout ---------------------------------------------------------
 
 
-def models_dir() -> Path:
-    """The configured model tree, from ``KNOTED_INTELLIGENCE_MODELS_DIR``."""
-
-    raw = os.environ.get(MODELS_DIR_ENV)
-    if raw is not None and raw.strip():
-        return Path(raw).expanduser()
-    return DEFAULT_MODELS_DIR
-
-
 def model_dir() -> Path:
-    """The BGE-M3 snapshot directory (``<models>/bge-m3``)."""
+    """The BGE-M3 snapshot root, from the environment only.
 
-    return models_dir() / MODEL_DIRNAME
+    A missing configuration is an explicit failure: the snapshot is shared
+    between consumers and lives outside any instance data root.
+    """
+
+    raw = os.environ.get(SNAPSHOT_DIR_ENV, "").strip()
+    if not raw:
+        raise EmbeddingError(
+            "snapshot_unset",
+            f"{SNAPSHOT_DIR_ENV} is not set; it names the shared BGE-M3 snapshot "
+            f"root (see embedding/LOCK.md, provisioned by {FETCH_SCRIPT})",
+        )
+    return Path(raw).expanduser()
+
+
+def snapshot_dirname() -> str:
+    """The immutable directory name of this locked snapshot in the shared root."""
+
+    return f"bge-m3-{MODEL_REVISION[:8]}-dense"
 
 
 def manifest() -> dict[str, Any]:
