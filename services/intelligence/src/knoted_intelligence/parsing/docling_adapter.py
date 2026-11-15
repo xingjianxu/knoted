@@ -124,8 +124,9 @@ def parse_document(
     """Parses one staged document with the locked offline stack.
 
     ``options_revision`` is echoed into the result so the worker can bind the
-    artifact to the option revision it asked for. ``models_dir`` overrides
-    ``KNOTED_INTELLIGENCE_MODELS_DIR``; it defaults to the configured tree.
+    artifact to the option revision it asked for. ``models_dir`` overrides the
+    ``artifacts_dir()`` the environment names; ``None`` resolves it lazily, and
+    only for a format that actually needs a model.
     """
 
     source = Path(path)
@@ -136,10 +137,11 @@ def parse_document(
         raise models.ParseError("empty_input", "input is empty")
     models.check_input_size(size)
 
-    root = Path(models_dir) if models_dir is not None else models.default_models_dir()
+    root = Path(models_dir) if models_dir is not None else None
     source_format = _detect_format(source)
     if source_format == "text":
-        # The text path needs no model, so it also works for the T09 fixture.
+        # The text path needs no model, so it also works for the T09 fixture and
+        # keeps working when no artifact root is configured at all.
         return _parse_text(source, options_revision)
 
     if source_format == "image":
@@ -149,6 +151,7 @@ def parse_document(
     else:
         page_count = _pdf_page_count(source)
 
+    # Only now: the shared root is resolved (and required) for model-bound input.
     artifacts = models.require_artifacts(root)
     converter = _converter(str(artifacts), models.docling_device())
     try:
