@@ -39,7 +39,7 @@
 - [x] 写真实 PostgreSQL+HTTP 场景 t23_1/2/3，以及 CRUD/校验/游标/鉴权/父子并发回归；先运行并观察缺失路由造成的真实断言失败。
 - [x] 新增 notes 表与注册、事务锁/CAS/outbox SQL；实现 service 校验与命名 DTO，HTTP 仅适配输入输出。
 - [x] 跑聚焦测试直到通过；全量 cargo fmt --check、cargo test --workspace --locked、cargo clippy --locked --all-targets -- -D warnings，保留输出；diff/敏感信息检查。
-- [ ] 实际读取 git-commit Skill并提交；最终独立审查，重要反馈用RED→GREEN修复。
+- [x] 实际读取 git-commit Skill并提交；最终独立审查，重要反馈用RED→GREEN修复。
 
 ### Task 2: 集成、测试实例与收尾
 
@@ -57,5 +57,7 @@
 - 既有任务卡/契约与用户明确完成指令已授权实施；常规设计沿用契约，不重复要求批准。候选实现为事务 SQL 或内存状态；选择 SQL，因为 CAS/outbox 必须同事务持久化，内存实现无法满足验收。
 - 根规则仅重大架构/不可逆边界须人工确认，覆盖技能通用审批停顿。此计划不新增跨模块契约。
 
-- 实际实现14场景；首轮9个路由缺失断言失败；创建时间精度回归与失败回滚释放锁已修复；缺失cursor过滤字段200→400先RED后GREEN。
+- 实际实现15场景；首轮9个路由缺失断言失败；创建时间精度回归与失败回滚释放锁已修复；缺失cursor过滤字段200→400先RED后GREEN。
 - 同级结构写使用按notes表OID隔离的事务advisory锁；内容写只锁单行。无op写保留版本/outbox。未接入索引handler时outbox保持未发布，不创建会被当前worker拒绝的job。
+
+- 独立审查发现NUL落库503的重要输入问题，已真实RED→GREEN修复；最终15聚焦/125全量pass（1既有ignored），fmt/clippy0；前端54pass/typecheck/lint/api检查0。

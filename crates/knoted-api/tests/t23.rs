@@ -567,3 +567,48 @@ async fn t23_syntax_errors_use_request_id_envelope() {
         );
     }
 }
+
+// PostgreSQL text/jsonb cannot persist U+0000: reject this permanently invalid
+// content as a field error, rather than claiming a transient dependency fault.
+#[tokio::test]
+async fn t23_nul_content_is_422_and_has_no_write_side_effects() {
+    let h = Harness::new().await;
+    let n = h.create("original", None).await;
+    let nul_text = json!({"blocks":[{"id":"x","type":"paragraph","content":[{"type":"text","text":"a\u{0}b"}]}]});
+    let nul_id = json!({"blocks":[{"id":"a\u{0}b","type":"paragraph"}]});
+    let creates = [
+        json!({"title":"a\u{0}b","document":doc()}),
+        json!({"title":"bad text","document":nul_text}),
+        json!({"title":"bad id","document":nul_id}),
+    ];
+    for input in creates {
+        let (s, _, body) = h.send("POST", "/api/v1/notes", input).await;
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body["code"], "validation_failed");
+    }
+    let updates = [
+        json!({"expected_version":1,"title":"a\u{0}b"}),
+        json!({"expected_version":1,"document":nul_text}),
+        json!({"expected_version":1,"document":nul_id}),
+    ];
+    for input in updates {
+        assert_eq!(
+            h.send("PATCH", &path(&n), input).await.0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+    let got = h.send("GET", &path(&n), Value::Null).await.2;
+    assert_eq!(got["title"], "original");
+    assert_eq!(got["content_version"], 1);
+    assert_eq!(got["document"], doc());
+    assert_eq!(h.events().await, 1);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM entity_registry WHERE entity_type='note'"
+        )
+        .fetch_one(&h.db.pool)
+        .await
+        .unwrap(),
+        1
+    );
+}

@@ -71,7 +71,7 @@ pub enum DomainError {
 }
 
 fn title(value: &str) -> Result<(), DomainError> {
-    if value.chars().count() > 500 {
+    if value.chars().count() > 500 || value.contains('\0') {
         return Err(DomainError::InvalidField("title"));
     }
     Ok(())
@@ -91,8 +91,23 @@ fn validate(ctx: &AppContext, raw: String) -> Result<Value, DomainError> {
         },
     )?;
     // T22 validated the raw representation before JSONB canonicalization.
-    serde_json::from_str(validated.document_json())
-        .map_err(|_| DomainError::InvalidField("document"))
+    let value: Value = serde_json::from_str(validated.document_json())
+        .map_err(|_| DomainError::InvalidField("document"))?;
+    if contains_nul(&value) {
+        return Err(DomainError::InvalidField("document"));
+    }
+    Ok(value)
+}
+
+// JSON accepts U+0000, but PostgreSQL text/jsonb cannot represent it. Reject
+// before persistence; never silently alter the user's text, code or block IDs.
+fn contains_nul(value: &Value) -> bool {
+    match value {
+        Value::String(s) => s.contains('\0'),
+        Value::Array(items) => items.iter().any(contains_nul),
+        Value::Object(fields) => fields.values().any(contains_nul),
+        _ => false,
+    }
 }
 fn check_version(note: &Note, expected: i64) -> Result<(), DomainError> {
     if note.content_version != expected {
