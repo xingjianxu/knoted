@@ -24,6 +24,8 @@ const checkCertificate = join(repoRoot, "tools/dev/pc/check-certificate.sh");
 const revision = "0123456789abcdef0123456789abcdef01234567";
 
 const temporary = [];
+const emptyToolDir = mkdtempSync(join(tmpdir(), "knoted-pc-empty-tools-"));
+temporary.push(emptyToolDir);
 
 function makeTempDir(label) {
   const dir = mkdtempSync(join(tmpdir(), `knoted-pc-${label}-`));
@@ -101,9 +103,11 @@ function createCertificateFixture(hostname) {
   return dir;
 }
 
-function prepareEnv({ runtimeRoot, instanceRoot, certDir, apiPort, httpsPort, domain }) {
+// prepareEnv 关闭 boot profile 兜底，让每个用例自己决定工具来源。
+function prepareEnv({ runtimeRoot, instanceRoot, certDir, apiPort, httpsPort, domain }, extra = {}) {
   return {
     ...process.env,
+    KNOTED_SYSTEM_PROFILE_BIN: emptyToolDir,
     KNOTED_INSTANCE_ROOT: instanceRoot,
     KNOTED_RUNTIME_ROOT: runtimeRoot,
     KNOTED_CERT_DIR: certDir,
@@ -112,6 +116,7 @@ function prepareEnv({ runtimeRoot, instanceRoot, certDir, apiPort, httpsPort, do
     KNOTED_HTTPS_DOMAIN: domain,
     KNOTED_LOG_LEVEL: "debug",
     DATABASE_URL: "postgres://dev@127.0.0.1:5432/dev",
+    ...extra,
   };
 }
 
@@ -266,6 +271,20 @@ describe("证书校验", () => {
     ]);
     assert.equal(result.status, 1);
     assert.match(result.stderr, /hostname 不匹配/);
+  });
+});
+
+describe("工具解析兜底", () => {
+  it("PATH 里没有 openssl 时从 boot profile 目录兜底", async () => {
+    const fixture = await fullFixture();
+    const profileDir = makeTempDir("profile");
+    const openssl = run("bash", ["-c", "command -v openssl"], { env: process.env });
+    assert.equal(openssl.status, 0, "测试环境需要 openssl 才能构造兜底用例");
+    writeExecutable(join(profileDir, "openssl"), `#!/usr/bin/env bash\nexec ${openssl.stdout.trim()} "$@"\n`);
+    const env = prepareEnv(fixture, { KNOTED_SYSTEM_PROFILE_BIN: profileDir });
+    env.PATH = `${makeTempDir("minimal-path")}:/run/current-system/sw/bin`;
+    const result = run("bash", [serviceScript, "prepare"], { env });
+    assert.equal(result.status, 0, result.stderr);
   });
 });
 

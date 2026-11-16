@@ -19,7 +19,19 @@ set -euo pipefail
 # 与 tools/dev/build-artifact.sh 一致：清单排序必须固定字节序，否则 locale 会改变 sort 结果。
 export LC_ALL=C
 
-script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# 运行期工具（caddy/sqlx/openssl）由 /etc/nixos 提供。它们不一定在调用者的 PATH 里
+# （例如刚安装 boot 候选、尚未 switch 时），所以把这两个稳定 bin 目录**追加**到 PATH：
+# 调用者自己的 PATH 仍优先（测试可以放 stub），缺工具时再从这里兜底。
+for tool_dir in "${KNOTED_SYSTEM_PROFILE_BIN:-/nix/var/nix/profiles/system/sw/bin}" /run/current-system/sw/bin; do
+  [ -d "$tool_dir" ] || continue
+  case ":$PATH:" in
+  *":$tool_dir:"*) ;;
+  *) PATH="$PATH:$tool_dir" ;;
+  esac
+done
+export PATH
+
+script_dir=$(cd "${BASH_SOURCE[0]%/*}" && pwd)
 
 instance_root=${KNOTED_INSTANCE_ROOT:-/data/knoted-dev/service}
 runtime_root=${KNOTED_RUNTIME_ROOT:-/data/knoted-dev/runtime/current}
