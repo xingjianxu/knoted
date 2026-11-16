@@ -70,3 +70,7 @@ sudo -u knoted /nix/store/gwz1f7pb6fqam460rnydhv67z6pva7r7-knoted-f35a69a4ec06/b
 PR [#53](https://github.com/xingjianxu/knoted/pull/53)普通merge至master `d623582ec073ba12f1d3351da60553bf028e659a`，运行源f35a69a是其祖先。主Agent t21-mainline-gates.log frozen install/api/typecheck/lint/test/build/fmt/Rust test/clippy/diff全部exit0；前端54、Rust92（1既有ignored）。既有Chromium15通过，实际HTTPS虚拟Passkey全流程通过。
 
 Issue #50/#51/#54均由PR关闭，Projects Done；host main33450ee，主线pure eval仍精确对应已部署boot候选，13项服务active及公网ready200，host任务worktree/分支已清理，其他vaultsync任务worktree和原Pi改动保留。Knoted T20与HTTP补修工作区/分支已清理；最后docs/t20-t21-close文档分支在收尾PR合入后清理，最终主线SHA、worktree list、git status和ready读回写PR核对项，不为记录清理再创建循环文档提交。
+
+## 管理方式变更（2026-11-16）
+
+本卡的「测试实例由 NixOS 单元运行」边界已被 [ADR 0003](../../../decisions/0003-test-instance-process-management.md) 替代：测试应用改由 `@bixlab/pcwrap` + process-compose 编排（控制端口 15600，HTTPS 15601、API 15602 不变），NixOS 只保留外部依赖（PostgreSQL provisioning、Strata、模型共享根、ACME、防火墙）与将来的生产实例。上面记录的 NixOS 部署过程与验收数据是当时事实，不回填改写；后续运行证据见 [pcwrap 证据](pcwrap-dev-service.md)。

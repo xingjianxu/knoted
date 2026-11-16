@@ -18,8 +18,22 @@ UI 方向已确认：通用组件直接消费 npm `@bixlab/mtone`，本项目只
    pnpm install --frozen-lockfile
    pnpm api:check          # OpenAPI 契约与样例
    pnpm api:verify         # 生成客户端是否与契约同步（需干净工作区）
-   pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run build
+   pnpm run typecheck && pnpm run lint && pnpm run test && pnpm test:pc && pnpm run build
    ```
+
+## 测试实例
+
+测试实例（`https://wlab.132140.xyz:15601/`）由 [pcwrap](https://www.npmjs.com/package/@bixlab/pcwrap) + process-compose 管理，控制端口 15600：
+
+```bash
+pnpm pc up -D                        # prepare → migrate → api → https
+pnpm pc process list
+pnpm pc process restart knoted-api   # 只重启 API，不重跑迁移
+pnpm pc process logs knoted-api -n 200
+pnpm pc down                         # 停止实例（不影响 PostgreSQL 等外部依赖）
+```
+
+运行根是固定提交产物（`tools/dev/build-artifact.sh` → `/data/knoted-dev/runtime/<sha>`），配置由 `tools/dev/pc/*.tmpl` 渲染。PostgreSQL、Strata、模型共享根与 ACME 仍由 `/etc/nixos` 管理；生产实例将来才用 NixOS，见 [ADR 0003](docs/decisions/0003-test-instance-process-management.md)。
 
 ## 流程入口
 
