@@ -49,27 +49,28 @@
 2. **配置由本仓库渲染**：`prepare` 把 `knoted.toml` 与 `Caddyfile` 渲染到 `/data/knoted-dev/service/config/`，不再依赖 Nix store 里的配置 symlink；`knoted` 系统账号不再需要，目录属主改为宿主用户。
 3. **迁移不隐含在重启里**：`migrate` 是独立一次性进程，`knoted-api` 依赖其成功；`pnpm pc process restart knoted-api` 不触发迁移。
 4. **HTTPS 归编排**：Caddy 作为编排进程运行（宿主用户身份，证书目录已有 `xingjian` 读 ACL），保留 `X-Knoted-Revision` 与证书校验；ACME 续期由 host 的 oneshot 调用稳定入口 `/data/knoted-dev/service/bin/knoted-https-reload`（本仓库脚本安装产生）。
-5. **生产保留**：`nix/module.nix`、`nix/package.nix` 保留为未来生产契约并在文档标注默认不启用；不在其上加测试实例的临时补丁。
+5. **运行期工具来源**：`caddy`/`sqlx-cli`/`openssl` 由 host 提供；`service.sh` 把 boot profile 的 `sw/bin` 追加到 PATH 末尾（调用者 PATH 优先），保证「刚装 boot 候选、尚未 switch」时也能启动；reload 入口在 prepare 时烘焙绝对目录，不依赖调用者 PATH。
+6. **生产保留**：`nix/module.nix`、`nix/package.nix` 保留为未来生产契约并在文档标注默认不启用；不在其上加测试实例的临时补丁。
 
 ## 任务
 
 ### 任务 1：编排与脚本（app）
 
-- [ ] `package.json` 增加 `"pc": "pcwrap"`、`@bixlab/pcwrap` 精确版本与 `test:pc`。
-- [ ] 写 `pcwrap.config.json`、`process-compose.yaml`、`tools/dev/pc/*`。
-- [ ] 写 `tests/pc/`：端口只回环、渲染值、证书三类失败、产物校验拒绝篡改。
-- [ ] `pnpm install --frozen-lockfile` 更新锁文件后 `pnpm test:pc` 全绿。
+- [x] `package.json` 增加 `"pc": "pcwrap"`、`@bixlab/pcwrap` 精确版本与 `test:pc`。
+- [x] 写 `pcwrap.config.json`、`process-compose.yaml`、`tools/dev/pc/*`。
+- [x] 写 `tests/pc/`：端口只回环、渲染值、证书三类失败、产物校验拒绝篡改。
+- [x] `pnpm install --frozen-lockfile` 更新锁文件后 `pnpm test:pc` 全绿（6 个套件）。
 
 ### 任务 2：隔离验证（app）
 
-- [ ] 用临时根/临时端口跑 `prepare → migrate → api → https`，验证 readiness、静态站点与 TLS。
-- [ ] 验证失败路径：产物篡改、证书缺失/域名不符、端口被占、迁移失败不启动 API。
+- [x] 用临时根/临时端口跑 `prepare → migrate → api → https`，验证 readiness、静态站点与 TLS（15692/15693/15690，`X-Knoted-Revision` 与产物一致，`process restart`、reload 入口、`down` 均验证）。
+- [x] 验证失败路径：产物篡改、证书缺失/域名不符、端口被占、迁移失败不启动 API（`tests/pc/` 覆盖，迁移失败原样传播退出码）。
 
 ### 任务 3：host 交接（`/etc/nixos`）
 
-- [ ] 保留 `knoted-db` provisioning、Strata、共享模型根、ACME；提供 `caddy`、`sqlx-cli`。
-- [ ] 停用 `knoted-api/https/migrate/prepare` 单元与 ACME reload 引用，改为 `knoted-https-reload.service` oneshot。
-- [ ] `/data/knoted-dev/service` 属主改宿主用户；`nix eval` + 候选构建 + 非 Knoted 单元差异检查；不做全机 `switch`。
+- [x] 保留 `knoted-db` provisioning、Strata、共享模型根、ACME；提供 `caddy`、`sqlx-cli`（沿用 sqlite 链接库 override）、`openssl`。
+- [x] 配置层面停用 `knoted-api/https/migrate/prepare` 单元与 ACME reload 引用，改为 `knoted-https-reload.service` oneshot（`knotedUnits = [knoted-db, knoted-https-reload]`）。
+- [x] `/data/knoted-dev/service` 属主声明为宿主用户；`nix eval` + 候选构建 + 非 Knoted 单元差异检查；boot profile 已安装（`plx4r25…`），未做全机 `switch`。运行态撤除旧单元属于任务 4。
 
 ### 任务 4：切换（运行态）
 
