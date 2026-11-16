@@ -1,4 +1,4 @@
-import { MtoneProvider, type Tokens } from "@bixlab/mtone";
+import { MtoneProvider, ToastProvider, type Tokens } from "@bixlab/mtone";
 import type { ReactNode } from "react";
 
 // Public context tokens also reach MtoneScope instances in body-level portals.
@@ -16,7 +16,7 @@ const tokens: Tokens = {
 export function UiProvider({ children }: { children: ReactNode }) {
   return (
     <MtoneProvider locale="zh" density="compact" tokens={tokens}>
-      {children}
+      <ToastProvider>{children}</ToastProvider>
     </MtoneProvider>
   );
 }

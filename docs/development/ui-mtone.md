@@ -4,7 +4,9 @@
 
 ## 现状与目标
 
-T17 已在任务分支精确接入 npm `@bixlab/mtone@0.2.0`，迁移 App 静态类并移除 `packages/ui`；**实现就绪、待主 Agent 独立审查与主线集成**。生产入口使用应用层 `UiProvider`，只配置公开 `MtoneProvider` 的 locale/density/tokens，不转发控件 API；CSS 从应用样式入口导入。基础表单组合仅在测试夹具中，不建立生产演示路由或通用包装库。证据见 [T17](../plans/knoted-v1/evidence/t17.md)。
+T17 已精确接入 npm `@bixlab/mtone@0.2.0`，迁移 App 静态类并移除 `packages/ui`；**PR #42 已普通 merge 至主线 `e3e1db2`，独立审查/主线验证/任务清理完成**。生产入口使用应用层 `UiProvider` 配置公开 `MtoneProvider` 的 locale/density/tokens，不转发控件 API；CSS 从应用样式入口导入。基础表单组合仅在测试夹具中，不建立生产演示路由或通用包装库。证据见 [T17](../plans/knoted-v1/evidence/t17.md)。
+
+T18 实施在同一 `UiProvider` 内注册公开 `ToastProvider`，不增加通知总线或统一弹层 API；状态为 **in-progress / 实现就绪待主 Agent 审查集成**。Modal/ConfirmDialog/DropdownMenu/ContextMenu/Popover 与通知组合只在测试夹具，测试服务 `?task=t18` 选择本卡，默认仍为 T17。真实 Chromium 验证焦点、异步失败重试与 Portal 字体/主题/层级，见 [T18 证据](../plans/knoted-v1/evidence/t18.md)。
 
 ## 责任判定
 
@@ -30,7 +32,7 @@ BlockNote 仍只保留编辑核心，关闭默认 UI；工具栏和菜单用 mto
 4. 迁移 App/main/styles 与 cn 使用；原 cn 含 tailwind-merge，不能假设同名 mtone 工具等价。删除占位包后同步 ESLint、workspace/脚本中实际存在的引用与 T02 源码扫描测试。workspace 当前使用通配路径，无需为删除目录强改通配规则。
 5. 在 apps/web 验证真实消费行为，不以 mtone 上游测试代替。保留无远程字体验收，包含实际发布 CSS/构建产物。
 
-T17 实测：旧 `cn('p-2', 'p-4')` 返回 `p-4`，mtone 的 `cn` 返回 `p-2 p-4`，不具备冲突合并语义。App 原有类全为静态，因此直接改用字符串，而非替换成同名工具。应用 CSS 将预编译样式放在 `mtone` 层（base 后、utilities 前），仅覆盖公开样式范围的系统字体；主题 tokens 通过公开 context 传播到 body-level MtoneScope。真实弹层交互与焦点生命周期仍由 T18 验收。
+T17 实测：旧 `cn('p-2', 'p-4')` 返回 `p-4`，mtone 的 `cn` 返回 `p-2 p-4`，不具备冲突合并语义。App 原有类全为静态，因此直接改用字符串，而非替换成同名工具。应用 CSS 将预编译样式放在 `mtone` 层（base 后、utilities 前），仅覆盖公开样式范围的系统字体；主题 tokens 通过公开 context 传播到 body-level MtoneScope。真实弹层交互与焦点生命周期的 T18 分支验收见下文及 T18 证据，主线集成状态单独跟踪。
 
 0.2.0 在实施时距发布不足 pnpm 默认最小等待时间；`pnpm-workspace.yaml` 仅为已明确选择、检查过的精确版本添加 minimumReleaseAgeExclude，其他依赖策略保持不变。不改 workspace 通配范围。
 
@@ -66,4 +68,6 @@ T17 实测：旧 `cn('p-2', 'p-4')` 返回 `p-4`，mtone 的 `cn` 返回 `p-2 p-
 
 T17—T19 测试在 `apps/web/tests/tasks/`，验证字段关联、键盘、焦点、禁用提交、空/错/加载与取消行为。浏览器实际焦点/Portal/CSS 验收使用已有 Playwright 入口。mtone 自己的内部单元测试属于上游，不复制进本仓库。
 
-升级必须审阅公开 API/CSS 变化并复跑受影响任务。遇到回归可回退上一已验证 npm 版本；无法满足则记录阻塞，不本地补一套通用 UI。T17 分支迁移与基础表单消费验证已就绪；架构说明明确区分分支实现与主线集成，T02/T04 历史证据保留。
+升级必须审阅公开 API/CSS 变化并复跑受影响任务。遇到回归可回退上一已验证 npm 版本；无法满足则记录阻塞，不本地补一套通用 UI。T17 迁移与基础表单消费验证已集成；T18 实现就绪但仍待审查集成；T02/T04 历史证据保留。
+
+0.2.0 消费注意：菜单 disabled 项可由方向键聚焦以便发现，但 Enter/Space/点击均不执行；不要把 disabled 推断为一定跳过焦点。Modal 绕回时会短暂聚焦上游 inert guard，测试应等待焦点回到真实内容，不能自行补焦点管理。Toast 关闭按钮在 hover/focus 展开后暴露给可访问树。ConfirmDialog 拒绝后显示中文错误并保持打开可重试，pending 禁用确认/取消按钮；公开契约不保证 pending 时禁止 Esc 关闭，后续业务需按自身取消/请求生命周期语义处理，不将本卡测试误作不可关闭承诺。
