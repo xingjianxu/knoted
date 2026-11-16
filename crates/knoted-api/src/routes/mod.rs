@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod health;
+pub mod notes;
 pub mod sessions;
 
 use axum::Router;
@@ -22,7 +23,9 @@ pub fn router(ctx: AppContext, auth: AuthConfig) -> Router {
     health::router()
         .nest(
             "/api/v1",
-            auth::router(auth.clone(), ctx.clone()).merge(sessions::router(auth, ctx.clone())),
+            auth::router(auth.clone(), ctx.clone())
+                .merge(sessions::router(auth.clone(), ctx.clone()))
+                .merge(notes::router(auth, ctx.clone())),
         )
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
