@@ -12,7 +12,8 @@ crates/knoted-worker/src/         handlers main.rs
 apps/web/src/routes/              TanStack文件路由
 apps/web/src/features/            auth dashboard notes projects tasks files search chat trash
 apps/web/src/lib/                 路由/请求/时间等应用适配
-packages/ui/src/                 自有组件，禁止业务依赖
+apps/web/src/                    直接消费 npm @bixlab/mtone；业务组合与应用适配
+packages/ui/                    当前 cn 占位包；T17 移除，不新增通用组件
 packages/api-client/src/          OpenAPI生成类型及统一请求
 services/intelligence/src/knoted_intelligence/   parsing embedding jobs
 api/openapi.yaml                 浏览器契约
@@ -32,20 +33,22 @@ API与Worker仅持有各自需要的服务权限。共用配置类型，按进�
 
 ## UI边界
 
-Tailwind统一设计变量；Base UI只提供无样式行为。packages/ui维护Button、Input、FormField、Dialog、Menu、Popover、Toast、Tree、List及空态，业务不得绕过公共组件另造基础控件。BlockNote仅保留编辑核心，自建工具栏、斜杠菜单、块菜单、链接/图片交互；默认工具栏、菜单与文件面板关闭。不安装Mantine/shadcn样式体系。
+按 [ADR 0002](../../decisions/0002-mtone-ui-ownership.md)，通用 UI 直接消费 npm `@bixlab/mtone` 的公开 API、Provider、tokens 和预编译 CSS，不维护本地通用组件库或转发层。现有 packages/ui 仅 cn，占位包在 T17 迁移后移除。Tailwind 可用于应用布局，不重复建立基础控件样式体系，也不直接包装 Base UI 绕过 mtone。Knoted 保留业务组合、API/Query、权限、游标及编辑器适配；通用能力缺口按 [UI 指南](../../development/ui-mtone.md) 整理提示词交用户在 mtone 实现，Agent 不修改上游。
+
+BlockNote 仅保留编辑核心；关闭默认工具栏、菜单与文件面板，用 mtone 组合工具栏、斜杠菜单、块菜单及链接/图片交互。编辑命令与选区状态留在 Knoted。不引入 Mantine/shadcn 样式体系。不得为适配 UI 改变业务/API 语义；未发布或未验证的能力记录技术依赖阻塞。
 
 路由负责URL及鉴权跳转，TanStack Query是服务端数据缓存唯一所有者；路由loader只预取同一query定义。编辑草稿归编辑器本地状态，查询重新验证不得覆盖dirty草稿。写后按实体ID与列表key失效；退出登录清除所有缓存。表单React Hook Form+Zod；后端再次验证。
 
 ## 技术来源与锁定
 
-- [Base UI](https://base-ui.com/react/overview/quick-start)：无样式组件。
+- [@bixlab/mtone](https://www.npmjs.com/package/@bixlab/mtone)：通用 React UI 与发布 CSS；实际公开能力和版本来源见 [UI 指南](../../development/ui-mtone.md)。Base UI 是 mtone 的内部依赖，不是 Knoted 自建组件的入口。
 - [BlockNote自定义UI](https://www.blocknotejs.org/examples/ui-components/custom-ui)：关闭默认UI并替换。
 - [OpenAPI TypeScript](https://openapi-ts.dev/readme)：生成类型及fetch调用。
 - [Docling RapidOCR示例](https://docling-project.github.io/docling/_generated/examples/rapidocr_with_custom_models/)：显式模型路径。
 - [BGE-M3](https://huggingface.co/BAAI/bge-m3)：1024维稠密输出。
 - [Strata模型说明](https://github.com/Niko1221/Strata/blob/main/docs/MODELS.md)：IQ3_S，具体能力须按锁定revision验证。
 
-T01/T02/T10—T12记录工具、包、模型commit及下载摘要，提交lock文件，不使用浮动latest。GPU可运行性任务验证接口及小样本，不跑速度或容量基准。无法在NixOS锁定组合上运行时报告证据，不静默换选型。
+T01/T02/T10—T12记录工具、包、模型commit及下载摘要，提交lock文件，不使用浮动latest。T17 重新核查 mtone npm 发布版本并精确锁版，记录 peerDependencies、公开 API/CSS 与消费端验收；调研版本不等于已安装或运行通过。GPU可运行性任务验证接口及小样本，不跑速度或容量基准。无法在NixOS锁定组合上运行时报告证据，不静默换选型。
 
 ## 跨仓库
 
