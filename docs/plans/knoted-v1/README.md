@@ -1,6 +1,6 @@
 # Knoted v1 文档与实施任务入口
 
-> 产品实施采用实际可用的 executing-plans 或 subagent-driven-development。当前 T01—T19 已完成、审查并集成到主线（T17 为 PR #42 / `e3e1db2`；T18 为 PR #46 / `4425ab9`；T19 为 PR #48 / `6de79a8`）；T20—T72 仍待领取。
+> 产品实施采用实际可用的 executing-plans 或 subagent-driven-development。当前 T01—T20 已完成、审查并集成到主线（T17 为 PR #42 / `e3e1db2`；T18 为 PR #46 / `4425ab9`；T19 为 PR #48 / `6de79a8`）；T21 实施中，T22—T72 仍待领取。
 
 ## 阅读顺序
 
@@ -44,8 +44,8 @@
 | [T17](tasks/T17.md) | mtone接入与基础表单验收 | T02 | done（PR [#42](https://github.com/xingjianxu/knoted/pull/42)，主线 `e3e1db2`，验证/清理完成） |
 | [T18](tasks/T18.md) | mtone弹层菜单与通知集成 | T17 | done（PR [#46](https://github.com/xingjianxu/knoted/pull/46)，集成 `4425ab9`） |
 | [T19](tasks/T19.md) | mtone树列表与反馈集成 | T18 | done（PR [#48](https://github.com/xingjianxu/knoted/pull/48)，集成 `6de79a8`） |
-| [T20](tasks/T20.md) | 路由登录与应用外壳 | T04, T16, T19 | pending |
-| [T21](tasks/T21.md) | 最小HTTPS测试部署 | T06, T20 | pending |
+| [T20](tasks/T20.md) | 路由登录与应用外壳 | T04, T16, T19 | done（PR [#52](https://github.com/xingjianxu/knoted/pull/52)，主线 `e8d2c4f`，验证/清理完成） |
+| [T21](tasks/T21.md) | 最小HTTPS测试部署 | T06, T20 | in-progress（Issue [#51](https://github.com/xingjianxu/knoted/issues/51)，真实HTTPS与认证验收通过，PR #53待集成） |
 | [T22](tasks/T22.md) | 笔记JSON与提取规则 | T03, T05 | pending |
 | [T23](tasks/T23.md) | 笔记CRUD与版本 | T15, T22 | pending |
 | [T24](tasks/T24.md) | 页面树与生命周期 | T23 | pending |
@@ -145,3 +145,7 @@ A基础T01—T12；B认证/UI T13—T21；C笔记T22—T32；D事务T33—T42；
 主线整体验证：`cargo fmt --check`、`cargo test --workspace --locked`（15 passed）、`cargo clippy --workspace --all-targets -- -D warnings`、`pnpm install --frozen-lockfile`、`pnpm api:check`、`pnpm run typecheck`、`pnpm run lint`、`pnpm run test`（13 passed）、`pnpm run build` 全部 exit 0。逐卡证据与仍存在的限制写在各任务卡“执行证据”及 `/data/knoted-dev/tasks/t0N/report.md`；过程记录见 `/data/knoted-dev/tasks/knoted-v1-impl/progress.md`。
 
 尚未执行：远程推送、PR、CI、测试实例部署（T21 前无测试实例，T01—T05 均为库/契约/前端骨架，无需部署）。
+
+## T20—T21 实施进展（2026-11-16）
+
+T20 PR [#52](https://github.com/xingjianxu/knoted/pull/52)普通merge至`e8d2c4f`，前端54 passed（T20 18）/Rust85 passed（1既有ignored），全部前端与Rust门禁通过；主线独立复跑及Chromium15例均通过，Issue #50 Closed/Projects Done，工作区与本地分支已清理。T21最终固定app提交`f35a69a4ec0686ab08ae448bd4bf33d96ecce942`构建封装并定向部署成功，真实HTTPS与虚拟Passkey验收通过；会话HTTP补修PR #55已集成，Rust测试增至92；PR #53待集成。证据见[t20](evidence/t20.md)、[t21](evidence/t21-deployment.md)。
