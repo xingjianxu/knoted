@@ -51,3 +51,4 @@ T17—T19 原计划在 `packages/ui` 构建基础控件、弹层、树列表。�
 ## 状态历史
 
 - 2026-11-16：会话提案经用户确认后记录为 Accepted；授权实施第一阶段文档/Skill，不提前执行产品卡。
+- 2026-11-16（后续流程细化，非决策变更）：用户指示 + Knoted Issue #44 将缺口交接扩展为「提示词 + 告知用户 + 上游 Issue」，并明确缺口含「缺能力」与「既有组件需修改/扩展」两类。本节 §5 的“不修改 mtone”含义限于源码、PR 与 npm 发布，不含提 Issue；上游仓库设置、标签增删、PR 与发布仍禁止。决策正文未改写，无需新 ADR；执行细节见 [UI 指南](../development/ui-mtone.md) 与 [mtone-component-request](../../.agents/skills/mtone-component-request/SKILL.md)。

@@ -32,7 +32,7 @@
 | R22 | BGE-M3 1024维；32K总上下文预留4K输出；单生成排队；资料不足明确说明 | T58、T62—T64 |
 | R23 | 删除来源后历史引用可看，但相关消息不再带入后续上下文 | T63、T64 |
 | R24 | 单账号Passkey、多凭据；命令首次注册/恢复；闲置7天绝对30天 | T13—T16 |
-| R25 | 通用 UI 直接消费 npm `@bixlab/mtone`；Knoted 仅业务组合与适配，不自建通用库；缺口整理提示词交用户在 mtone 实现；BlockNote 关闭默认 UI，用 mtone 组合 | T17—T19、T27—T29 |
+| R25 | 通用 UI 直接消费 npm `@bixlab/mtone`；Knoted 仅业务组合与适配，不自建通用库；缺口按 [mtone-component-request](../../../.agents/skills/mtone-component-request/SKILL.md) 交接（提示词 + 告知用户 + 上游 Issue）；BlockNote 关闭默认 UI，用 mtone 组合 | T17—T19、T27—T29 |
 | R26 | Vite、TanStack Router/Query、OpenAPI优先；下一页，不要求精确总数 | T02—T04、T20、T55 |
 | R27 | NixOS、API/Worker分进程、Python辅助、Postgres任务表有限重试 | T07—T12、T70 |
 | R28 | 图片应用专用目录；一致性手动备份与隔离恢复 | T26、T67—T69 |
@@ -43,7 +43,7 @@
 
 ### R25 变更记录（2026-11-16）
 
-用户明确要求使用 `@bixlab/mtone` npm 库，不在本项目实现通用 UI；缺少组件时由 Agent 整理提示词交用户添加，Agent 不直接修改 mtone。用户审阅分阶段方案后回复「请实施」，本阶段仅更新文档/Skill；接入与移除占位包由 T17 承接。此记录替代原 R25「Tailwind 自有 UI，允许无样式库」及 Base UI 应用侧包装提案，其他需求不变。见 [ADR 0002](../../decisions/0002-mtone-ui-ownership.md)、[UI 指南](../../development/ui-mtone.md)。开头授权段是原文档交付历史，后续任务及远程授权以根 AGENTS.md 和当前人工请求为准。
+用户明确要求使用 `@bixlab/mtone` npm 库，不在本项目实现通用 UI；缺少组件时由 Agent 整理提示词交用户添加，Agent 不直接修改 mtone。（2026-11-16 后续流程变更：交接另含上游 Issue，且缺口包含既有组件需修改/扩展；现行规则见 [UI 指南](../../development/ui-mtone.md)。）用户审阅分阶段方案后回复「请实施」，本阶段仅更新文档/Skill；接入与移除占位包由 T17 承接。此记录替代原 R25「Tailwind 自有 UI，允许无样式库」及 Base UI 应用侧包装提案，其他需求不变。见 [ADR 0002](../../decisions/0002-mtone-ui-ownership.md)、[UI 指南](../../development/ui-mtone.md)。开头授权段是原文档交付历史，后续任务及远程授权以根 AGENTS.md 和当前人工请求为准。
 
 ## 非目标
 
