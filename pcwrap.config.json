@@ -12,7 +12,6 @@
       "KNOTED_API_PORT",
       "KNOTED_HTTPS_PORT",
       "KNOTED_HTTPS_DOMAIN",
-      "KNOTED_CERT_DIR",
       "DATABASE_URL"
     ]
   }

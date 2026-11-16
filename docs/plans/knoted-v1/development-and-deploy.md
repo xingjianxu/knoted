@@ -31,7 +31,9 @@
 
 ## 服务约定
 
-编排有四个进程：`prepare`（校验固定产物、渲染 `knoted.toml`/`Caddyfile`、准备目录、校验证书、检查端口、安装 ACME reload 入口）、`migrate`（一次性 `sqlx migrate run`）、`knoted-api`（127.0.0.1:15602）、`knoted-https`（独立 Caddy，HTTPS 15601，静态网页与 /api 同源，`X-Knoted-Revision`）。`knoted-api` 依赖 `migrate` 成功，`knoted-https` 依赖 API healthy。
+编排有三个进程：`prepare`（校验固定产物、渲染 `knoted.toml`、准备目录、检查 API 端口）、`migrate`（一次性 `sqlx migrate run`）、`knoted-api`（127.0.0.1:15602）。API 依赖 migrate 成功，重启 API 不重跑迁移。HTTPS 15601 由宿主共享 `caddy.service` 提供（[ADR 0005](../../decisions/0005-https-owned-by-caddy.md)），静态网页与 /api、/health 同源；pcwrap 不再包含 HTTPS 进程或续期入口。`pnpm pc down` 保留 Caddy，API 不可用期间代理请求可能返回 502。
+
+共享 Caddy 的静态根为 `/data/knoted-dev/runtime/current/share/knoted/web`，应用更新仍校验固定产物、原子切换 current、重启 API；无需修改 host pin 或 reload Caddy。修改域名/端口则同时更新 host vhost 和应用 Passkey origin。原 `X-Knoted-Revision` 固定响应头不再注入；运行版本用 `readlink -f /data/knoted-dev/runtime/current`、`cat /data/knoted-dev/runtime/current/share/knoted/REVISION`、完整 `SHA256SUMS` 和 API 可执行路径核对。
 
 PostgreSQL 使用独立库 `knoted_dev`，复用本机 PG 监听与 trust 认证；连接用户与属主都是宿主用户 `xingjian`（属主迁移已完成，见 [证据](evidence/db-host-user.md)）。建库是一次性动作，由人执行：
 
@@ -53,8 +55,8 @@ schema 由编排里的 `migrate` 进程管理（`sqlx migrate run`）；库不�
 
 - 实例目录与属主（`/data/knoted-dev/service` 归宿主用户）、机器级模型共享根（ADR 0001）；
 - Strata 与共享服务（数据库不再由 host 声明：见 ADR 0004，开发/测试库由 `xingjian` 直接 `createdb`）；
-- ACME 证书、防火墙 15601、运行期可执行文件（`caddy`、`sqlx-cli`、`openssl`）；
-- ACME 续期后的 `knoted-https-reload.service` 只触发实例安装的 reload 入口；
+- 共享 Caddy 的 HTTPS vhost、ACME 证书与续期 reload、防火墙 15601；
+- 运行期可执行文件（`sqlx-cli`、`curl`、`iproute2`；独立证书检查使用 `openssl`）；
 - 将来的生产实例（`features.server.knoted.app.enable`，本次关闭）。
 
 需要改 host 时（外部依赖变化、生产启用）仍按 host 仓库规则建独立任务工作区：
