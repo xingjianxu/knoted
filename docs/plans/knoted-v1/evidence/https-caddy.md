@@ -38,4 +38,10 @@
 
 Caddy / PostgreSQL / Strata PID 分别为 1706466 / 1167036 / 1180032，与切换前相同。其它站点前后状态一致：receiptd 307、thesisd 307、OnlyOffice healthcheck 200。详见 runtime-checks.json、other-vhosts-{before,after}.json。
 
-待应用 PR 合入后，从主检出 down/up，确认 pcwrap 中旧 HTTPS 进程定义也已移除；该步骤结果合入后追加。没有强制 ACME 发证/续期；续期目标已纯求值与单元 postrun 校对，并实测共享 Caddy reload。无数据库或生产实例变更。
+应用 PR [#71](https://github.com/xingjianxu/knoted/pull/71) 已普通 merge 至 `a8643fc7287b79e1f3c69ceab11efc96ba8b227e`。主检出快进后实际执行 `pnpm pc down` / `pnpm pc up -D`，进程列表只剩 `knoted-api`、`migrate`、`prepare`，没有旧 HTTPS 定义；pcwrap 关闭期间静态网页仍由共享 Caddy 正常提供，启动后 HTTPS readiness 再次 200。控制端口 15600、API 15602 仍仅回环，15601 仍属 PID 1706466 的共享 Caddy。编排和脚本从主检出运行，固定应用产物沿用 `4a546b2f0efdc07a3c9fe0527654a89b6f8c4eb4`（本次未改 API/Web 二进制）。
+
+原生成的 reload launcher、Caddyfile 与 HTTPS state 已移出实例，重启后没有重新生成。没有 Knoted systemd 单元，ACME postrun 不再引用专用 reload。没有强制 ACME 发证/续期；续期目标已纯求值与单元 postrun 校对，并实测共享 Caddy reload。无数据库或生产实例变更。
+
+## 主线与清理
+
+主线 a8643fc 上七项完整本地门禁全部 exit 0（Rust 125 passed / 1 既有 ignored；pc 22/22；前端54/54），输出见 `mainline-*.log` / `mainline-gates-summary.txt`。本任务成果已安全提交，最终文档 PR 合入后再清理本任务两仓库 Worktree/已合并分支；实际主线 SHA、清理读回结果记录在 PR。另一个既有 `feat-https-shared-caddy` 工作区保持原样。
