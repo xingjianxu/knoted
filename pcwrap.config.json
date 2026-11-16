@@ -1,0 +1,19 @@
+{
+  "name": "knoted",
+  "port": 15600,
+  "configFile": "process-compose.yaml",
+  "logFile": "/data/knoted-dev/service/logs/process-compose.log",
+  "keepProject": true,
+  "env": {
+    "mode": "app",
+    "watch": [
+      "KNOTED_INSTANCE_ROOT",
+      "KNOTED_RUNTIME_ROOT",
+      "KNOTED_API_PORT",
+      "KNOTED_HTTPS_PORT",
+      "KNOTED_HTTPS_DOMAIN",
+      "KNOTED_CERT_DIR",
+      "DATABASE_URL"
+    ]
+  }
+}

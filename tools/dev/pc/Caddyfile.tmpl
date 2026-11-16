@@ -1,0 +1,23 @@
+# 独立的测试 HTTPS 入口（不再使用共享 Caddy 的 virtualHosts 桥接）。
+# 端口、证书、站点根与版本头由 tools/dev/pc/service.sh prepare 渲染。
+{
+  auto_https off
+  persist_config off
+  admin unix/@ADMIN_SOCKET@
+}
+
+https://@DOMAIN@:@HTTPS_PORT@ {
+  tls @CERT_FILE@ @KEY_FILE@
+  header X-Knoted-Revision @REVISION@
+  handle /api/* {
+    reverse_proxy 127.0.0.1:@API_PORT@
+  }
+  handle /health/* {
+    reverse_proxy 127.0.0.1:@API_PORT@
+  }
+  handle {
+    root * @WEB_ROOT@
+    try_files {path} /index.html
+    file_server
+  }
+}
