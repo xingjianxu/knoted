@@ -63,8 +63,10 @@
 
 ### 任务 2：隔离验证（app）
 
+> 测试不依赖调用者 PATH：`tests/pc/` 用临时「profile 目录」（真实 openssl + caddy stub）模拟 NixOS 提供的运行期工具，因此 `pnpm test:pc` 在默认环境即可通过。
+
 - [x] 用临时根/临时端口跑 `prepare → migrate → api → https`，验证 readiness、静态站点与 TLS（15692/15693/15690，`X-Knoted-Revision` 与产物一致，`process restart`、reload 入口、`down` 均验证）。
-- [x] 验证失败路径：产物篡改、证书缺失/域名不符、端口被占、迁移失败不启动 API（`tests/pc/` 覆盖，迁移失败原样传播退出码）。
+- [x] 验证失败路径：产物篡改、符号链接、缺 REVISION、证书缺失/域名不符/非 PEM、端口被占、迁移失败不启动 API、缺运行期依赖、工作树守卫（`tests/pc/` 覆盖）。
 
 ### 任务 3：host 交接（`/etc/nixos`）
 

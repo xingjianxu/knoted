@@ -57,12 +57,19 @@ T21（[证据](../plans/knoted-v1/evidence/t21-deployment.md)）把测试实例�
 
 - 正面：应用更新只需 `git pull` + 重新构建产物 + `pc process restart`；host 仓库不再跟随每次应用发布改 pin；配置与证书校验进入应用仓库受审查。
 - 负面：测试实例不再有开机自启（需手工或后续显式约定拉起）；进程日志由编排持有（`pc process logs`），不进 journal；host 仍需一次切换与一次 boot profile 更新。
-- 迁移与回退：切换前备份 `knoted_dev` 与 assets、记录旧单元与产物；回退 = `pc down` + 重新 `systemctl start knoted-{prepare,migrate,api,https}`（旧产物仍在 store）。本次无新迁移，数据库不降级。
+- 迁移与回退：切换前备份 `knoted_dev` 与 assets，并把旧运行态（`/run/current-system`、五个单元、`config/knoted.toml` 的 store 链接、迁移版本）记录到任务证据。回退步骤（顺序固定，不能只 `systemctl start`）：
+  1. `pnpm pc down`，确认 15600/15601/15602 释放；
+  2. 从记录的旧 system 闭包恢复 `knoted-{prepare,migrate,api,https}.service` 软链到 `/etc/systemd/system` 与 `multi-user.target.wants`，`systemctl daemon-reload`；
+  3. 把 `/data/knoted-dev/service` 属主改回 `knoted:knoted`，并把 `config/knoted.toml` 恢复为记录的 store 链接（切换时被渲染成编排用户拥有的真实文件，旧单元读不到）；
+  4. `systemctl start knoted-prepare knoted-migrate knoted-api knoted-https`，核对 readiness 与版本头。
+  本次无新迁移，数据库不降级。
 - 安全：编排以宿主用户运行，证书依赖既有 ACL（`xingjian` 可读 acme 目录）；密钥不入仓库/日志；HTTPS 仍是唯一公网入口，15600 只监听回环。
 
 ## 验证与后续任务
 
-见 [实施计划](../plans/2026-11-16-pcwrap-test-service.md) 与 [证据](../plans/knoted-v1/evidence/pcwrap-dev-service.md)：编排配置与失败路径测试、隔离端到端验证、真实切换后的 HTTPS/readiness/Passkey/CRUD、共享服务无影响比对、`nix eval` 与 boot profile 核对。
+已完成（证据：[pcwrap 迁移证据](../plans/knoted-v1/evidence/pcwrap-dev-service.md)）：编排配置与失败路径测试、固定产物校验、临时根/临时端口上的端到端验证（readiness、TLS、版本头、重启不重跑迁移、reload 入口在受限 PATH 下可用），以及 host 侧 `nix eval`、候选构建、非 Knoted 单元差异与 boot profile 安装。
+
+真实切换是本次交付的最后一步，结果追加到同一证据文件：撤除旧单元、宿主用户运行、HTTPS/readiness/受保护路由、共享服务 PID 比对、`knoted-https-reload.service` 实际触发。真实硬件 Passkey 人工验证与 CRUD 冒烟沿用既有跨任务限制（既有会话/凭据不受影响），未在本决策中新增声明。
 
 后续：生产实例（T70）启用时重新给出固定 revision/artifact，并按 ADR 0002/0001 的既有约定接入。
 
