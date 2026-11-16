@@ -60,7 +60,8 @@ test("t17_3 descriptions and errors stay accessible through recovery", async ({ 
   await expect(title).toHaveAttribute("aria-invalid", "true");
   await expect(title).toHaveAccessibleDescription("标题不可用");
   await page.getByRole("button", { name: "切换错误" }).click();
-  await expect(title).toHaveAttribute("aria-invalid", "false");
+  // Manual FormField may omit aria-invalid when the error is cleared.
+  await expect(title).not.toHaveAttribute("aria-invalid", "true");
   await expect(title).toHaveAccessibleDescription("填写笔记标题");
 });
 

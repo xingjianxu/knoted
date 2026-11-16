@@ -2,9 +2,9 @@ import {
   Button,
   ConfirmDialog,
   ContextMenu,
+  Dialog,
   DropdownMenu,
   Input,
-  Modal,
   Popover,
   useToast,
   type MenuItem,
@@ -59,7 +59,10 @@ export function T18Overlays() {
     <main className="grid max-w-2xl gap-4 p-6">
       <h1>T18 弹层消费夹具</h1>
       <Button>页面外部按钮</Button>
-      <Modal
+      <Dialog
+        // 0.3.0 defaults to blocking outside dismissal. This scenario keeps
+        // the existing outside-close contract through the public prop.
+        modal={false}
         title="编辑笔记"
         description="测试受控弹层与焦点生命周期"
         open={modalOpen}
@@ -69,7 +72,7 @@ export function T18Overlays() {
       >
         <Input aria-label="笔记标题" defaultValue="消费验收" />
         <Button onClick={() => setHasTrigger(false)}>卸载触发点</Button>
-      </Modal>
+      </Dialog>
       <Popover
         title="笔记信息"
         trigger={<Button>查看信息</Button>}
@@ -109,7 +112,7 @@ export function T18Overlays() {
       </ConfirmDialog>
       <output aria-label="确认结果">请求：{attempts}；成功：{successes}</output>
       <output aria-label="受控状态">
-        Modal：{String(modalOpen)}；Popover：{String(popoverOpen)}；
+        Dialog：{String(modalOpen)}；Popover：{String(popoverOpen)}；
         Dropdown：{String(dropdownOpen)}；Context：{String(contextOpen)}；
         Confirm：{String(confirmOpen)}
       </output>

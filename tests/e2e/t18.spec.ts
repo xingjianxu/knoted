@@ -35,13 +35,13 @@ test.afterEach(async ({ page }) => {
   expect(observed?.external).toEqual([]);
 });
 
-test("t18_1 Modal traps Tab/Shift+Tab and real portal theme is above its backdrop", async ({ page }) => {
+test("t18_1 Dialog traps Tab/Shift+Tab and real portal theme is above its backdrop", async ({ page }) => {
   await page.getByRole("button", { name: "编辑笔记", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "编辑笔记" });
   await expectPortal(dialog, dialog, "1201");
   await expect(page.locator(".mt-backdrop")).toHaveCSS("z-index", "1200");
   await expect(dialog).toHaveAccessibleDescription("测试受控弹层与焦点生命周期");
-  await expect(page.getByLabel("受控状态")).toContainText("Modal：true");
+  await expect(page.getByLabel("受控状态")).toContainText("Dialog：true");
   const close = dialog.getByRole("button", { name: "关闭", exact: true });
   const finish = dialog.getByRole("button", { name: "完成编辑" });
   await close.focus();
@@ -61,7 +61,7 @@ test("t18_1 Modal traps Tab/Shift+Tab and real portal theme is above its backdro
   }
 });
 
-test("t18_2 Modal Esc/buttons/outside return focus; removed trigger closes safely", async ({ page }) => {
+test("t18_2 Dialog Esc/buttons/outside return focus; removed trigger closes safely", async ({ page }) => {
   const trigger = page.getByRole("button", { name: "编辑笔记", exact: true });
   const dialog = page.getByRole("dialog", { name: "编辑笔记" });
   for (const close of ["Escape", "关闭", "完成编辑", "outside"]) {
@@ -71,7 +71,7 @@ test("t18_2 Modal Esc/buttons/outside return focus; removed trigger closes safel
     else if (close === "outside") await page.mouse.click(8, 8);
     else await dialog.getByRole("button", { name: close, exact: true }).click();
     await expect(dialog).not.toBeVisible();
-    await expect(page.getByLabel("受控状态")).toContainText("Modal：false");
+    await expect(page.getByLabel("受控状态")).toContainText("Dialog：false");
     await expect(trigger).toBeFocused();
   }
   await trigger.click();
@@ -79,7 +79,7 @@ test("t18_2 Modal Esc/buttons/outside return focus; removed trigger closes safel
   await expect(trigger).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(dialog).not.toBeVisible();
-  await expect(page.getByLabel("受控状态")).toContainText("Modal：false");
+  await expect(page.getByLabel("受控状态")).toContainText("Dialog：false");
   expect(await page.evaluate(() => document.activeElement?.isConnected)).toBe(true);
   await page.getByRole("button", { name: "页面外部按钮" }).click();
 });

@@ -37,15 +37,15 @@ describe("t18 application notification registration", () => {
 });
 
 describe("t18 published overlay consumption characteristics", () => {
-  it("t18_1/t18_2 controlled Modal opens and closes without state divergence", async () => {
+  it("t18_1/t18_2 controlled Dialog opens and closes without state divergence", async () => {
     renderOverlays();
     fireEvent.click(screen.getByRole("button", { name: "编辑笔记" }));
     const dialog = await screen.findByRole("dialog", { name: "编辑笔记" });
-    expect(screen.getByLabelText("受控状态")).toHaveTextContent("Modal：true");
+    expect(screen.getByLabelText("受控状态")).toHaveTextContent("Dialog：true");
     expect(within(dialog).getByRole("textbox", { name: "笔记标题" })).toHaveValue("消费验收");
     fireEvent.click(within(dialog).getByRole("button", { name: "完成编辑" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(screen.getByLabelText("受控状态")).toHaveTextContent("Modal：false");
+    expect(screen.getByLabelText("受控状态")).toHaveTextContent("Dialog：false");
   });
 
   it("t18_3 dropdown selection records one action, disabled selection records none", async () => {

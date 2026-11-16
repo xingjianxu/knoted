@@ -2,7 +2,7 @@
 
 已完成 T01—T05 基础骨架：Rust 2024 workspace（`crates/knoted-core`、`knoted-api`、`knoted-worker`）、React/TypeScript 前端骨架（`apps/web`、`packages/api-client`）、OpenAPI 契约（`api/`）与 SQLx 迁移（`migrations/`）。产品功能仍按 [Knoted v1 计划](docs/plans/knoted-v1/README.md) 逐卡实施。
 
-UI 方向已确认：通用组件直接消费 npm `@bixlab/mtone`，本项目只做业务组合与适配。T17—T19 已全部完成并集成主线：T17 精确接入 `@bixlab/mtone@0.2.0`、公开 Provider/CSS 并移除 `packages/ui` 占位包（PR #42 / `e3e1db2`）；T18 注册应用通知 Provider 并验收弹层菜单（PR #46 / `4425ab9`）；T19 交付应用游标 reducer 并验收树/列表/反馈（PR #48 / `6de79a8`）。详见 [T17](docs/plans/knoted-v1/evidence/t17.md)、[T18](docs/plans/knoted-v1/evidence/t18.md)、[T19](docs/plans/knoted-v1/evidence/t19.md) 证据。见 [UI 指南](docs/development/ui-mtone.md) 与 [ADR 0002](docs/decisions/0002-mtone-ui-ownership.md)。
+UI 方向已确认：通用组件直接消费 npm `@bixlab/mtone`，本项目只做业务组合与适配。T17—T19 已全部完成并集成主线：T17 精确接入 `@bixlab/mtone@0.2.0`、公开 Provider/CSS 并移除 `packages/ui` 占位包（PR #42 / `e3e1db2`）；T18 注册应用通知 Provider 并验收弹层菜单（PR #46 / `4425ab9`）；T19 交付应用游标 reducer 并验收树/列表/反馈（PR #48 / `6de79a8`）。当前精确消费版本为 **`@bixlab/mtone@0.3.0`**，升级适配与消费复验见 [0.3.0 证据](docs/plans/knoted-v1/evidence/mtone-0.3.0.md)；上述 0.2.0 为 T17—T19 历史接入版本。详见 [T17](docs/plans/knoted-v1/evidence/t17.md)、[T18](docs/plans/knoted-v1/evidence/t18.md)、[T19](docs/plans/knoted-v1/evidence/t19.md) 证据。见 [UI 指南](docs/development/ui-mtone.md) 与 [ADR 0002](docs/decisions/0002-mtone-ui-ownership.md)。
 
 ## 开始使用
 
