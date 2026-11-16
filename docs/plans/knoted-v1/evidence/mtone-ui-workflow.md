@@ -98,3 +98,28 @@ Rust 复用主仓库已存在的 target 目录作编译缓存（`CARGO_TARGET_DI
 主 Agent 核实其排除项：运行兼容性仍由 T17—T19 验证（本阶段不作通过声明）；没有统计改善或其他平台保证；历史证据按设计保留；远程集成/主线复验/清理由本任务继续执行。无延期小问题或未解决发现。
 
 首提交 `5f4bb56`；[PR #40](https://github.com/xingjianxu/knoted/pull/40) 关联 #39、ADR 与真实输出。合并/主线验证及清理在本节更新时待执行，最终结果记录在 PR「合并后核对」及评论，避免在合并前提前填成功。
+
+## 上游 Issue 规则（2026-11-16 追加）
+
+- 归属：分支 `docs/mtone-upstream-issue-rule`，基线 `e3e1db2`；提交 `c0fb53c`（初版）、`e79b17e`（两类缺口 + 审查修正）、后续修正提交见 [PR #45](https://github.com/xingjianxu/knoted/pull/45)。本节与上方 A—E 场景不是同一次实验（上方属于 worktree `mtone-ui-boundary` / 基线 `5b2512f`）。原始命令输出保留在 PR #45 评论与本机会话，未冒充仓库可移植脚本。
+
+用户指示（Knoted Issue #44）：证实 mtone 通用缺口后，除告知用户外，还须在 <https://github.com/xingjianxu/mtone> 提 Issue；随后追加：对既有通用组件的**修改/扩展**需求同样提 Issue 并告知用户。规则落在 [AGENTS.md](../../../../AGENTS.md)、[Skill](../../../../.agents/skills/mtone-component-request/SKILL.md)、[UI 指南](../../../development/ui-mtone.md)、[需求记录](../mtone-requests/README.md) 与 [工作流](../../../development/agent-workflow.md)，并在 [ADR 0002](../../../decisions/0002-mtone-ui-ownership.md) 状态历史追加“非决策变更”记录（决策正文未改）。
+
+### 场景 F：缺口交接的三个分支
+
+设计意图：F1 建单成功、F2 查重命中既有 Issue 时评论复用、F3 创建/评论失败不得伪造链接。三条都必须同时完成“提示词发给用户”，否则仍为草稿。
+
+实际执行（只读或本仓库范围）：
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 上游仓库可写性与 Issue 开关 | `gh repo view xingjianxu/mtone --json hasIssuesEnabled,visibility` | public、`hasIssuesEnabled: true` |
+| 上游可用标签（不增删） | `gh label list -R xingjianxu/mtone` | 含 `enhancement`、`bug`、`accessibility`、`documentation` 等默认标签；无自定义标签 |
+| 查重命令可执行 | `gh issue list -R xingjianxu/mtone --state all --search '...'` | exit 0，当前 0 条 Issue |
+| 上游惯用语言 | `gh api repos/xingjianxu/mtone/readme`、`.../commits` | README 与提交信息为英文，支持“英文正文”要求 |
+
+未验证（本任务不制造真实上游写操作，如实标注）：
+
+- F1/F2/F3 的实际建单、评论、失败回退均未在本次执行中触发；三份仓内文本是规则，不是已跑通的实测。
+- 未用 Subagent 对新步骤 6 做 A—E 式场景复测；如需要，后续任务可补 3 个独立新上下文分别覆盖 F1/F2/F3。
+- 因此本文件不声称“上游 Issue 流程已验证”，只记录命令可用性与规则一致性。

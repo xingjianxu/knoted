@@ -2,7 +2,7 @@
 
 ## 授权、目标与范围
 
-2026-11-16，用户明确要求 Knoted 不实现通用 UI 库，使用 npm `@bixlab/mtone`；通用组件需求整理为提示词交给用户，Agent 无权直接修改 mtone。用户审阅本设计对应的会话方案后回复「请实施」。关联 [Issue #39](https://github.com/xingjianxu/knoted/issues/39)。
+2026-11-16，用户明确要求 Knoted 不实现通用 UI 库，使用 npm `@bixlab/mtone`；通用组件需求整理为提示词交给用户，Agent 无权直接修改 mtone。（本段为当时授权记录；2026-11-16 后续流程变更：交接另含在上游创建或补充 Issue，缺口也含既有组件需修改/扩展，见 [UI 指南](../development/ui-mtone.md)。）用户审阅本设计对应的会话方案后回复「请实施」。关联 [Issue #39](https://github.com/xingjianxu/knoted/issues/39)。
 
 本阶段只调整文档、任务卡和工作流 Skill；不安装 mtone、不改应用/锁文件、不删除 `packages/ui`、不实现 T17—T19、不部署。后续 T17 才迁移代码。完成本阶段不意味着产品 UI 已迁移。
 
@@ -17,7 +17,7 @@
 - mtone：通用控件、交互、可访问性、样式与设计变量；使用其公开 API 和发布 CSS。
 - Knoted：路由、业务表单、查询/权限/错误映射、游标状态、BlockNote 命令和选区适配。通用 UI 不通过直接依赖 Base UI、复制源码、patch、另建转发库绕过 mtone。
 - 已有组件优先复用，纯业务组合留在应用。不能仅凭缺少同名导出判定缺组件；必须核查锁定版本与最小组合能力。
-- Agent 只交付 mtone 需求，不修改上游、不创建上游 PR、不发布 npm。发布前不靠 link、Git 依赖或未发布 tarball 解除任务阻塞。
+- Agent 只交付 mtone 需求，不修改上游、不创建上游 PR、不发布 npm。发布前不靠 link、Git 依赖或未发布 tarball 解除任务阻塞。（2026-11-16 后续流程变更：交接另含在上游创建或补充 Issue，仍不得改源码、代发 PR 或发布，见 [UI 指南](../development/ui-mtone.md)。）
 
 ## 卡片与文档
 
