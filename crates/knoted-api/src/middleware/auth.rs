@@ -242,7 +242,7 @@ pub fn attach_session_cookies(
 }
 
 /// Reads one cookie value out of all `Cookie` headers on the request.
-fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
+pub(crate) fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get_all(header::COOKIE)
         .iter()
@@ -281,7 +281,7 @@ fn is_write(method: &Method) -> bool {
 }
 
 /// Digest comparison that does not return early on the first differing byte.
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+pub(crate) fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     left.len() == right.len()
         && left
             .iter()
