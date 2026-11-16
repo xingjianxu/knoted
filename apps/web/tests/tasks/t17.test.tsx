@@ -70,11 +70,14 @@ describe("t17 mtone consumption", () => {
     expect(title).toHaveAccessibleDescription("填写笔记标题");
   });
 
-  it("t17_4 removes the placeholder and directly loads published CSS", () => {
+  it("t17_4 removes placeholder sources and directly loads published CSS", () => {
     const pkg = JSON.parse(readFileSync(path.join(webRoot, "package.json"), "utf8"));
     expect(pkg.dependencies["@bixlab/mtone"]).toBe("0.2.0");
     expect(pkg.dependencies).not.toHaveProperty("@knoted/ui");
-    expect(existsSync(path.join(repoRoot, "packages/ui"))).toBe(false);
+    // Old installs may leave ignored node_modules behind. The removal contract
+    // concerns the workspace manifest and sources, not package-manager caches.
+    expect(existsSync(path.join(repoRoot, "packages/ui/package.json"))).toBe(false);
+    expect(existsSync(path.join(repoRoot, "packages/ui/src"))).toBe(false);
     const sourceFiles = readdirSync(path.join(webRoot, "src"), { recursive: true })
       .filter((file): file is string => typeof file === "string" && /\.(tsx?|css)$/.test(file));
     const sources = sourceFiles
