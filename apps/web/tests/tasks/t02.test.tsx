@@ -4,9 +4,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import App from "../../src/App";
+import { createMemoryHistory } from "@tanstack/react-router";
+import { createAppRouter } from "../../src/lib/router";
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const webRoot = path.resolve(testDir, "../..");
@@ -31,25 +33,46 @@ function readSources(directory: string): Array<{ file: string; text: string }> {
 }
 
 describe("t02 web scaffold", () => {
-  it("t02_1_renders_app_shell", () => {
-    render(<App />);
+  it("t02_1_renders_app_shell", async () => {
+    const scroll = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+    const router = createAppRouter({
+      history: createMemoryHistory({ initialEntries: ["/login"] }),
+    });
+    render(<App router={router} />);
+    await screen.findByRole("button", { name: "使用 Passkey 登录" });
 
     expect(
       screen.getByRole("heading", { level: 1, name: /knoted/i }),
     ).toBeInTheDocument();
+    scroll.mockRestore();
   });
 
-  it("t02_1_cleanup_between_tests", () => {
+  it("t02_1_cleanup_between_tests", async () => {
+    const scroll = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
     // The previous test rendered <App />; afterEach(cleanup) in tests/setup.ts
     // must have removed it, otherwise DOM nodes leak between tests.
     expect(document.querySelectorAll("h1")).toHaveLength(0);
 
-    render(<App />);
-    render(<App />);
+    render(
+      <App
+        router={createAppRouter({
+          history: createMemoryHistory({ initialEntries: ["/login"] }),
+        })}
+      />,
+    );
+    render(
+      <App
+        router={createAppRouter({
+          history: createMemoryHistory({ initialEntries: ["/login"] }),
+        })}
+      />,
+    );
+    await screen.findAllByRole("button", { name: "使用 Passkey 登录" });
 
     expect(
       screen.getAllByRole("heading", { level: 1, name: /knoted/i }),
     ).toHaveLength(2);
+    scroll.mockRestore();
   });
 
   it("t02_1_build_uses_no_remote_fonts", () => {
