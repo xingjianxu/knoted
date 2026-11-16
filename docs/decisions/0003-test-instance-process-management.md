@@ -8,6 +8,7 @@
 - Related PRs: 见 Issue #63 的合并记录
 - Supersedes: 无
 - Superseded by: 无
+- 部分替代：[ADR 0004](0004-database-owned-by-host-user.md) 取代本文第 1 条中「PostgreSQL 角色/库 provisioning 由 `/etc/nixos` 管理」的部分；其余边界（测试应用由 pcwrap、生产应用将来由 NixOS、Strata/模型根/ACME/防火墙归 host）仍然有效。
 
 ## 背景与问题
 

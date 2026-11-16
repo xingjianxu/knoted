@@ -13,7 +13,7 @@
 #   KNOTED_HTTPS_PORT     15601
 #   KNOTED_HTTPS_DOMAIN   wlab.132140.xyz
 #   KNOTED_CERT_DIR       /var/lib/acme/<domain>
-#   DATABASE_URL          postgres://knoted_dev@127.0.0.1:5432/knoted_dev
+#   DATABASE_URL          postgres://xingjian@127.0.0.1:5432/knoted_dev
 #   KNOTED_LOG_LEVEL      info
 set -euo pipefail
 # 与 tools/dev/build-artifact.sh 一致：清单排序必须固定字节序，否则 locale 会改变 sort 结果。
@@ -45,7 +45,9 @@ domain=${KNOTED_HTTPS_DOMAIN:-wlab.132140.xyz}
 cert_dir=${KNOTED_CERT_DIR:-/var/lib/acme/$domain}
 cert_file=$cert_dir/fullchain.pem
 key_file=$cert_dir/key.pem
-database_url=${DATABASE_URL:-postgres://knoted_dev@127.0.0.1:5432/knoted_dev}
+# 开发/测试库由宿主用户直接创建与管理（ADR 0004）：沿用本机 trust 认证，
+# 不再有专用 knoted_dev 角色，也没有 NixOS 侧的 provisioning 单元。
+database_url=${DATABASE_URL:-postgres://xingjian@127.0.0.1:5432/knoted_dev}
 log_level=${KNOTED_LOG_LEVEL:-info}
 
 config_dir=$instance_root/config
@@ -255,7 +257,14 @@ command_migrate() {
   command -v sqlx >/dev/null ||
     die "需要 sqlx-cli（由 /etc/nixos 提供：pkgs.sqlx-cli；不要把迁移塞进 API 启动）"
   log "迁移数据库（source=$runtime_root/share/knoted/migrations）"
-  DATABASE_URL="$database_url" exec sqlx migrate run --source "$runtime_root/share/knoted/migrations"
+  local status=0
+  DATABASE_URL="$database_url" sqlx migrate run --source "$runtime_root/share/knoted/migrations" || status=$?
+  if [ "$status" -ne 0 ]; then
+    # 库不存在是最常见的一次性前置；库由宿主用户直接创建（ADR 0004），这里只给命令。
+    log "迁移失败（exit $status）。开发/测试库由宿主用户创建，例如："
+    log "  createdb -h 127.0.0.1 knoted_dev   # 以 $(id -un) 身份"
+    exit "$status"
+  fi
 }
 
 command_api() {

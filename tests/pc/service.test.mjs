@@ -349,6 +349,7 @@ describe("migrate", () => {
     writeExecutable(join(stubDir, "sqlx"), "#!/usr/bin/env bash\nexit 7\n");
     const failed = run("bash", [serviceScript, "migrate"], { env: okEnv });
     assert.equal(failed.status, 7, "迁移失败必须原样传播退出码");
+    assert.match(failed.stderr, /createdb -h 127\.0\.0\.1 knoted_dev/, "失败时给出建库命令");
   });
 
   it("缺少 sqlx 时给出明确错误而不是静默跳过", async () => {
@@ -373,6 +374,19 @@ describe("paths", () => {
     assert.match(result.stdout, /^https_port=15601$/m);
     assert.match(result.stdout, /^domain=wlab\.132140\.xyz$/m);
     assert.match(result.stdout, /^admin_socket=\/data\/knoted-dev\/service\/state\/https\/admin\.sock$/m);
+  });
+});
+
+describe("数据库归属", () => {
+  it("默认连接串用宿主用户，不再有专用角色", async () => {
+    const fixture = await fullFixture();
+    const env = prepareEnv(fixture);
+    delete env.DATABASE_URL;
+    const result = run("bash", [serviceScript, "prepare"], { env });
+    assert.equal(result.status, 0, result.stderr);
+    const toml = readFileSync(join(fixture.instanceRoot, "config/knoted.toml"), "utf8");
+    assert.match(toml, /url = "postgres:\/\/xingjian@127\.0\.0\.1:5432\/knoted_dev"/);
+    assert.doesNotMatch(toml, /knoted_dev@/);
   });
 });
 
