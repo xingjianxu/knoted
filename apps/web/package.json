@@ -11,8 +11,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@bixlab/mtone": "0.2.0",
     "@knoted/api-client": "workspace:*",
-    "@knoted/ui": "workspace:*",
     "@tanstack/react-query": "5.107.1",
     "react": "19.3.1",
     "react-dom": "19.3.1"

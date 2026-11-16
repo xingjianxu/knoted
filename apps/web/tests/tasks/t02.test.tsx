@@ -1,4 +1,5 @@
 import { readFileSync, readdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -10,6 +11,7 @@ import App from "../../src/App";
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const webRoot = path.resolve(testDir, "../..");
 const repoRoot = path.resolve(webRoot, "../..");
+const requireWeb = createRequire(import.meta.url);
 
 function read(relativePath: string, root = webRoot): string {
   return readFileSync(path.join(root, relativePath), "utf8");
@@ -54,7 +56,10 @@ describe("t02 web scaffold", () => {
     const sources = [
       { file: path.join(webRoot, "index.html"), text: read("index.html") },
       ...readSources(path.join(webRoot, "src")),
-      ...readSources(path.join(repoRoot, "packages/ui/src")),
+      {
+        file: requireWeb.resolve("@bixlab/mtone/styles.css"),
+        text: readFileSync(requireWeb.resolve("@bixlab/mtone/styles.css"), "utf8"),
+      },
     ];
 
     const remoteFontPatterns = [
@@ -62,7 +67,7 @@ describe("t02 web scaffold", () => {
       /fonts\.gstatic\.com/,
       /use\.typekit/,
       /@font-face[^}]*url\(\s*["']?https?:/,
-      /@import\s+url\(\s*["']?https?:/,
+      /@import\s+(?:url\(\s*)?["']?https?:/,
     ];
 
     for (const source of sources) {

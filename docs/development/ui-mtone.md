@@ -4,7 +4,7 @@
 
 ## 现状与目标
 
-当前 `packages/ui` 只有 `cn()`，`apps/web` 仍依赖它；mtone **尚未接入**。本次调整规则与计划，不修改运行时。T17 才安装锁版 npm 包、迁移引用/测试并移除占位包。禁止继续向占位包新增组件，也不建立仅转发 mtone 的替代包。
+T17 已在任务分支精确接入 npm `@bixlab/mtone@0.2.0`，迁移 App 静态类并移除 `packages/ui`；**实现就绪、待主 Agent 独立审查与主线集成**。生产入口使用应用层 `UiProvider`，只配置公开 `MtoneProvider` 的 locale/density/tokens，不转发控件 API；CSS 从应用样式入口导入。基础表单组合仅在测试夹具中，不建立生产演示路由或通用包装库。证据见 [T17](../plans/knoted-v1/evidence/t17.md)。
 
 ## 责任判定
 
@@ -29,6 +29,10 @@ BlockNote 仍只保留编辑核心，关闭默认 UI；工具栏和菜单用 mto
 3. 在任务 Worktree 精确锁版并更新 lock，使用 `@bixlab/mtone/styles.css`、公开 Provider；验证 React 兼容、CSS 导入顺序、tokens、Portal 样式、字体及构建。
 4. 迁移 App/main/styles 与 cn 使用；原 cn 含 tailwind-merge，不能假设同名 mtone 工具等价。删除占位包后同步 ESLint、workspace/脚本中实际存在的引用与 T02 源码扫描测试。workspace 当前使用通配路径，无需为删除目录强改通配规则。
 5. 在 apps/web 验证真实消费行为，不以 mtone 上游测试代替。保留无远程字体验收，包含实际发布 CSS/构建产物。
+
+T17 实测：旧 `cn('p-2', 'p-4')` 返回 `p-4`，mtone 的 `cn` 返回 `p-2 p-4`，不具备冲突合并语义。App 原有类全为静态，因此直接改用字符串，而非替换成同名工具。应用 CSS 将预编译样式放在 `mtone` 层（base 后、utilities 前），仅覆盖公开样式范围的系统字体；主题 tokens 通过公开 context 传播到 body-level MtoneScope。真实弹层交互与焦点生命周期仍由 T18 验收。
+
+0.2.0 在实施时距发布不足 pnpm 默认最小等待时间；`pnpm-workspace.yaml` 仅为已明确选择、检查过的精确版本添加 minimumReleaseAgeExclude，其他依赖策略保持不变。不改 workspace 通配范围。
 
 只使用 npm 已发布版本作为正式依赖；不以浮动 latest、Git、file/link、未发布 tarball 交付。不修改 API 或业务语义来迁就组件。
 
@@ -61,4 +65,4 @@ BlockNote 仍只保留编辑核心，关闭默认 UI；工具栏和菜单用 mto
 
 T17—T19 测试在 `apps/web/tests/tasks/`，验证字段关联、键盘、焦点、禁用提交、空/错/加载与取消行为。浏览器实际焦点/Portal/CSS 验收使用已有 Playwright 入口。mtone 自己的内部单元测试属于上游，不复制进本仓库。
 
-升级必须审阅公开 API/CSS 变化并复跑受影响任务。遇到回归可回退上一已验证 npm 版本；无法满足则记录阻塞，不本地补一套通用 UI。完整迁移之后才更新“当前架构”；历史证据保留。
+升级必须审阅公开 API/CSS 变化并复跑受影响任务。遇到回归可回退上一已验证 npm 版本；无法满足则记录阻塞，不本地补一套通用 UI。T17 分支迁移与基础表单消费验证已就绪；架构说明明确区分分支实现与主线集成，T02/T04 历史证据保留。
