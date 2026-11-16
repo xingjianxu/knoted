@@ -101,6 +101,8 @@ Rust 复用主仓库已存在的 target 目录作编译缓存（`CARGO_TARGET_DI
 
 ## 上游 Issue 规则（2026-11-16 追加）
 
+- 归属：分支 `docs/mtone-upstream-issue-rule`，基线 `e3e1db2`；提交 `c0fb53c`（初版）、`e79b17e`（两类缺口 + 审查修正）、后续修正提交见 [PR #45](https://github.com/xingjianxu/knoted/pull/45)。本节与上方 A—E 场景不是同一次实验（上方属于 worktree `mtone-ui-boundary` / 基线 `5b2512f`）。原始命令输出保留在 PR #45 评论与本机会话，未冒充仓库可移植脚本。
+
 用户指示（Knoted Issue #44）：证实 mtone 通用缺口后，除告知用户外，还须在 <https://github.com/xingjianxu/mtone> 提 Issue；随后追加：对既有通用组件的**修改/扩展**需求同样提 Issue 并告知用户。规则落在 [AGENTS.md](../../../../AGENTS.md)、[Skill](../../../../.agents/skills/mtone-component-request/SKILL.md)、[UI 指南](../../../development/ui-mtone.md)、[需求记录](../mtone-requests/README.md) 与 [工作流](../../../development/agent-workflow.md)，并在 [ADR 0002](../../../decisions/0002-mtone-ui-ownership.md) 状态历史追加“非决策变更”记录（决策正文未改）。
 
 ### 场景 F：缺口交接的三个分支

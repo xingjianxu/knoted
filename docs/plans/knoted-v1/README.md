@@ -10,7 +10,7 @@
 4. [索引与RAG](indexing-and-rag.md)
 5. [开发与部署](development-and-deploy.md)
 6. [验收](acceptance.md)
-7. 前端任务先读 [UI 开发指南](../../development/ui-mtone.md) 与 [ADR 0002](../../decisions/0002-mtone-ui-ownership.md)：通用组件消费 mtone；证实通用缺口时存档提示词、告知用户并在上游 mtone 提 上游 Issue；T17 分支实现就绪、待集成；T18—T19 尚未实施。
+7. 前端任务先读 [UI 开发指南](../../development/ui-mtone.md) 与 [ADR 0002](../../decisions/0002-mtone-ui-ownership.md)：通用组件消费 mtone；证实通用缺口时存档提示词、告知用户并在上游 mtone 提 Issue；T17 分支实现就绪、待集成；T18—T19 尚未实施。
 8. 按依赖领取下表单张任务卡；[文档交付记录](delivery.md)与产品状态分开。
 
 ## 约束与范围
