@@ -27,7 +27,7 @@
 
 - 多字节中文在2MiB边界按字节计数；块 ID 按字符限制。
 - 第8/9层、总5000/5001块，深嵌套恶意输入不能栈溢出。
-- 含大小写/控制字符/相对路径/javascript/data/file的链接须拒绝不安全协议；正常中英文绝对链接可用。
+- 含大小写/控制字符/相对路径/javascript/data/file的链接须拒绝不安全协议；中文链接文案和按 URI 规范编码后的绝对链接可用。
 - 未知字段/HTML节点/非法 asset_id 不得静默丢失；错误不得泄露输入正文。
 - 嵌套列表、空块和代码换行提取定位稳定，校验失败不改变原始输入，改正后可重新校验。
 
@@ -38,20 +38,20 @@
 **Produces:** `validate_document(&AppContext, ValidateDocument) -> Result<ValidatedDocument, DomainError>`，输入 `ValidateDocument { format_version: u32, document_json: String }`；`extract_plain_text(&AppContext, ExtractPlainText) -> Result<PlainTextDocument, DomainError>`，输入持有已验证文档；输出总文本及每块的 `block_id`、索引 `path`、`text`。输出类型可补充只读访问器。结构命名与 serde 字段遵循契约。
 **Dependencies / parallel:** 单任务串行；实施 Agent 使用独立 `.worktrees/agent-t22-implementation` 与 `feat/t22-implementation`；主 Agent 持有 `.worktrees/knoted-t22` 与 `feat/t22`，只在实施提交后合入代码。
 
-- [ ] 先写fixture及真实场景测试，建立仅签名/未实现的最小接口，观察断言失败，保存 RED 输出；不可只把编译错误作为行为RED。
-- [ ] 实现白名单结构与严格反序列化；版本、总字节、块 ID、层级、块计数、heading level、image asset_id、inline与协议语义校验。
-- [ ] 实现纯文本前序提取，块之间用一个换行分隔，块内content按序连接，不改变原文字节；记录所有块包括空块的定位。
-- [ ] `t22_1`未知版本422、`t22_2`重复块ID、`t22_3`代码/中文原文保留，外加以上 Review Focus 的正反边界、未知字段和fixture回归；记录 GREEN。
-- [ ] 运行 `cargo fmt --check`、`cargo test --workspace --locked t22_`、`cargo test --workspace --locked`、`cargo clippy --locked --all-targets -- -D warnings`。日志集中 `/data/knoted-dev/tasks/t22/logs/`，缓存与临时文件同任务目录。
-- [ ] 实际重读 git-commit Skill、检查敏感信息与 diff 后按项目中文提交；写完整实现报告，禁止自行 push、开PR、合并或修改主 Agent 的计划文件。
+- [x] 先写fixture及真实场景测试，建立仅签名/未实现的最小接口，观察断言失败，保存 RED 输出；不可只把编译错误作为行为RED。
+- [x] 实现白名单结构与严格反序列化；版本、总字节、块 ID、层级、块计数、heading level、image asset_id、inline与协议语义校验。
+- [x] 实现纯文本前序提取，块之间用一个换行分隔，块内content按序连接，不改变原文字节；记录所有块包括空块的定位。
+- [x] `t22_1`未知版本422、`t22_2`重复块ID、`t22_3`代码/中文原文保留，外加以上 Review Focus 的正反边界、未知字段和fixture回归；记录 GREEN。
+- [x] 运行 `cargo fmt --check`、`cargo test --workspace --locked t22_`、`cargo test --workspace --locked`、`cargo clippy --locked --all-targets -- -D warnings`。日志集中 `/data/knoted-dev/tasks/t22/logs/`，缓存与临时文件同任务目录。
+- [x] 实际重读 git-commit Skill、检查敏感信息与 diff 后按项目中文提交；写完整实现报告，禁止自行 push、开PR、合并或修改主 Agent 的计划文件。
 
 ### Integration checklist（主 Agent）
 
 - [x] 分析任务、依赖与授权；Issue查重；独立 Worktree；记录基线0718e66。
 - [x] 基线全工作区测试确认（exit 0，日志见本任务 logs/baseline-test.log）。
-- [ ] Task 1 已派发并提交；读取实现并独立复跑验证。
+- [x] Task 1 已提交 `1d6eff6`；主Agent独立读取实现并复跑18个聚焦、110个全量测试及fmt/clippy（exit 0，1既有ignored）。
 - [ ] 请求独立审查，核实反馈并修复；完成分支最终审查。
-- [ ] 更新T22状态与执行证据，纯库且尚无调用入口无需部署。
+- [x] 更新T22实施状态与执行证据，纯库且尚无调用入口无需部署。
 - [ ] 通过必需本地门禁、提交、push、按模板创建PR并普通merge；远程Issue由关闭关系处理。
 - [ ] 主线快进、复跑必要验证，记录SHA，安全清理两个任务Worktree/已合并分支；读回Issue/Projects状态。
 
@@ -59,3 +59,7 @@
 
 - 2026-11-16：原生 Worktree 工具仅接受ref且不支持强制路径，依据项目固定路径约束使用git worktree。原生TODO工具不可用，本文件清单为持久化进度。
 - 基线：0718e66；T03实现1dfd5b8与T05实现7805c6d已包含主线（PR #4）；Issue #57。
+
+- 契约核对：离线 Ajv 发现原 fixture 的原始 Unicode href 不符合 T03 `format: uri`；有效fixture使用ASCII URI（中文域名/路径先编码），正文中文不变。Rust URL parser 的容忍行为不能放宽契约，补充非法URI字符/转义测试。
+
+- Task 1独立审查：spec compliance/quality均Approved，无Critical/Important/Minor；主Agent集成树fmt/test/clippy全部exit 0。
