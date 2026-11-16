@@ -33,7 +33,7 @@ API与Worker仅持有各自需要的服务权限。共用配置类型，按进�
 
 ## UI边界
 
-按 [ADR 0002](../../decisions/0002-mtone-ui-ownership.md)，通用 UI 直接消费 npm `@bixlab/mtone` 的公开 API、Provider、tokens 和预编译 CSS，不维护本地通用组件库或转发层。现有 packages/ui 仅 cn，占位包在 T17 迁移后移除。Tailwind 可用于应用布局，不重复建立基础控件样式体系，也不直接包装 Base UI 绕过 mtone。Knoted 保留业务组合、API/Query、权限、游标及编辑器适配；通用能力缺口按 [UI 指南](../../development/ui-mtone.md) 整理提示词交用户在 mtone 实现，Agent 不修改上游。
+按 [ADR 0002](../../decisions/0002-mtone-ui-ownership.md)，通用 UI 直接消费 npm `@bixlab/mtone` 的公开 API、Provider、tokens 和预编译 CSS，不维护本地通用组件库或转发层。现有 packages/ui 仅 cn，占位包在 T17 迁移后移除。Tailwind 可用于应用布局，不重复建立基础控件样式体系，也不直接包装 Base UI 绕过 mtone。Knoted 保留业务组合、API/Query、权限、游标及编辑器适配；通用能力缺口按 [UI 指南](../../development/ui-mtone.md) 存档提示词、告知用户并在上游 mtone 创建或补充上游 Issue，Agent 不修改上游源码、不代发 PR、不发布 npm。
 
 BlockNote 仅保留编辑核心；关闭默认工具栏、菜单与文件面板，用 mtone 组合工具栏、斜杠菜单、块菜单及链接/图片交互。编辑命令与选区状态留在 Knoted。不引入 Mantine/shadcn 样式体系。不得为适配 UI 改变业务/API 语义；未发布或未验证的能力记录技术依赖阻塞。
 
