@@ -477,3 +477,31 @@ pub fn recently_verified(session: &Session, now: DateTime<Utc>, window: Duration
         .last_verified_at
         .is_some_and(|verified| verified <= now && now - verified < window)
 }
+
+/// Recovers the CSRF secret for a live session whose readable cookie was lost.
+///
+/// The previous plaintext cannot be recovered from its stored digest. Rotate
+/// only this session's digest, and return the new plaintext once to the HTTP
+/// adapter. A revoked or expired session cannot be recovered. Callers must not
+/// log the returned secret.
+pub async fn rotate_csrf_token(
+    executor: &mut PgConnection,
+    user_id: Uuid,
+    session_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<Option<String>, DbError> {
+    let token = generate_token();
+    let changed = sqlx::query(
+        "UPDATE sessions SET csrf_token_hash = $4 \
+         WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL \
+         AND idle_expires_at > $3 AND absolute_expires_at > $3",
+    )
+    .bind(session_id)
+    .bind(user_id)
+    .bind(now)
+    .bind(hash_token(&token).as_slice())
+    .execute(&mut *executor)
+    .await?
+    .rows_affected();
+    Ok((changed == 1).then_some(token))
+}

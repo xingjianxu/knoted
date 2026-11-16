@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod health;
+pub mod sessions;
 
 use axum::Router;
 use axum::http::StatusCode;
@@ -19,7 +20,10 @@ use crate::middleware::RequestId;
 /// before wrapping.
 pub fn router(ctx: AppContext, auth: AuthConfig) -> Router {
     health::router()
-        .nest("/api/v1", auth::router(auth, ctx.clone()))
+        .nest(
+            "/api/v1",
+            auth::router(auth.clone(), ctx.clone()).merge(sessions::router(auth, ctx.clone())),
+        )
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .with_state(ctx)
