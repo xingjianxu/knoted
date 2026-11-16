@@ -1,0 +1,64 @@
+# UI 开发：消费 mtone，不在 Knoted 建通用库
+
+依据：[ADR 0002](../decisions/0002-mtone-ui-ownership.md)。适用于全部前端任务，尤其 T17—T20、T27—T29 与后续业务页面。新增或扩展组件前使用 [mtone-component-request Skill](../../.agents/skills/mtone-component-request/SKILL.md)。
+
+## 现状与目标
+
+当前 `packages/ui` 只有 `cn()`，`apps/web` 仍依赖它；mtone **尚未接入**。本次调整规则与计划，不修改运行时。T17 才安装锁版 npm 包、迁移引用/测试并移除占位包。禁止继续向占位包新增组件，也不建立仅转发 mtone 的替代包。
+
+## 责任判定
+
+| 需求 | 处理 |
+|---|---|
+| mtone 已有公开组件满足 | 直接消费，测试业务接入，不重复申请同名组件 |
+| 现有组件组合即可满足 | 在 `apps/web/src/features/` 或应用适配层组合；不重新包装一套通用 API |
+| Knoted 数据、权限、游标、时间转换、编辑命令 | 留在 Knoted；多页面使用也不自动成为通用组件 |
+| 确认需要新通用交互/展示能力 | 交付上游需求提示词给用户，记录外部依赖 |
+| 版本/类型/资料不可取得 | 标记待核查，不宣称缺失，不凭名字猜 API |
+
+基础控件、可访问性、设计变量优先由 mtone 提供。应用可用 Tailwind 做布局、用 mtone 公开 tokens 定制，不另建基础控件样式体系；禁止直接包装 Base UI、复制上游源码、私有路径导入、修改 node_modules 或用 patch 绕过缺口。这里不禁止 mtone 自身的 Base UI 传递依赖。
+
+BlockNote 仍只保留编辑核心，关闭默认 UI；工具栏和菜单用 mtone 组合，命令、选区和文档模型在 Knoted。不把完整编辑器、后端或 Knoted DTO 搬进 mtone。
+
+## T17 接入与版本锁定
+
+实施时重新核查发布版本，而非无条件安装调研时的 0.2.0：
+
+1. 读取 `apps/web/package.json` 与 `pnpm-lock.yaml`；记录未安装或精确已解析版本。区分 npm 发布包、网站文档、master 源码。
+2. 检查该发布版本的 exports、types、peerDependencies、CSS 与组件契约。发布包是消费依据，不猜 props 或深层导入。
+3. 在任务 Worktree 精确锁版并更新 lock，使用 `@bixlab/mtone/styles.css`、公开 Provider；验证 React 兼容、CSS 导入顺序、tokens、Portal 样式、字体及构建。
+4. 迁移 App/main/styles 与 cn 使用；原 cn 含 tailwind-merge，不能假设同名 mtone 工具等价。删除占位包后同步 ESLint、workspace/脚本中实际存在的引用与 T02 源码扫描测试。workspace 当前使用通配路径，无需为删除目录强改通配规则。
+5. 在 apps/web 验证真实消费行为，不以 mtone 上游测试代替。保留无远程字体验收，包含实际发布 CSS/构建产物。
+
+只使用 npm 已发布版本作为正式依赖；不以浮动 latest、Git、file/link、未发布 tarball 交付。不修改 API 或业务语义来迁就组件。
+
+## 核查映射（不是运行验证）
+
+2026-11-16 核查 `@bixlab/mtone@0.2.0`：
+
+| 旧计划意图 | 实际导出或应用责任 |
+|---|---|
+| Button/Input/FormField/TextArea/Badge | Button/Input/FormField/**Textarea**/Badge |
+| Dialog/Menu/Popover/Toast | **Modal/DropdownMenu**、ContextMenu、Popover、ToastProvider/useToast |
+| Tree/EmptyState/ConfirmAction | Tree/**Empty/ConfirmDialog**；业务确认语义留在应用 |
+| PagedList | List 或 Table 展示 + 应用游标控制；不是现成同名导出 |
+| 应用外壳 | Layout、Sidebar、NavItem、NavGroup；路由绑定留在应用 |
+
+来源：[npm 元数据](https://registry.npmjs.org/@bixlab%2fmtone/0.2.0)、[发布 README](https://unpkg.com/@bixlab/mtone@0.2.0/README.md)、[发布类型](https://unpkg.com/@bixlab/mtone@0.2.0/dist/index.d.ts)。该版本 ESM、React/ReactDOM peers `^19.2.0`，CSS 预编译；这些事实不证明当前应用运行通过。
+
+重点复验：Pagination 的 total 与本项目游标不匹配时，先用现有 Button 组合上下页，不能伪造总数；DatePicker 单日期不代表覆盖精确时间；树移动可由业务命令驱动，不自动等同于需要通用拖拽；编辑器虚拟锚点、中文输入法及回焦需消费场景验证。以上均是检查项，不是已确认上游缺陷。
+
+## 缺口交接与恢复
+
+使用 Skill 先查证、查重并分类。只有确认通用能力不足时才输出可复制提示词，存档于[mtone 需求目录](../plans/knoted-v1/mtone-requests/README.md)。提示词必须直接发给用户，不仅给路径。不得直接修改 mtone、创建上游 Issue/PR 或发布包。
+
+- 查重：搜索该目录及关联 Knoted Issue；同一能力补充已有需求与消费任务，不开重复需求。
+- 任务记录：影响哪个场景、证据、上游需求路径、恢复条件。产品卡仍未完成；Issue 用现有 `blocked` 标签并保留看板阶段，不新增标签定义。
+- 技术等待不标 `human-required`，除非确有根规则要求的架构/权限决定。完成不依赖缺口的工作但不擅自改变串行任务策略。
+- 用户返回 npm 发布版本后：核验版本实际可用、公开 API/类型/CSS → 更新精确依赖与锁文件 → 跑消费场景与本地门禁 → 按正常 PR 集成、主线验证及适用部署收尾。仅“master 已合入”“提示词已交付”不能解除全部验收。
+
+## 验证与升级
+
+T17—T19 测试在 `apps/web/tests/tasks/`，验证字段关联、键盘、焦点、禁用提交、空/错/加载与取消行为。浏览器实际焦点/Portal/CSS 验收使用已有 Playwright 入口。mtone 自己的内部单元测试属于上游，不复制进本仓库。
+
+升级必须审阅公开 API/CSS 变化并复跑受影响任务。遇到回归可回退上一已验证 npm 版本；无法满足则记录阻塞，不本地补一套通用 UI。完整迁移之后才更新“当前架构”；历史证据保留。

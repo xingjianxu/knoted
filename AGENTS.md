@@ -23,6 +23,12 @@ Knoted 当前为 Rust 2024 workspace（`crates/knoted-core`、`knoted-api`、`kn
 11. 使用 `verification-before-completion` 和 `finishing-a-development-branch` 收尾。完整完成 = 改动已安全提交 + 本地必需检查通过 + PR 合入目标主线 + 主线验证 + 本任务 Worktree/已合并分支清理。PR 创建或测试通过都不足以关闭任务。Issue 通过合并到默认分支的 PR 关闭关系自动关闭。按默认授权可直接合并自己完成的 PR；用户明确要求先看 PR 时保留待合并状态。[收尾步骤](docs/development/git-worktree.md)
 12. 需要独立人工确认的边界只剩两类：**重大架构决策**（新增或替代 Accepted ADR、跨模块接口与存储契约）与**不可逆或生产变更**（不可逆迁移、破坏性数据库操作、生产部署与线上配置）。删除未合并成果、清理其他任务的 Worktree、擅自扩大任务范围仍属禁止。凭据是硬约束：任何提交、文档、Issue、PR、日志都不得写入 token、私钥或密码，发现即停止并报告。强推与分支保护绕过由服务端规则约束，Agent 不主动尝试。
 
+## UI 组件归属
+
+通用 UI 使用 npm `@bixlab/mtone`，不在 Knoted 实现通用组件库或 `@knoted/ui` 转发层。现有 `packages/ui` 仅为待 T17 移除的 cn 占位包，迁移前也不得向其中新增组件。应用保留业务组合、API/Query、权限、游标与编辑器适配；Tailwind 只做应用布局及公开主题适配，不另建基础控件体系，不直接包装 Base UI/复制源码/patch 绕过 mtone。
+
+新增或扩展组件前使用 [mtone-component-request](.agents/skills/mtone-component-request/SKILL.md)：核查锁定发布版本和组合能力；确有通用缺口时整理完整任务提示词交给用户并存档。Agent 不修改 mtone、不代建上游 Issue/PR、不发布 npm。未发布或未通过消费端验收时记录技术依赖阻塞，不能用 link/Git/未发布 tarball 或本地通用实现替代交付。见 [UI 指南](docs/development/ui-mtone.md)、[ADR 0002](docs/decisions/0002-mtone-ui-ownership.md)。本条不表示 T17—T19 已执行。
+
 ## 远程操作授权
 
 远程操作默认授权，不再逐次索取许可。可直接执行：push 到非默认分支、创建/编辑/关闭 Issue、修改 Labels 与优先级、写 Projects 字段、创建 PR、合并 PR（普通 merge）、删除已合并的远程分支。合并前必须已通过本地必需检查（规则 8）并留存输出。

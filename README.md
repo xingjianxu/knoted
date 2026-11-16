@@ -2,6 +2,8 @@
 
 已完成 T01—T05 基础骨架：Rust 2024 workspace（`crates/knoted-core`、`knoted-api`、`knoted-worker`）、React/TypeScript 前端骨架（`apps/web`、`packages/ui`、`packages/api-client`）、OpenAPI 契约（`api/`）与 SQLx 迁移（`migrations/`）。产品功能仍按 [Knoted v1 计划](docs/plans/knoted-v1/README.md) 逐卡实施。
 
+UI 方向已确认：通用组件直接消费 npm `@bixlab/mtone`，本项目只做业务组合与适配。当前 `packages/ui` 仍是 cn 占位包，接入及移除由 T17 执行；本次文档更新不表示 UI 已迁移。见 [UI 指南](docs/development/ui-mtone.md) 与 [ADR 0002](docs/decisions/0002-mtone-ui-ownership.md)。
+
 ## 开始使用
 
 1. 阅读 [AGENTS.md](AGENTS.md) 和 [Agent 工作流](docs/development/agent-workflow.md)。
@@ -28,6 +30,7 @@
 | 完成已批准任务 | [issue-work](.agents/skills/issue-work/SKILL.md) |
 | 评估重要架构变更 | [architecture-review](.agents/skills/architecture-review/SKILL.md) |
 | 记录决策、分配 ADR 编号 | [adr-create](.agents/skills/adr-create/SKILL.md) |
+| 判断组件归属、交接 mtone 能力缺口 | [mtone-component-request](.agents/skills/mtone-component-request/SKILL.md) |
 | 按范围审计项目 | [project-audit](.agents/skills/project-audit/SKILL.md) |
 | 查看 GitHub 远程配置现状与复核命令 | [远程配置记录](docs/development/github-setup.md) |
 | 查看能力检查与初始化交付记录 | [初始化报告](docs/development/initialization-report.md) |

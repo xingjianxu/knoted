@@ -2,10 +2,12 @@
 
 截至 2026-11-15，T01—T16 已落地：Rust 2024 workspace（`crates/knoted-core` 配置/数据库/任务队列/认证内核/暂存与内部协议客户端、`crates/knoted-api` axum 服务与健康检查/认证路由、`crates/knoted-worker` 领取-心跳-提交骨架）、pnpm workspace（`apps/web` React 外壳、`packages/ui`、`packages/api-client` 生成客户端）、`api/openapi.yaml` 与 `api/intelligence.openapi.yaml` 契约、`migrations/0001—0004`，以及 `services/intelligence/` 的 Python 执行服务（SQLite 账本、Docling+RapidOCR 解析、BGE-M3 dense 嵌入）。笔记、项目/事项、文件扫描与检索、RAG 生成尚未实现，仍按 [实施计划](../plans/knoted-v1/README.md) 逐卡推进；本页不构成 Accepted ADR。
 
+UI 目标已按 [ADR 0002](../decisions/0002-mtone-ui-ownership.md) 改为应用直接消费 npm `@bixlab/mtone`。**当前尚未迁移**：`packages/ui` 仍仅含 cn 占位工具，T17 才移除；不再向其中新增通用组件。业务组合/数据适配留在 apps/web，上游能力缺口交用户处理，见 [UI 指南](../development/ui-mtone.md)。
+
 | 边界 | 责任 |
 |---|---|
 | `crates/` | Rust workspace：core（配置/数据库/`jobs`/`auth`/`files::staging`/`intelligence` 客户端）、api（axum 路由、`middleware` request_id/认证、`admin` CLI）、worker（runner 骨架） |
-| `apps/`、`packages/` | React 前端、UI 基础包与 OpenAPI 生成客户端 |
+| `apps/`、`packages/` | React 前端、待 T17 移除的 UI 占位包与 OpenAPI 生成客户端；目标直接消费 mtone |
 | `api/`、`migrations/` | 浏览器与内部契约、数据库迁移（`0001` registry、`0002` jobs/outbox、`0003` auth、`0004` job retry） |
 | `services/intelligence/` | Python（uv 管理，Python 3.12）：受控执行服务、SQLite 执行账本、离线解析/嵌入适配；不接触业务数据库与源目录 |
 | `nix/` | Knoted 侧 provider 契约模块（当前作为部署契约与 preflight 参考，见 `docs/plans/knoted-v1/evidence/t12-deployment.md`） |

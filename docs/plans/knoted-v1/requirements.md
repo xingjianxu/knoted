@@ -32,7 +32,7 @@
 | R22 | BGE-M3 1024维；32K总上下文预留4K输出；单生成排队；资料不足明确说明 | T58、T62—T64 |
 | R23 | 删除来源后历史引用可看，但相关消息不再带入后续上下文 | T63、T64 |
 | R24 | 单账号Passkey、多凭据；命令首次注册/恢复；闲置7天绝对30天 | T13—T16 |
-| R25 | Tailwind自有UI，允许无样式库；BlockNote默认UI全部自定义 | T17—T19、T27—T29 |
+| R25 | 通用 UI 直接消费 npm `@bixlab/mtone`；Knoted 仅业务组合与适配，不自建通用库；缺口整理提示词交用户在 mtone 实现；BlockNote 关闭默认 UI，用 mtone 组合 | T17—T19、T27—T29 |
 | R26 | Vite、TanStack Router/Query、OpenAPI优先；下一页，不要求精确总数 | T02—T04、T20、T55 |
 | R27 | NixOS、API/Worker分进程、Python辅助、Postgres任务表有限重试 | T07—T12、T70 |
 | R28 | 图片应用专用目录；一致性手动备份与隔离恢复 | T26、T67—T69 |
@@ -41,13 +41,17 @@
 | R31 | 仅桌面；默认工作概览；实施笔记→事项→文件检索→RAG | T20、T41及任务索引 |
 | R32 | 不做性能测试；功能、边界和故障恢复验证必须完成 | T71 |
 
+### R25 变更记录（2026-11-16）
+
+用户明确要求使用 `@bixlab/mtone` npm 库，不在本项目实现通用 UI；缺少组件时由 Agent 整理提示词交用户添加，Agent 不直接修改 mtone。用户审阅分阶段方案后回复「请实施」，本阶段仅更新文档/Skill；接入与移除占位包由 T17 承接。此记录替代原 R25「Tailwind 自有 UI，允许无样式库」及 Base UI 应用侧包装提案，其他需求不变。见 [ADR 0002](../../decisions/0002-mtone-ui-ownership.md)、[UI 指南](../../development/ui-mtone.md)。开头授权段是原文档交付历史，后续任务及远程授权以根 AGENTS.md 和当前人工请求为准。
+
 ## 非目标
 
 不实现文件同步、原文件编辑、多用户、Android、手机适配承诺、Notion数据库块、实时协作、重复事项、外部提醒、用户可读导出、性能基准/压力测试。读取部署目录不是同步功能；归档不是删除；独立资料笔记不随项目删除。
 
 ## 设计者补充默认值
 
-下列为批准文档计划中的实现提案，不冒称用户逐个点名：Base UI无样式交互、React Hook Form/Zod、pnpm/uv、openapi-typescript/openapi-fetch、UUID、REST/SSE、RRF、无额外reranker、分开内容/历史/提取/嵌入版本、状态目录和短时凭据细节。见[契约](data-and-api.md)及[部署](development-and-deploy.md)。使用这些默认值实施；需改变产品或权限边界时先记录变更并取得相应确认。
+下列为批准文档计划中的实现提案，不冒称用户逐个点名：React Hook Form/Zod、pnpm/uv、openapi-typescript/openapi-fetch、UUID、REST/SSE、RRF、无额外reranker、分开内容/历史/提取/嵌入版本、状态目录和短时凭据细节。见[契约](data-and-api.md)及[部署](development-and-deploy.md)。使用这些默认值实施；需改变产品或权限边界时先记录变更并取得相应确认。
 
 ## 真实性
 

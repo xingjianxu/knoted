@@ -9,12 +9,20 @@
 T01/T02/T09建立以下命令；建立前不得声称可执行。每个任务卡的TEST命令是其目标入口，测试函数名统一含小写任务ID，避免过滤到零测试而误报通过。
 
 - Rust：`cargo test --workspace tXX_`，按任务实际ID小写替换；输出必须至少1测试通过。最终 `cargo fmt --check`、`cargo test --workspace --locked`、`cargo clippy --workspace --all-targets -- -D warnings`。
-- Web/UI：`pnpm exec vitest run tests/tasks/tXX.test.tsx`（对应包目录）；浏览器 `pnpm exec playwright test tests/e2e/tXX.spec.ts`（仓库根）。任务明确哪一入口，不把虚拟WebAuthn当真实设备验收。
+- Web/UI：`pnpm exec vitest run tests/tasks/tXX.test.tsx`（apps/web；T17—T19 也在此目录，不再在 packages/ui）；浏览器 `pnpm exec playwright test tests/e2e/tXX.spec.ts`（仓库根）。任务明确哪一入口，不把虚拟WebAuthn当真实设备验收。
 - Python：在services/intelligence运行 `uv run pytest tests/test_tXX.py -q`；静态 `uv run ruff check .`。
 - 契约：T03提供 `pnpm api:check`，验证OpenAPI及样例；T04提供 `pnpm api:generate` 与 `pnpm api:verify`（生成后要求 `git status --porcelain -- packages/api-client/src/generated` 为空，既检查过期内容也检查新增未跟踪文件，必须从干净工作区运行）。
 - 部署：host子任务在独立主机工作区执行nix eval/build，测试服务健康和定向功能；实际命令与固定ref写入该卡证据。
 
 根pnpm脚本聚合typecheck/lint/test/build；T02建立Vitest、Testing Library、Playwright基础，Python T09建立pytest入口。集成检查按受影响范围运行，不重复运行无关测试。
+
+## mtone 消费验收
+
+依据 [UI 指南](../../development/ui-mtone.md)。通用组件实现及其内部单测归 mtone；Knoted 验证真实发布包在本应用的消费行为，不复制上游组件测试来冒充业务集成。T17 核查实际锁版、React peers、CSS/Provider、应用主题与无远程字体；T18 覆盖 Portal、键盘和焦点返回；T19 覆盖树展开/选择、游标上下页、空/错/加载状态和危险操作取消。Vitest 检查接入逻辑，真实浏览器检查实际焦点/样式，不能以纯结构检查替代。
+
+T27—T29 继续验证中文输入法、选区、格式往返及菜单单次事件，UI 改为组合 mtone 不降低业务验收。Pagination 不得伪造 total；没有发布或没有公开 API 的能力按技术依赖记录，发布后锁版并复跑消费测试。上游任务提示词已交接不等于卡完成；正常 PR/主线/适用部署门槛保留。
+
+文档阶段检查任务 DAG、R25 映射、历史证据、Skill 分类及输出契约；不填 T17—T19 功能通过。Skill 场景模拟与 npm 运行验收分开报告。
 
 ## 高风险验收
 
