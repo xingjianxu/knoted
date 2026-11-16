@@ -1,12 +1,7 @@
-import { cn } from "@knoted/ui";
-
 export default function App() {
   return (
     <main
-      className={cn(
-        "flex min-h-screen items-center justify-center bg-canvas p-6",
-        "text-ink",
-      )}
+      className="flex min-h-screen items-center justify-center bg-canvas p-6 text-ink"
     >
       <section className="w-full max-w-xl rounded-panel border border-line bg-surface p-8">
         <h1 className="font-sans text-3xl font-semibold tracking-tight">

@@ -1,3 +1,6 @@
 packages:
   - apps/*
   - packages/*
+# T17 explicitly selects this inspected release; retain the age policy for all others.
+minimumReleaseAgeExclude:
+  - '@bixlab/mtone@0.2.0'

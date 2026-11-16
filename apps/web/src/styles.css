@@ -1,4 +1,18 @@
+@layer theme, base, mtone, components, utilities;
 @import "tailwindcss";
+@import "@bixlab/mtone/styles.css" layer(mtone);
+
+/* Typography adaptation only; control styling remains owned by mtone.
+   Include independent scopes used by portals, not just descendants of #root. */
+.mt-scope,
+.mt-btn,
+.mt-input,
+.mt-card,
+.mt-badge,
+.mt-list,
+.mt-table-wrap {
+  font-family: var(--font-sans);
+}
 
 @theme {
   --font-sans:

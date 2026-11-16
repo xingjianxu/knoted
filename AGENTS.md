@@ -2,7 +2,7 @@
 
 ## 项目与入口
 
-Knoted 当前为 Rust 2024 workspace（`crates/knoted-core`、`knoted-api`、`knoted-worker`）加 pnpm workspace（`apps/web`、`packages/ui`、`packages/api-client`）：已有配置装载、SQLx 迁移与实体注册表、浏览器/内部 OpenAPI 契约及生成客户端、axum 服务骨架与健康检查、任务队列与租约状态机、唯一账号 Passkey 认证与会话保护，以及 `services/intelligence/` 的 Python 执行服务（Docling+RapidOCR 离线解析、BGE-M3 dense 嵌入）。笔记、项目/事项、文件扫描与检索、RAG 生成尚未实现。任务状态见 [Knoted v1 计划](docs/plans/knoted-v1/README.md)，目录职责见 [架构现状](docs/architecture/README.md)。不要根据项目名称推断产品需求。管理体系采用语言无关的 Git、gh、Markdown 和标准 Agent Skills。
+Knoted 当前为 Rust 2024 workspace（`crates/knoted-core`、`knoted-api`、`knoted-worker`）加 pnpm workspace（`apps/web`、`packages/api-client`；Web 直接消费 `@bixlab/mtone@0.2.0`）：已有配置装载、SQLx 迁移与实体注册表、浏览器/内部 OpenAPI 契约及生成客户端、axum 服务骨架与健康检查、任务队列与租约状态机、唯一账号 Passkey 认证与会话保护，以及 `services/intelligence/` 的 Python 执行服务（Docling+RapidOCR 离线解析、BGE-M3 dense 嵌入）。笔记、项目/事项、文件扫描与检索、RAG 生成尚未实现。任务状态见 [Knoted v1 计划](docs/plans/knoted-v1/README.md)，目录职责见 [架构现状](docs/architecture/README.md)。不要根据项目名称推断产品需求。管理体系采用语言无关的 Git、gh、Markdown 和标准 Agent Skills。
 
 - `.agents/skills/`：项目管理流程；`docs/development/`：操作指南和平台适配。
 - `docs/decisions/`：ADR；`docs/rfcs/`：重大方案讨论；`docs/plans/`：复杂任务计划。
@@ -25,9 +25,9 @@ Knoted 当前为 Rust 2024 workspace（`crates/knoted-core`、`knoted-api`、`kn
 
 ## UI 组件归属
 
-通用 UI 使用 npm `@bixlab/mtone`，不在 Knoted 实现通用组件库或 `@knoted/ui` 转发层。现有 `packages/ui` 仅为待 T17 移除的 cn 占位包，迁移前也不得向其中新增组件。应用保留业务组合、API/Query、权限、游标与编辑器适配；Tailwind 只做应用布局及公开主题适配，不另建基础控件体系，不直接包装 Base UI/复制源码/patch 绕过 mtone。
+通用 UI 使用 npm `@bixlab/mtone`，不在 Knoted 实现通用组件库或 `@knoted/ui` 转发层。T17 已在任务分支移除 `packages/ui` cn 占位包并完成消费验收，实现就绪但仍待主线集成；不得重建占位包或转发层。应用保留业务组合、API/Query、权限、游标与编辑器适配；Tailwind 只做应用布局及公开主题适配，不另建基础控件体系，不直接包装 Base UI/复制源码/patch 绕过 mtone。
 
-新增或扩展组件前使用 [mtone-component-request](.agents/skills/mtone-component-request/SKILL.md)：核查锁定发布版本和组合能力；确有通用缺口时整理完整任务提示词交给用户并存档。Agent 不修改 mtone、不代建上游 Issue/PR、不发布 npm。未发布或未通过消费端验收时记录技术依赖阻塞，不能用 link/Git/未发布 tarball 或本地通用实现替代交付。见 [UI 指南](docs/development/ui-mtone.md)、[ADR 0002](docs/decisions/0002-mtone-ui-ownership.md)。本条不表示 T17—T19 已执行。
+新增或扩展组件前使用 [mtone-component-request](.agents/skills/mtone-component-request/SKILL.md)：核查锁定发布版本和组合能力；确有通用缺口时整理完整任务提示词交给用户并存档。Agent 不修改 mtone、不代建上游 Issue/PR、不发布 npm。未发布或未通过消费端验收时记录技术依赖阻塞，不能用 link/Git/未发布 tarball 或本地通用实现替代交付。见 [UI 指南](docs/development/ui-mtone.md)、[ADR 0002](docs/decisions/0002-mtone-ui-ownership.md)。T17 实现/验证/集成状态见任务卡；本条不表示 T18—T19 已执行。
 
 ## 远程操作授权
 

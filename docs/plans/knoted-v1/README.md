@@ -1,6 +1,6 @@
 # Knoted v1 文档与实施任务入口
 
-> 产品实施采用实际可用的 executing-plans 或 subagent-driven-development。当前 T01—T16 已完成、审查并集成到主线（远程 master 见下方「实施进展」）；T17—T72 仍待领取。
+> 产品实施采用实际可用的 executing-plans 或 subagent-driven-development。当前 T01—T16 已完成、审查并集成到主线（远程 master 见下方「实施进展」）；T17 实现就绪、待审查集成；T18—T72 仍待领取。
 
 ## 阅读顺序
 
@@ -10,7 +10,7 @@
 4. [索引与RAG](indexing-and-rag.md)
 5. [开发与部署](development-and-deploy.md)
 6. [验收](acceptance.md)
-7. 前端任务先读 [UI 开发指南](../../development/ui-mtone.md) 与 [ADR 0002](../../decisions/0002-mtone-ui-ownership.md)：通用组件消费 mtone，缺口交用户处理；T17—T19 尚未实施。
+7. 前端任务先读 [UI 开发指南](../../development/ui-mtone.md) 与 [ADR 0002](../../decisions/0002-mtone-ui-ownership.md)：通用组件消费 mtone，缺口交用户处理；T17 分支实现就绪、待集成；T18—T19 尚未实施。
 8. 按依赖领取下表单张任务卡；[文档交付记录](delivery.md)与产品状态分开。
 
 ## 约束与范围
@@ -41,7 +41,7 @@
 | [T14](tasks/T14.md) | Passkey注册与登录 | T13 | done（PR [#28](https://github.com/xingjianxu/knoted/pull/28)，集成 `e0fa445`） |
 | [T15](tasks/T15.md) | 会话与请求保护 | T14 | done（PR [#26](https://github.com/xingjianxu/knoted/pull/26)，集成 `32cbb6f`） |
 | [T16](tasks/T16.md) | 凭据管理与恢复 | T15 | done（PR [#29](https://github.com/xingjianxu/knoted/pull/29)，集成 `6ad602e`） |
-| [T17](tasks/T17.md) | mtone接入与基础表单验收 | T02 | pending |
+| [T17](tasks/T17.md) | mtone接入与基础表单验收 | T02 | in-progress（实现就绪，Issue [#41](https://github.com/xingjianxu/knoted/issues/41)，待独立审查/集成） |
 | [T18](tasks/T18.md) | mtone弹层菜单与通知集成 | T17 | pending |
 | [T19](tasks/T19.md) | mtone树列表与反馈集成 | T18 | pending |
 | [T20](tasks/T20.md) | 路由登录与应用外壳 | T04, T16, T19 | pending |
@@ -118,11 +118,11 @@
 
 主线整体验证（T16 合并后 `6ad602e`）：`cargo fmt --check`、`cargo test --workspace --locked`（85 passed）、`cargo clippy --workspace --all-targets -- -D warnings` 全部 exit 0；Python 侧 `uv run --group dev pytest`（T09/T10/T11 共 40 passed，CPU 与 GPU 嵌入两种环境各跑一次）与 `ruff check/format --check` exit 0。逐卡证据与限制写在各任务卡「执行证据」及 `/data/knoted-dev/tasks/knoted-t06-t16/{reports,reviews,evidence}/`；过程记录见 `/data/knoted-dev/tasks/knoted-t06-t16/ledger.md`。
 
-尚未执行：T17 起的后续任务；测试实例部署（T21 才建立，T06—T16 均为库/契约/Python 服务，无对外部署）。仍存在的跨任务限制：无真实硬件 Passkey 人工验证；Docling Office 格式由 T46—T48 承接；Strata 与 Knoted 的 provider 模块**已裁决统一并生效**（2026-11-15：host 独占部署 + app 侧纯客户端契约，`nixos-rebuild switch` 已激活，见 T12 证据 §11.3）。
+T17 已在任务分支实现并消费验收，见 [证据](evidence/t17.md)；独立审查与主线集成待主 Agent 承接。尚未执行：T18 起的后续任务；测试实例部署（T21 才建立，T06—T16 均为库/契约/Python 服务，无对外部署）。仍存在的跨任务限制：无真实硬件 Passkey 人工验证；Docling Office 格式由 T46—T48 承接；Strata 与 Knoted 的 provider 模块**已裁决统一并生效**（2026-11-15：host 独占部署 + app 侧纯客户端契约，`nixos-rebuild switch` 已激活，见 T12 证据 §11.3）。
 
 ## UI 规划调整（2026-11-16）
 
-用户确认通用 UI 改为直接消费 npm `@bixlab/mtone`，不在 Knoted 自建通用库。重写 T17—T19 但保留编号与依赖；同步下游 UI 卡、R25 和验收规则。当前代码仍有 cn 占位包，T17 才移除；本次文档/Skill 交付不表示产品卡完成。见 [变更计划](../2026-11-16-mtone-ui-plan.md)、[上游需求记录](mtone-requests/README.md)。
+用户确认通用 UI 改为直接消费 npm `@bixlab/mtone`，不在 Knoted 自建通用库。重写 T17—T19 但保留编号与依赖；同步下游 UI 卡、R25 和验收规则。规划调整交付时仍有 cn 占位包；现已由 T17 分支接入精确 npm 0.2.0 并移除占位包，基础表单消费验收实现就绪、待主线集成，不提前标产品卡完成。见 [变更计划](../2026-11-16-mtone-ui-plan.md)、[上游需求记录](mtone-requests/README.md)。
 
 外部能力缺口按消费任务记录技术依赖及 npm 发布/消费验收恢复条件；提示词交付或上游 master 合入不等于完成，不自动将全部下游任务标为 blocked，也不因此授权并行。T02/T04 历史记录保留。
 

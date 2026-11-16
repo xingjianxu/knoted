@@ -19,7 +19,7 @@ export default tseslint.config(
       "apps/web/src/**/*.{ts,tsx}",
       "apps/web/tests/**/*.{ts,tsx}",
       "apps/web/vite.config.ts",
-      "packages/ui/src/**/*.{ts,tsx}",
+      "tests/e2e/fixtures/**/*.{ts,tsx,mts}",
     ],
     plugins: {
       "react-hooks": reactHooks,
