@@ -31,7 +31,7 @@
 - [x] T1 pcwrap：先改场景测试验证缺证书/HTTPS 已占用仍可 prepare，再移除 HTTPS 进程、模板、启动与 reload 子命令、证书工具依赖，保留 artifact 与 API 端口检查。文件 tools/dev/pc、tests/pc、process-compose.yaml、pcwrap.config.json。
 - [x] T2 Host：knoted.nix 删除续期选项/单元，添加经桥接的 HTTPS vhost，复用 ACME、current 静态根；更新相关注释。nix eval 验证服务/续期/vhost/firewall，构建候选并以 caddy 用户 validate。依赖 T1 边界。
 - [x] T3 文档与决策：新增 ADR 0005，旧 ADR 只加替代关系；更新当前运行指南、架构和 AGENTS；历史证据不改写。
-- [ ] T4 验证与切换：保存完整命令输出；cargo fmt/test/clippy、pnpm test:pc/lint/typecheck/test，独立审查。候选只安装 boot、定向更新 Caddy 单元与 ACME postrun，停止旧 pcwrap HTTPS、reload 共享 Caddy，重载 pcwrap 三进程并验证 TLS、readiness、静态/深链/401、无 HTTP 回退、共享 PID。
+- [x] T4 验证与切换：保存完整命令输出；cargo fmt/test/clippy、pnpm test:pc/lint/typecheck/test，独立审查。候选只安装 boot、定向更新 Caddy 单元与 ACME postrun，停止旧 pcwrap HTTPS、reload 共享 Caddy，重载 pcwrap 三进程并验证 TLS、readiness、静态/深链/401、无 HTTP 回退、共享 PID。
 - [ ] T5 提交与集成：每次提交前读 git-commit；Host 本地合并 main（无直推），Knoted PR 普通 merge，主线复验后仅清理本任务 Worktree/分支。
 
 ## 证据与状态
@@ -42,4 +42,8 @@
 
 进展：Host eval：knotedUnits=[]、ACME reload=[caddy.service]；候选构建成功，dry-activate 仅列 caddy reload；应用七项门禁全部 exit 0。独立审查指出 ADR 索引空行导致表格断裂，已修正文档格式。
 
-Host 已本地合入 main 7a7fba5，boot 安装和定向 reload 成功；TLS、静态/API、共享 PID 与其它 vhost 复核通过。系统单元目录为 store symlink，逐项修改失败后按完整内容比较结果原子更新整目录链接。独立审查两项非阻断意见均已修复，受限 PATH 用例 mutation RED→GREEN，pc 测试22/22。剩余：Knoted PR 合并、主检出三进程 down/up、主线复验及本任务清理。
+Host 已本地合入 main 7a7fba5，boot 安装和定向 reload 成功；TLS、静态/API、共享 PID 与其它 vhost 复核通过。系统单元目录为 store symlink，逐项修改失败后按完整内容比较结果原子更新整目录链接。独立审查两项非阻断意见均已修复，受限 PATH 用例 mutation RED→GREEN，pc 测试22/22。当时待完成：Knoted PR 合并、主检出三进程 down/up、主线复验及本任务清理（后续完成项见下段）。
+
+PR #71 已合并至 a8643fc，主检出真实 down/up 后只有 prepare/migrate/knoted-api；停编排时静态站点仍200，启动后ready200。完整主线七项门禁全部 exit 0；最终文档PR和任务Worktree/分支清理后更新PR交付记录。
+
+最终文档补充已由独立 Reviewer 复核，数字、SHA、链接与运行证据一致。T5 清理实际结果在最终PR合并后读回记录，避免提前声明完成。
