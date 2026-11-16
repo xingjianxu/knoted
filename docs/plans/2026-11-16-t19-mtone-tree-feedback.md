@@ -52,15 +52,16 @@
   - `cursorReducer(state: CursorState, action: CursorAction): CursorState`：next非null压入当前cursor；next=null与首屏previous无操作；previous弹栈；不同filter重建初始状态，同filter不丢栈；不突变输入。
   - 夹具`?task=t19`使用此reducer，无total三页stub数据（真items/next_cursor形状）验证上下页；stub title映射到公开label/children等，业务DTO不进入mtone。
 
-- [ ] **Step 1: 核实公开能力与分类。** 读取锁定types/Tree等实现和需求索引，确认公开组合能满足；不因无同名PagedList开单。保留T18 pendingEsc等已验证边界。
-- [ ] **Step 2: 游标TDD。** 先写 reducer 行为测试：初始/三页next及previous、null next/首屏previous、opaque值不变、筛选变更/相同filter、Object.freeze输入不突变。模块缺失单独记录，建立可运行的最小占位后观察行为RED，再最小实现到GREEN；不把加载错误当行为RED。
-- [ ] **Step 3: 建立真实组件消费测试。** t19_1受控Tree展开不误选择/键盘/disabled；t19_2空/错/加载互斥明确；t19_3对象文案/取消/确认单次/pending/失败可见；t19_4无total列表上下页/筛选reset，测试不耦合未实现API；原本通过的上游特征如实标注。
-- [ ] **Step 4: 最小应用与夹具。** 仅新增cursor-state生产逻辑，测试stub映射实际公开props、useReducer管理游标，选择器?task=t19复用原服务。列表/反馈与Confirm都直接消费mtone，不新控件wrapper、不显示虚构总数。
-- [ ] **Step 5: 浏览器与回归门禁。** `(cd apps/web && pnpm exec vitest run tests/tasks/t19.test.tsx)`；全量Playwright（T17/T18/T19），真实Tree键盘/禁用、列表button状态/往返/筛选、反馈可见与确认cancel/fail/单次、主题/CSS/页面错误；分别pnpm typecheck/lint/test/build，E2Eeslint/tsc，cargo fmt/test --locked/clippy --locked --all-targets -- -D warnings。逐命令输出/exit/非零数留存，迭代用定向测试，最终一次全量。
-- [ ] **Step 6: 文档和本地提交。** T18事实：PR46/master4425ab9，主线前端24/Chromium11/Rust85+1既有ignored及全部门禁exit0，task/final/并发主线冲突增量审查均通过，两个T18Worktree/分支已清理、Issue43自动关闭/ProjectsDone。T19仅标实现就绪待集成；提交前读有效git-commit，自审范围/敏感信息。报告 `/data/knoted-dev/tasks/t19/worker-report.md`，主体精简，原始日志独立文件不要逐条整份复制。
+- [x] **Step 1: 核实公开能力与分类。** 读锁定 types/Tree 等实现和需求索引，公开组合可满足；无同名 PagedList 不开单。保留 T18 pendingEsc 等已验证边界。
+- [x] **Step 2: 游标TDD。** 先写 reducer 行为测试：初始/三页next及previous、null next/首屏previous、opaque值不变、筛选变更/相同filter、Object.freeze输入不突变。模块缺失建立可运行最小占位后观察真实行为 RED（4 failed / 2 passed），再最小实现到 GREEN（6 passed）；未把加载错误当行为 RED。
+- [x] **Step 3: 建立真实组件消费测试。** t19_1 受控 Tree 展开不误选择/键盘/disabled；t19_2 空/错/加载互斥明确；t19_3 对象文案/取消/确认单次/pending/失败可见；t19_4 无 total 列表上下页/筛选 reset；测试不耦合未实现 API。夹具占位时先观察 6 个组件测试真实失败，再实现；未伪称上游行为 RED。
+- [x] **Step 4: 最小应用与夹具。** 仅新增 cursor-state 生产逻辑；夹具 stub 映射实际公开 props、useReducer 管理游标、选择器 ?task=t19 复用原服务。列表/反馈与 Confirm 都直接消费 mtone，无新控件 wrapper、不显示虚构总数。
+- [x] **Step 5: 浏览器与回归门禁。** 定向 Vitest 12 passed；全量 Playwright（T17 4/T18 7/T19 4）15 passed；typecheck/lint/test（36）/build、E2E eslint+tsc、cargo fmt/test --locked（85+1 ignored）/clippy --locked --all-targets -- -D warnings 最终全部 exit 0。逐命令日志与 exit 在 `/data/knoted-dev/tasks/t19/worker/`，迭代用定向测试，最终一次全量。
+- [x] **Step 6: 文档和本地提交。** T18 事实（PR46/master4425ab9、主线前端24/Chromium11/Rust85+1既有ignored及全部门禁exit0、task/final/并发主线冲突增量审查均通过、两个T18Worktree/分支已清理、Issue43自动关闭/ProjectsDone）已回填 T18 卡/证据/本计划。T19 仅标实现就绪待集成；提交前读有效 git-commit，自审范围/敏感信息。报告 `/data/knoted-dev/tasks/t19/worker-report.md`，主体精简，原始日志独立文件。
 - [ ] **Step 7: 主Agent交付。** 独立diff/复验、task和whole-branch review，重要发现修复并复核；普通PR合并、主线再验证、安全清理；最后在合规独立文档任务分支回填T19最终生命周期与索引（若本卡已合并后才能取得事实），不在主线直接写文档。
 
 ## 进度与决定
 
-- 沿用既有设计，无新增跨模块/存储/生产边界。游标reducer作为应用适配，不是公共UI分页库。
-- 实施者仅本地写入和提交，所有远程/上游交接由主Agent核查；本卡未发现缺口时不发布上游需求。
+- 沿用既有设计，无新增跨模块/存储/生产边界。游标 reducer 作为应用适配，不是公共 UI 分页库。
+- 实施完成（2026-11-16）：cursor-state.ts 与夹具/测试/证据已就绪，t19_1—4 覆盖；T19 Vitest 12、全量 36、Chromium（T17+T18+T19）15，全部最终门禁 exit 0。剩余仅主 Agent 独立审查/PR/主线验证/清理（Step 7）。
+- 实施者仅本地写入和提交，所有远程/上游交接由主 Agent 核查；本卡未发现缺口，不发布上游需求。

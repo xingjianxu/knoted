@@ -7,17 +7,30 @@ import "../../src/styles.css";
 import { UiProvider } from "../../src/lib/ui-provider";
 import { T17Form } from "./t17-form";
 import { T18Overlays } from "./t18-overlays";
+import { T19TreeList } from "./t19-tree-list";
 
 const task = new URLSearchParams(window.location.search).get("task");
 
-createRoot(document.getElementById("root")!).render(
-  task === "t18" ? (
-    <StrictMode>
-      <UiProvider>
-        <T18Overlays />
-      </UiProvider>
-    </StrictMode>
-  ) : (
+function renderTask() {
+  if (task === "t18") {
+    return (
+      <StrictMode>
+        <UiProvider>
+          <T18Overlays />
+        </UiProvider>
+      </StrictMode>
+    );
+  }
+  if (task === "t19") {
+    return (
+      <StrictMode>
+        <UiProvider>
+          <T19TreeList />
+        </UiProvider>
+      </StrictMode>
+    );
+  }
+  return (
     <UiProvider>
       <T17Form />
       {createPortal(
@@ -27,5 +40,7 @@ createRoot(document.getElementById("root")!).render(
         document.body,
       )}
     </UiProvider>
-  ),
-);
+  );
+}
+
+createRoot(document.getElementById("root")!).render(renderTask());
