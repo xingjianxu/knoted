@@ -4,7 +4,7 @@
 
 测试实例的**应用**由本仓库的 `@bixlab/pcwrap` + process-compose 管理（[ADR 0003](../../decisions/0003-test-instance-process-management.md)）：配置渲染、迁移、API、独立 HTTPS 入口都在 `process-compose.yaml` 里，控制端口 `127.0.0.1:15600`。**外部依赖**（PostgreSQL 角色/库、Strata、机器级模型共享根、ACME 证书、防火墙）仍由 `/etc/nixos` 管理。**生产实例**将来才由 NixOS 运行，本次不部署。
 
-日常入口：`pnpm pc up -D`、`process list`、`process restart <name>`、`process logs <name>`、`down`。应用改动不需要再改 `/etc/nixos` 的 pin；只有外部依赖或生产启用才产生 host 任务。真实切换（PR #64）尚未执行时，运行态仍是旧 NixOS 单元，`pnpm pc up -D` 会因端口占用失败；切换结果记在 [证据](evidence/pcwrap-dev-service.md)。
+日常入口：`pnpm pc up -D`、`process list`、`process restart <name>`、`process logs <name>`、`down`。应用改动不需要再改 `/etc/nixos` 的 pin；只有外部依赖或生产启用才产生 host 任务。真实切换已随 PR #64 完成（运行 `4a546b2`），结果与回退入口记在 [证据](evidence/pcwrap-dev-service.md)。
 
 远程GitHub写默认授权；生产变更、仓库级设置与非 Knoted 服务重启仍按根 AGENTS.md 的确认边界。没有性能测试。所有代码编辑在主仓库 `.worktrees/<task>`。
 
