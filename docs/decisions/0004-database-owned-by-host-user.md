@@ -55,9 +55,7 @@
 
 ## 验证与后续任务
 
-已完成（合并前）：单元与选项删除（`nix eval` 只剩 `knoted-https-reload`）、默认连接串与迁移失败提示、测试与门禁；证据见 [db-host-user.md](../plans/knoted-v1/evidence/db-host-user.md)。
-
-合并后执行且不提前声明：备份 → `ALTER DATABASE` / `REASSIGN OWNED` / `DROP ROLE knoted_dev` → 用默认连接串重启实例 → 核对库/表/数据归属 `xingjian`、readiness 200、共享服务 PID 不变。结果追加到同一证据文件。
+已完成并复核，证据见 [db-host-user.md](../plans/knoted-v1/evidence/db-host-user.md)：单元与选项删除（`nix eval` 只剩 `knoted-https-reload`）、默认连接串与迁移失败提示、测试与门禁；备份与还原演练；`ALTER DATABASE` / `REASSIGN OWNED`（52 个对象）/ `DROP OWNED` / `DROP ROLE knoted_dev` 后库与表属主均为 `xingjian`、笔记数据保留、实例用默认连接串启动且 readiness 200、共享服务 PID 不变。
 
 ## 状态历史
 

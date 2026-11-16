@@ -1,6 +1,6 @@
 # 数据库改由宿主用户直接创建（Issue #66）
 
-状态：实施完成；数据库属主迁移与实例重启是交付最后一步，完成后在本文件追加实测结果。
+状态：已完成（PR [#67](https://github.com/xingjianxu/knoted/pull/67) 普通 merge 至 master `46d8eb9`；属主迁移与实例重启见文末）。
 
 决策：[ADR 0004](../../../decisions/0004-database-owned-by-host-user.md)（部分替代 [ADR 0003](../../../decisions/0003-test-instance-process-management.md) 的数据库 provisioning 归属）。
 
@@ -23,9 +23,33 @@
 | `nix eval …systemd.services`（knoted*） | `["knoted-https-reload"]`（`knoted-db` 已消失），输出存档 `/data/knoted-dev/tasks/pcwrap/host-evidence/nix-eval-knoted-units.json` |
 | boot 候选 | `wiqsw3wd…`（host `0e95cde`），日志在 `/data/knoted-dev/tasks/pcwrap/host-evidence/boot-install.log`；非全机 switch |
 
-## 数据库属主迁移与实例重启
+## 数据库属主迁移与实例重启（2026-11-16 22:1x）
 
-待执行：备份 `knoted_dev` → `ALTER DATABASE knoted_dev OWNER TO xingjian` + `REASSIGN OWNED BY knoted_dev TO xingjian` → `DROP ROLE knoted_dev` → 用默认连接串 `pnpm pc down && pnpm pc up -D` → readiness/数据/共享服务核对。
+备份：`/data/knoted-dev/tasks/pcwrap/evidence/knoted_dev-pre-dbowner-20261116T135656Z.dump`（46990 B），还原演练通过（独立库 10 表 / 1 行笔记 / 迁移 1—5，演练库已删除）。
+
+迁移（以 `xingjian` 身份，`ON_ERROR_STOP=1`）：
+
+```sql
+ALTER DATABASE knoted_dev OWNER TO xingjian;          -- ALTER DATABASE
+REASSIGN OWNED BY knoted_dev TO xingjian;             -- 52 个对象（10 表 + 索引/序列）
+DROP OWNED BY knoted_dev;                             -- 撤销残留授权
+DROP ROLE knoted_dev;                                 -- DROP ROLE
+```
+
+实例重启：主检出 `pnpm pc down && pnpm pc up -D`（`prepare` 重新渲染配置，默认连接串即 `postgres://xingjian@127.0.0.1:5432/knoted_dev`）。
+
+| 检查 | 结果 |
+|---|---|
+| `pg_database` 属主 | `knoted_dev → xingjian` |
+| public 表属主 | 10/10 属 `xingjian` |
+| `notes` 行数 | 1（切换前同为 1，未丢数据） |
+| `pg_roles` 中 `knoted_dev` | 0 行（角色已删除） |
+| HTTPS `/health/ready` / `/` | 200 / 200 |
+| `X-Knoted-Revision` | `4a546b2f0efdc07a3c9fe0527654a89b6f8c4eb4`（应用产物；本次提交只改 dev 脚本与文档，未重建产物） |
+| `/api/v1/auth/session` | 401 |
+| 共享服务 | `postgresql` 1167036 / `caddy` 1706466 / `strata` 1180032，PID 与迁移前一致 |
+| 应用进程身份 | `xingjian`，`/data/knoted-dev/runtime/current/bin/knoted-api` |
+| `systemctl list-unit-files '*knoted*'` | 仅 `knoted-https-reload.service` |
 
 ## 回退
 
