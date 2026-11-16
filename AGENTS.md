@@ -27,13 +27,13 @@ Knoted 当前为 Rust 2024 workspace（`crates/knoted-core`、`knoted-api`、`kn
 
 通用 UI 使用 npm `@bixlab/mtone`，不在 Knoted 实现通用组件库或 `@knoted/ui` 转发层。T17 已在任务分支移除 `packages/ui` cn 占位包并完成消费验收，实现就绪但仍待主线集成；不得重建占位包或转发层。应用保留业务组合、API/Query、权限、游标与编辑器适配；Tailwind 只做应用布局及公开主题适配，不另建基础控件体系，不直接包装 Base UI/复制源码/patch 绕过 mtone。
 
-新增或扩展组件前使用 [mtone-component-request](.agents/skills/mtone-component-request/SKILL.md)：核查锁定发布版本和组合能力；确有通用缺口时整理完整任务提示词交给用户并存档。Agent 不修改 mtone、不代建上游 Issue/PR、不发布 npm。未发布或未通过消费端验收时记录技术依赖阻塞，不能用 link/Git/未发布 tarball 或本地通用实现替代交付。见 [UI 指南](docs/development/ui-mtone.md)、[ADR 0002](docs/decisions/0002-mtone-ui-ownership.md)。T17 实现/验证/集成状态见任务卡；本条不表示 T18—T19 已执行。
+新增或扩展组件前使用 [mtone-component-request](.agents/skills/mtone-component-request/SKILL.md)：核查锁定发布版本和组合能力；确有通用缺口时同时完成三步——存档完整任务提示词、把提示词直接发给用户、在 <https://github.com/xingjianxu/mtone> 提交 feature Issue（先查重、英文正文、仅用既有 `enhancement` 标签、回写编号与 URL）。Agent 不修改 mtone 源码、不代发上游 PR、不发布 npm，也不在上游增删标签或改动仓库设置。未发布或未通过消费端验收时记录技术依赖阻塞，不能用 link/Git/未发布 tarball 或本地通用实现替代交付。见 [UI 指南](docs/development/ui-mtone.md)、[ADR 0002](docs/decisions/0002-mtone-ui-ownership.md)。T17 实现/验证/集成状态见任务卡；本条不表示 T18—T19 已执行。
 
 ## 远程操作授权
 
 远程操作默认授权，不再逐次索取许可。可直接执行：push 到非默认分支、创建/编辑/关闭 Issue、修改 Labels 与优先级、写 Projects 字段、创建 PR、合并 PR（普通 merge）、删除已合并的远程分支。合并前必须已通过本地必需检查（规则 8）并留存输出。
 
-仍需逐次授权的对象限于仓库级设置：ruleset 与分支保护、webhook、协作者与权限、Actions 设置、仓库可见性与删除、标签名的增删（标签赋值不在此列）。这些不因“默认授权”而放开。
+仍需逐次授权的对象限于仓库级设置：ruleset 与分支保护、webhook、协作者与权限、Actions 设置、仓库可见性与删除、标签名的增删（标签赋值不在此列）。上游 `xingjianxu/mtone` 仓库的默认授权只覆盖创建 feature Issue（先查重、英文正文、仅用既有标签、回写链接），不包含其标签增删、仓库设置、PR 与 npm 发布。这些不因“默认授权”而放开。
 
 默认授权的例外：用户在当前会话明确禁止某个对象或动作时，以用户指令为准，并在交付报告中记录该限制。本质仍是「用户指令优先于默认值」。
 

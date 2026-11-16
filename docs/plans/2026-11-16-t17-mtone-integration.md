@@ -13,11 +13,11 @@
 ## Global Constraints
 
 - 所有修改在主仓库根 `.worktrees/` 下独立分支；写 Subagent 独立 Worktree；不直推 master。
-- 不修改 mtone、不创建上游 Issue/PR、不发布、不私有导入/patch/包装 Base UI，不创建 @knoted/ui 转发层。
+- 不修改 mtone、不创建上游 Issue/PR、不发布、不私有导入/patch/包装 Base UI，不创建 @knoted/ui 转发层。（2026-11-16 后续规则变更：证实通用缺口后必须在上游 mtone 提 feature Issue；本行仅记录 T17 执行期的约束，现行规则见 [UI 指南](../development/ui-mtone.md)。）
 - 正式 npm 精确锁版；不得 link/Git/未发布 tarball；不改 HTTP/数据库/Python 契约。
 - Tailwind 仅布局/公开主题适配；系统字体且无远程字体请求。
 - 不扩大到业务路由、编辑器或后续产品功能；T17 集成后再领取 T18，T18 集成后再领取 T19。
-- 真实通用缺口遵循 mtone-component-request，保留成果并记录技术阻塞。
+- 真实通用缺口遵循 mtone-component-request：存档提示词、告知用户、提上游 feature Issue，保留成果并记录技术阻塞。
 - 不编造 RED→GREEN、零测试、浏览器/部署结果；T21 前没有测试实例。
 
 ## Review Focus
