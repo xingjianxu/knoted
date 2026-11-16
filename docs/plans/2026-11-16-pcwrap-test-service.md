@@ -76,16 +76,16 @@
 
 ### 任务 4：切换（运行态）
 
-- [ ] 记录旧状态（单元、PID、运行 SHA、迁移版本、共享服务）、备份 `knoted_dev` 与 assets。
-- [ ] 构建固定产物 `2ceb833`，`prepare` 校验通过。
-- [ ] 停旧单元 → `pnpm pc up -D` → readiness/HTTPS/Passkey/CRUD 验证。
-- [ ] 共享服务 PID/状态比对为空差异；记录证据。
+- [x] 记录旧状态（单元、PID、运行 SHA、迁移版本、共享服务）、备份 `knoted_dev` 与 assets。
+- [x] 构建固定产物 `4a546b2`（合并后的 master），`prepare` 校验通过。
+- [x] 停旧单元 → `pnpm pc up -D`（主检出、宿主用户）→ HTTPS/readiness/受保护路由/无 HTTP 回退验证；Passkey 未做人工验证，见限制。
+- [x] 共享服务 PID/状态比对为空差异；`down`/`up` 完整周期与真实续期单元均验证。
 
 ### 任务 5：文档与收尾
 
-- [ ] ADR 0003、本计划、`docs/plans/knoted-v1/development-and-deploy.md`、架构现状、AGENTS 端口段与运行入口。
-- [ ] 本地门禁：`pnpm test:pc`、`pnpm typecheck/lint/test/build`、`cargo fmt --check`、`cargo test --workspace --locked`、`cargo clippy --all-targets -- -D warnings`、`git diff --check`。
-- [ ] 独立审查（requesting-code-review）、PR、普通 merge、主线复验、Worktree/分支清理。
+- [x] ADR 0003、本计划、`docs/plans/knoted-v1/development-and-deploy.md`、架构现状、AGENTS 端口段与运行入口。
+- [x] 本地门禁：`pnpm test:pc`（20 用例）、`pnpm typecheck/lint/test/build`、`cargo fmt --check`、`cargo test --workspace --locked`（125）、`cargo clippy --all-targets -- -D warnings`、`git diff --check`。
+- [x] 独立审查两轮（首轮 3 个 P1 + 6 个 P2 全部修复并复核）、PR #64 普通 merge、主线复验；任务 Worktree/分支清理在本收尾 PR 合入后执行，读回结果记 PR。
 
 ## 风险与回退
 

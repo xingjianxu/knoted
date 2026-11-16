@@ -1,6 +1,6 @@
 # 测试实例 pcwrap 迁移证据（Issue #63）
 
-状态：实施与隔离验证完成；真实切换是交付的最后一步，完成后在本文件追加实测结果（未执行前不勾选）。
+状态：已完成（PR [#64](https://github.com/xingjianxu/knoted/pull/64) 普通 merge 至 master `4a546b2`；真实切换与主线验证见文末）。
 
 计划：[2026-11-16-pcwrap-test-service.md](../../2026-11-16-pcwrap-test-service.md)；
 决策：[ADR 0003](../../../decisions/0003-test-instance-process-management.md)。
@@ -69,9 +69,37 @@
 - 非 Knoted 单元差异（`unit-list.diff`、`content-diff.list`）：仅 `knoted-api/https/migrate/prepare` 移除、`knoted-https-reload` 新增；其余差异为激活/系统路径哈希（tmpfiles、home-manager 生成、acme-postrun 路径），共享服务（postgresql、caddy、strata）单元内容一致。
 - boot profile 逐次安装为 `plx4r25…`（首次）→ `zgh9s6zg…`（补 `wantedBy`）→ `200mywwgi…`（补续期单元 `path`，当前生效），均只做 boot，不执行全机 `switch`（`boot-install.log`）。
 
-## 真实切换
+## 真实切换（2026-11-16 21:24—21:27）
 
-（待执行：记录旧状态、备份、撤除旧单元、pcwrap 启动、HTTPS/readiness/认证验证、共享服务 PID 比对。）
+固定产物：`4a546b2f0efdc07a3c9fe0527654a89b6f8c4eb4`（合并后的 master），`tools/dev/build-artifact.sh` 构建到 `/data/knoted-dev/tasks/pcwrap/artifact-4a546b2f0efd`，安装为 `/data/knoted-dev/runtime/4a546b2f0efd/` 并由 `current` 指向（`artifact-build.log`）。
+
+顺序与结果（`evidence/cutover-pre.txt`、`cutover-post.txt`）：
+
+1. 备份：`pg_dump --format=custom knoted_dev`（46990 B，`pg_restore --list` 校验）写入 `service/backups/20261116T125428Z-pcwrap/`，assets 为空（`assets.count`）。
+2. 撤除旧单元：`knoted-https/api/migrate/prepare` 停止、`disable`、删除 `/etc/systemd/system` 与 `multi-user.target.wants` 软链；`/etc/systemd/system` 只剩 `knoted-db.service` 与 `knoted-https-reload.service`（从 boot 候选重新链接）。
+3. 实例目录 `chown -R xingjian:users`，旧的 Nix store 配置链接删除，由 `prepare` 重新渲染为 `0600` 真实文件。
+4. `pnpm pc up -D`（从主检出 `/wrd/prj/knoted` 运行，非工作树）：`prepare` 校验产物清单、渲染配置与 Caddyfile、校验证书与端口；`migrate` 报告 1—5 已安装；API 与 HTTPS 就绪。
+
+切换中发现并修正一处操作错误：首次 `cutover.sh` 用了 `sudo bash`，导致 pcwrap 以 root 启动、`prepare` 写出 root 拥有的 `bin/`，续期单元以 `xingjian` 执行时 permission denied（126）。已 `pcwrap down` 停止该实例、`chown -R xingjian:users` 并把脚本改为“以宿主用户运行、内部按需 sudo”后重跑；此后一切以宿主用户身份运行。
+
+| 检查 | 结果 |
+|---|---|
+| HTTPS `/health/ready` | 200 `{"status":"ready"}` |
+| HTTPS `/`（静态站点） | 200，返回应用 index |
+| `X-Knoted-Revision` | `4a546b2f0efdc07a3c9fe0527654a89b6f8c4eb4`（= 运行产物） |
+| `/api/v1/auth/session`（未登录） | 401（认证仍生效） |
+| 明文 HTTP 到 15601 | 400（无 HTTP 回退） |
+| 监听地址 | 15600 `127.0.0.1`、15602 `127.0.0.1`、15601 `*`（公网入口） |
+| `systemctl start knoted-https-reload` | exit 0（真实单元属性：`ProtectSystem=strict`、`PrivateTmp`、无登录 PATH） |
+| `pnpm pc process restart knoted-api` | 重启后 readiness 200，`sqlx migrate info` 仍为 1—5（未隐式迁移） |
+| `pnpm pc down` → `pnpm pc up -D` | 端口释放后完整重建成功，HTTPS 200、版本头不变 |
+| 共享服务 | `postgresql` PID 1167036、`caddy` 1706466、`strata` 1180032，切换前后一致 |
+| 旧单元 | 四个均 inactive，软链已移除 |
+
+## 主线验证
+
+- PR #64 普通 merge 至 master `4a546b2`；Issue #63 随合并关闭。
+- 切换后主线门禁与运行读回：见收尾 PR 的复验记录（前端 54、Rust 125、`test:pc` 20 用例、typecheck/lint/build/api 与 `git diff --check`）。
 
 ## 已知限制
 
