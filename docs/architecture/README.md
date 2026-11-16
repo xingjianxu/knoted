@@ -11,7 +11,7 @@ UI 目标已按 [ADR 0002](../decisions/0002-mtone-ui-ownership.md) 改为应用
 | `api/`、`migrations/` | 浏览器与内部契约、数据库迁移（`0001` registry、`0002` jobs/outbox、`0003` auth、`0004` job retry、`0005` notes） |
 | `services/intelligence/` | Python（uv 管理，Python 3.12）：受控执行服务、SQLite 执行账本、离线解析/嵌入适配；不接触业务数据库与源目录 |
 | `nix/` | Knoted 侧 provider 契约模块与包/模块（ADR 0003：**只给将来的生产实例**用，测试实例不再由 NixOS 运行；见 `docs/plans/knoted-v1/evidence/t12-deployment.md`） |
-| `pcwrap.config.json`、`process-compose.yaml`、`tools/dev/pc/` | 测试实例的运行编排（ADR 0003）：控制端口 15600、配置/Caddyfile 模板、证书校验、固定产物校验、迁移与 reload 入口 |
+| `pcwrap.config.json`、`process-compose.yaml`、`tools/dev/pc/` | 测试实例的运行编排（ADR 0003）：控制端口 15600、应用配置模板、固定产物校验、API 端口检查与迁移；HTTPS 由宿主共享 Caddy 管理（ADR 0005） |
 | `tests/pc/` | 编排配置、模板渲染、证书校验、端口占用与迁移失败的场景测试（`pnpm test:pc`） |
 | `Cargo.toml`、`package.json` | 构建元数据与锁定依赖；技术栈迁移需单独评估 |
 | `AGENTS.md` / `.agents/skills/` | 开发规则及项目管理流程，不加入运行时依赖 |
@@ -24,3 +24,5 @@ UI 目标已按 [ADR 0002](../decisions/0002-mtone-ui-ownership.md) 改为应用
 测试实例的运行管理边界见 [ADR 0003](../decisions/0003-test-instance-process-management.md)：应用由 `@bixlab/pcwrap` + process-compose 在 `127.0.0.1:15600` 编排（HTTPS 15601、API 15602），数据库由宿主用户直接创建（[ADR 0004](../decisions/0004-database-owned-by-host-user.md)），Strata/模型共享根/ACME 仍由 `/etc/nixos` 管理，生产实例将来才由 NixOS 运行。真实切换已随 PR #64 完成（运行 `4a546b2`，[证据](../plans/knoted-v1/evidence/pcwrap-dev-service.md)）。
 
 T23 的 `notes::service::{create,get,list,update,delete}` 消费 `AppContext` 与命名输入，复用 T22 文档校验；SQL 在 `notes::repository`，service 负责事务，HTTP 返回 T03 的 Note/NotePage、ETag 与统一错误。创建/软删除使用同一 notes 树事务锁维护父可见性与同级 position；未来 T24 结构写必须遵守相同锁顺序。内容更新以 ID/version/live CAS，实体注册、语义版本和 outbox 同事务。`note.changed` 当前只保留未发布事件，索引消费属后续卡；测试入口 `crates/knoted-api/tests/t23.rs`。详见 [T23证据](../plans/knoted-v1/evidence/t23.md)。
+
+HTTPS 管理归属已由 [ADR 0005](../decisions/0005-https-owned-by-caddy.md) 调整：宿主共享 Caddy 提供 15601、静态 SPA 和 API/health 代理；pcwrap 仅准备应用配置、迁移与 API，不再包含 knoted-https 或专用 reload。

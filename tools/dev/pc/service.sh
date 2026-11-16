@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Knoted 测试实例的编排入口（由 process-compose 调用，人用 `pnpm pc …`）。
 #
-# 只负责测试应用：渲染运行配置与 Caddyfile、校验固定产物、准备目录、
-# 执行迁移、运行 API 与独立 HTTPS 入口。
+# 只负责测试应用：渲染运行配置、校验固定产物、准备目录、
+# 执行迁移、运行 API；HTTPS 由宿主共享 Caddy 管理（ADR 0005）。
 # 数据库由宿主用户直接创建（ADR 0004，本机用 trust 认证连接 `xingjian`），
 # 编排只负责跑迁移，不建库、不建角色；Strata、共享模型根、ACME 证书与运行期工具
 # 仍由 /etc/nixos 提供。
@@ -14,7 +14,6 @@
 #   KNOTED_API_PORT       15602
 #   KNOTED_HTTPS_PORT     15601
 #   KNOTED_HTTPS_DOMAIN   wlab.132140.xyz
-#   KNOTED_CERT_DIR       /var/lib/acme/<domain>
 #   DATABASE_URL          postgres://xingjian@127.0.0.1:5432/knoted_dev
 #   KNOTED_LOG_LEVEL      info
 set -euo pipefail
@@ -24,7 +23,7 @@ export LC_ALL=C
 # 模板替换用的是 ${var//search/replace}，含 & 的 DATABASE_URL 会被破坏。
 shopt -u patsub_replacement 2>/dev/null || true
 
-# 运行期工具（caddy/sqlx/openssl）由 /etc/nixos 提供。它们不一定在调用者的 PATH 里
+# 运行期工具（sqlx/curl/iproute2）由 /etc/nixos 提供。它们不一定在调用者的 PATH 里
 # （例如刚安装 boot 候选、尚未 switch 时），所以把这两个稳定 bin 目录**追加**到 PATH：
 # 调用者自己的 PATH 仍优先（测试可以放 stub），缺工具时再从这里兜底。
 # 两个来源都可用环境变量覆盖，测试据此把兜底关掉，保证同一套断言在切换前后都成立。
@@ -44,9 +43,6 @@ runtime_root=${KNOTED_RUNTIME_ROOT:-/data/knoted-dev/runtime/current}
 api_port=${KNOTED_API_PORT:-15602}
 https_port=${KNOTED_HTTPS_PORT:-15601}
 domain=${KNOTED_HTTPS_DOMAIN:-wlab.132140.xyz}
-cert_dir=${KNOTED_CERT_DIR:-/var/lib/acme/$domain}
-cert_file=$cert_dir/fullchain.pem
-key_file=$cert_dir/key.pem
 # 开发/测试库由宿主用户直接创建与管理（ADR 0004）：沿用本机 trust 认证，
 # 不再有专用 knoted_dev 角色，也没有 NixOS 侧的 provisioning 单元。
 database_url=${DATABASE_URL:-postgres://xingjian@127.0.0.1:5432/knoted_dev}
@@ -54,15 +50,12 @@ log_level=${KNOTED_LOG_LEVEL:-info}
 
 config_dir=$instance_root/config
 state_dir=$instance_root/state
-bin_dir=$instance_root/bin
 logs_dir=$instance_root/logs
 assets_dir=$instance_root/assets
 staging_dir=$instance_root/staging
 backups_dir=$instance_root/backups
-admin_socket=$state_dir/https/admin.sock
 
 config_file=$config_dir/knoted.toml
-caddy_file=$config_dir/Caddyfile
 
 die() {
   printf 'knoted-pc: %s\n' "$1" >&2
@@ -76,11 +69,9 @@ log() {
 # 运行期依赖一次性前置检查：缺工具时在写任何文件之前就失败，不留半个实例。
 require_tools() {
   local missing=""
-  command -v openssl >/dev/null || missing="$missing openssl"
-  command -v caddy >/dev/null || missing="$missing caddy"
   command -v curl >/dev/null || missing="$missing curl"
   command -v ss >/dev/null || missing="$missing iproute2(ss)"
-  test -z "$missing" || die "缺少运行期依赖：${missing# }（由 /etc/nixos 提供：openssl / caddy / curl / iproute2）"
+  test -z "$missing" || die "缺少运行期依赖：${missing# }（由 /etc/nixos 提供：curl / iproute2）"
 }
 
 # 稳定实例不得从任务工作树运行（AGENTS.md 规则 4/11）。
@@ -160,9 +151,9 @@ check_ports() {
     return 0
   fi
   local port
-  for port in "$api_port" "$https_port"; do
+  for port in "$api_port"; do
     if ss -H -ltn "sport = :$port" | grep -q .; then
-      die "端口 $port 已被占用；先停止占用者（本实例用 pnpm pc down；历史 NixOS 单元用 systemctl stop knoted-api knoted-https）"
+      die "端口 $port 已被占用；先停止占用者（本实例用 pnpm pc down）"
     fi
   done
 }
@@ -175,11 +166,7 @@ command_prepare() {
   log "固定产物 revision=$revision"
   require_tools
   prepare_instance_root
-  local web_root
-  web_root=$(readlink -f "$runtime_root/share/knoted/web")
-
-  install -d -m 0700 "$config_dir" "$state_dir" "$state_dir/https" \
-    "$state_dir/https/data" "$state_dir/https/config" "$bin_dir" \
+  install -d -m 0700 "$config_dir" "$state_dir" \
     "$logs_dir" "$assets_dir" "$staging_dir" "$backups_dir"
 
   if [ -L "$config_file" ]; then
@@ -193,66 +180,8 @@ command_prepare() {
     @HTTPS_PORT@ "$https_port" \
     @LOG_LEVEL@ "$log_level"
 
-  render_template "$script_dir/Caddyfile.tmpl" "$caddy_file" \
-    @ADMIN_SOCKET@ "$admin_socket" \
-    @DOMAIN@ "$domain" \
-    @HTTPS_PORT@ "$https_port" \
-    @CERT_FILE@ "$cert_file" \
-    @KEY_FILE@ "$key_file" \
-    @REVISION@ "$revision" \
-    @API_PORT@ "$api_port" \
-    @WEB_ROOT@ "$web_root"
-
-  "$script_dir/check-certificate.sh" "$cert_file" "$key_file" "$domain"
   check_ports
-  command_install_launchers
-
-  log "prepare 完成：配置 $config_file，Caddyfile $caddy_file"
-}
-
-command_install_launchers() {
-  install -d -m 0700 "$bin_dir"
-  install -m 0755 "$script_dir/check-certificate.sh" "$bin_dir/check-certificate"
-  # reload 由 host 的 ACME oneshot 调用，PATH 不可控：把 prepare 时解析到的
-  # openssl/caddy 目录写进启动脚本（缺 caddy 时留空，`https` 子命令会自行报错）。
-  local openssl_bin caddy_bin launcher_path
-  openssl_bin=$(command -v openssl || true)
-  test -n "$openssl_bin" || die "需要 openssl（由 /etc/nixos 提供：pkgs.openssl）"
-  caddy_bin=$(command -v caddy || true)
-  if [ -n "$caddy_bin" ]; then
-    launcher_path="$(dirname "$openssl_bin"):$(dirname "$caddy_bin"):\$PATH"
-  else
-    log "警告：当前 PATH 没有 caddy，reload 入口仅写裸命令 caddy（启动 https 时会失败）"
-    launcher_path="$(dirname "$openssl_bin"):\$PATH"
-  fi
-  # ACME 续期后由 /etc/nixos 的 oneshot 调用；不依赖仓库路径，只依赖稳定实例路径。
-  # 该单元在 ProtectSystem=strict 下运行（/data 只读），所以这里只读证书、连 admin
-  # socket，不写锁文件、不建目录；幂等重复 reload 由 caddy 自身处理。
-  local reload tmp
-  reload=$bin_dir/knoted-https-reload
-  (
-    umask 077
-    tmp=$(mktemp "$bin_dir/.reload.XXXXXX")
-    cat >"$tmp" <<EOF
-#!/usr/bin/env bash
-# 由 tools/dev/pc/service.sh 生成的稳定入口（ACME 续期后 reload 测试 HTTPS）。
-set -euo pipefail
-bin_dir=\${BASH_SOURCE[0]%/*}
-export PATH="$launcher_path"
-"\$bin_dir/check-certificate" "$cert_file" "$key_file" "$domain"
-exec caddy reload --config "$caddy_file" --adapter caddyfile \\
-  --address "unix/$admin_socket" --force
-EOF
-    chmod 0755 "$tmp"
-    mv -f "$tmp" "$reload"
-  )
-}
-
-command_reload_https() {
-  local reload
-  reload=$bin_dir/knoted-https-reload
-  test -x "$reload" || die "缺少 $reload；先运行 pnpm pc up -D 生成（prepare 步骤）"
-  exec "$reload"
+  log "prepare 完成：配置 $config_file；HTTPS 由宿主 Caddy 管理"
 }
 
 command_migrate() {
@@ -274,52 +203,29 @@ command_api() {
   exec "$runtime_root/bin/knoted-api" --config "$config_file"
 }
 
-command_https() {
-  command -v caddy >/dev/null || die "需要 caddy（由 /etc/nixos 提供：pkgs.caddy）"
-  test -r "$caddy_file" || die "缺少 Caddyfile $caddy_file；先完成 prepare"
-  # 重启 https 也要重新校验证书，不能只依赖 prepare 当时的结果。
-  "$script_dir/check-certificate.sh" "$cert_file" "$key_file" "$domain"
-  export XDG_DATA_HOME=$state_dir/https/data
-  export XDG_CONFIG_HOME=$state_dir/https/config
-  exec caddy run --config "$caddy_file" --adapter caddyfile
-}
-
 command_probe_api() {
   curl -fsS --max-time 3 "http://127.0.0.1:$api_port/health/ready" >/dev/null
-}
-
-command_probe_https() {
-  curl -fsS --max-time 5 --resolve "$domain:$https_port:127.0.0.1" \
-    "https://$domain:$https_port/health/ready" >/dev/null
 }
 
 command_paths() {
   printf 'instance_root=%s\n' "$instance_root"
   printf 'runtime_root=%s\n' "$runtime_root"
   printf 'config_file=%s\n' "$config_file"
-  printf 'caddy_file=%s\n' "$caddy_file"
-  printf 'admin_socket=%s\n' "$admin_socket"
   printf 'api_port=%s\n' "$api_port"
   printf 'https_port=%s\n' "$https_port"
   printf 'domain=%s\n' "$domain"
-  printf 'cert_file=%s\n' "$cert_file"
-  printf 'key_file=%s\n' "$key_file"
   printf 'database_url=%s\n' "$(printf '%s' "$database_url" | sed -E 's#(://)[^/@]*@#\1***@#')"
 }
 
 command=${1:-}
 case "$command" in
 prepare) command_prepare ;;
-install-launchers) command_install_launchers ;;
-reload-https) command_reload_https ;;
 migrate) command_migrate ;;
 api) command_api ;;
-https) command_https ;;
 probe-api) command_probe_api ;;
-probe-https) command_probe_https ;;
 paths) command_paths ;;
 *)
-  echo "usage: service.sh {prepare|install-launchers|reload-https|migrate|api|https|probe-api|probe-https|paths}" >&2
+  echo "usage: service.sh {prepare|migrate|api|probe-api|paths}" >&2
   exit 2
   ;;
 esac
