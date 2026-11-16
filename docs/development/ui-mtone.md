@@ -4,6 +4,8 @@
 
 ## 现状与目标
 
+当前精确依赖为 **`@bixlab/mtone@0.3.0`**（`apps/web/package.json` / `pnpm-lock.yaml`），升级适配与消费复验见 [0.3.0 证据](../plans/knoted-v1/evidence/mtone-0.3.0.md)。以下 T17—T19 的 0.2.0 版本和集成 SHA 是历史记录，不代表当前锁版。
+
 T17 已精确接入 npm `@bixlab/mtone@0.2.0`，迁移 App 静态类并移除 `packages/ui`；**PR #42 已普通 merge 至主线 `e3e1db2`，独立审查/主线验证/任务清理完成**。生产入口使用应用层 `UiProvider` 配置公开 `MtoneProvider` 的 locale/density/tokens，不转发控件 API；CSS 从应用样式入口导入。基础表单组合仅在测试夹具中，不建立生产演示路由或通用包装库。证据见 [T17](../plans/knoted-v1/evidence/t17.md)。
 
 T18 实施在同一 `UiProvider` 内注册公开 `ToastProvider`，不增加通知总线或统一弹层 API；**PR #46 已普通 merge 至主线 `4425ab9`，独立审查/主线验证/任务清理完成**。Modal/ConfirmDialog/DropdownMenu/ContextMenu/Popover 与通知组合只在测试夹具，测试服务 `?task=t18` 选择本卡，默认仍为 T17。真实 Chromium 验证焦点、异步失败重试与 Portal 字体/主题/层级，见 [T18 证据](../plans/knoted-v1/evidence/t18.md)。
@@ -40,7 +42,19 @@ T17 实测：旧 `cn('p-2', 'p-4')` 返回 `p-4`，mtone 的 `cn` 返回 `p-2 p-
 
 只使用 npm 已发布版本作为正式依赖；不以浮动 latest、Git、file/link、未发布 tarball 交付。不修改 API 或业务语义来迁就组件。
 
-## 核查映射（不是运行验证）
+## 0.3.0 升级与当前消费约定
+
+已核查正式发布包的 README、exports、类型声明、实现和 CSS；React/ReactDOM peers 仍为 `^19.2.0`，本应用继续使用 `19.3.1`。公开根导出与 `@bixlab/mtone/styles.css` 导入不变；不因新增能力重构现有表单、外壳或列表。
+
+- **Dialog**：新增推荐名称 `Dialog/DialogProps`，`Modal/ModalProps` 为已弃用兼容别名。`modal` 默认为 `true`，阻止点击外部关闭；需要保留原外部点击关闭场景时，显式使用 `<Dialog modal={false}>`。该属性不关闭焦点陷阱、遮罩或滚动锁，也不改变 Esc/关闭按钮。T18 夹具已迁移公开 Dialog 并复验关闭回焦，不在应用补焦点管理。
+- **Form/FormField**：新增托管字段及规则 API；不传 FormField `name` 时仍是手动模式，现有 React Hook Form/业务状态无需迁移。手动字段清错后可能省略 `aria-invalid`（与 `"false"` 语义相同）；消费测试验证有效性、错误关联与描述恢复，不依赖旧的序列化形式。已有 `Form.onSubmit` 的原生提交消费保持不变。
+- **发布参考**：0.3.0 新增 `@bixlab/mtone/llms.txt` 导出。本仓库 pnpm 工作区从 `apps/web/node_modules/@bixlab/mtone/llms.txt` 读取同版本参考，并结合包内 `dist/index.d.ts` 查完整签名；该文本不是 JS 模块，不加入浏览器入口。在线站点跟随 master，不能代替当前发布包，也不能仅凭示例认定消费场景已通过。
+- **依赖与安装**：0.3.0 新增 `@rc-component/table` 与 `react-resizable-panels` 等传递依赖，不是 Knoted 直接包装底层组件的入口。`pnpm-workspace.yaml` 仅保留精确的 `@bixlab/mtone@0.3.0`、其要求的 `react-resizable-panels@4.24.0` 两项已核查版本等待期例外；不放宽其他包/版本策略，移除旧 0.2.0 例外。
+- **样式与主题**：沿用公开 CSS 的 `mtone` layer、应用系统字体和 Provider tokens；T17—T19 复验真实字体、Portal、键盘、树选择/展开、无 total 游标及通知/确认行为。
+
+发布依据：[npm 0.3.0 元数据](https://registry.npmjs.org/@bixlab%2fmtone/0.3.0)、[README](https://unpkg.com/@bixlab/mtone@0.3.0/README.md)、[类型](https://unpkg.com/@bixlab/mtone@0.3.0/dist/index.d.ts)、[llms.txt](https://unpkg.com/@bixlab/mtone@0.3.0/llms.txt)。新增组件未在本任务消费，不能以发布清单冒称已完成其业务验收。
+
+## 历史核查映射（0.2.0，不是当前运行验证）
 
 2026-11-16 核查 `@bixlab/mtone@0.2.0`：
 

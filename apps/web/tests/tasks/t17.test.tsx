@@ -66,13 +66,15 @@ describe("t17 mtone consumption", () => {
     expect(title).toHaveAttribute("aria-invalid", "true");
     expect(title).toHaveAccessibleDescription("标题不可用");
     fireEvent.click(screen.getByRole("button", { name: "切换错误" }));
-    expect(title).toHaveAttribute("aria-invalid", "false");
+    // 0.3.0 preserves an unset child aria-invalid in manual FormField mode.
+    // Missing and "false" both mean valid; assert the accessible semantics.
+    expect(title).toBeValid();
     expect(title).toHaveAccessibleDescription("填写笔记标题");
   });
 
   it("t17_4 removes placeholder sources and directly loads published CSS", () => {
     const pkg = JSON.parse(readFileSync(path.join(webRoot, "package.json"), "utf8"));
-    expect(pkg.dependencies["@bixlab/mtone"]).toBe("0.2.0");
+    expect(pkg.dependencies["@bixlab/mtone"]).toBe("0.3.0");
     expect(pkg.dependencies).not.toHaveProperty("@knoted/ui");
     // Old installs may leave ignored node_modules behind. The removal contract
     // concerns the workspace manifest and sources, not package-manager caches.
