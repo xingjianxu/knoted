@@ -33,7 +33,7 @@ pnpm pc process logs knoted-api -n 200
 pnpm pc down                         # 停止实例（不影响 PostgreSQL 等外部依赖）
 ```
 
-运行根是固定提交产物（`tools/dev/build-artifact.sh` → `/data/knoted-dev/runtime/<sha>`），配置由 `tools/dev/pc/*.tmpl` 渲染。PostgreSQL、Strata、模型共享根与 ACME 仍由 `/etc/nixos` 管理；生产实例将来才用 NixOS，见 [ADR 0003](docs/decisions/0003-test-instance-process-management.md)。
+运行根是固定提交产物（`tools/dev/build-artifact.sh` → `/data/knoted-dev/runtime/<sha>`），配置由 `tools/dev/pc/*.tmpl` 渲染。迁移（PR #64）合并后执行真实切换；在切换完成前，实例仍由旧 NixOS 单元提供，`pnpm pc up -D` 会因端口占用失败（[证据](docs/plans/knoted-v1/evidence/pcwrap-dev-service.md)）。PostgreSQL、Strata、模型共享根与 ACME 仍由 `/etc/nixos` 管理；生产实例将来才用 NixOS，见 [ADR 0003](docs/decisions/0003-test-instance-process-management.md)。
 
 ## 流程入口
 

@@ -61,7 +61,8 @@ T21（[证据](../plans/knoted-v1/evidence/t21-deployment.md)）把测试实例�
   1. `pnpm pc down`，确认 15600/15601/15602 释放；
   2. 从记录的旧 system 闭包恢复 `knoted-{prepare,migrate,api,https}.service` 软链到 `/etc/systemd/system` 与 `multi-user.target.wants`，`systemctl daemon-reload`；
   3. 把 `/data/knoted-dev/service` 属主改回 `knoted:knoted`，并把 `config/knoted.toml` 恢复为记录的 store 链接（切换时被渲染成编排用户拥有的真实文件，旧单元读不到）；
-  4. `systemctl start knoted-prepare knoted-migrate knoted-api knoted-https`，核对 readiness 与版本头。
+  4. `chown -R knoted:knoted /data/knoted-dev/service`（含 `config`/`state`/`logs`），然后 `systemctl start knoted-prepare knoted-migrate knoted-api knoted-https`，核对 readiness 与版本头；
+  5. 恢复续期链路：删除实例安装的 `bin/knoted-https-reload`（或把 `security.acme.certs.<domain>.reloadServices` 改回 `knoted-https.service` 并重建 system），否则新 boot 配置里的 `knoted-https-reload.service` 仍会命中旧入口、指向已停止的 pcwrap socket，续期后旧 Caddy 不会 reload；最后 `systemctl reload knoted-https`。
   本次无新迁移，数据库不降级。
 - 安全：编排以宿主用户运行，证书依赖既有 ACL（`xingjian` 可读 acme 目录）；密钥不入仓库/日志；HTTPS 仍是唯一公网入口，15600 只监听回环。
 

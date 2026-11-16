@@ -21,6 +21,6 @@ UI 目标已按 [ADR 0002](../decisions/0002-mtone-ui-ownership.md) 改为应用
 新增业务模块时补充责任、接口、依赖方向和测试入口。不要为了套用模板创建不存在的服务或数据库。本次管理体系初始化不构成产品架构决策，不产生虚构的 Accepted ADR。
 
 
-测试实例的运行管理边界见 [ADR 0003](../decisions/0003-test-instance-process-management.md)：应用由 `@bixlab/pcwrap` + process-compose 在 `127.0.0.1:15600` 编排（HTTPS 15601、API 15602），PostgreSQL/Strata/模型共享根/ACME 仍由 `/etc/nixos` 管理，生产实例将来才由 NixOS 运行。
+测试实例的运行管理边界见 [ADR 0003](../decisions/0003-test-instance-process-management.md)：应用由 `@bixlab/pcwrap` + process-compose 在 `127.0.0.1:15600` 编排（HTTPS 15601、API 15602），PostgreSQL/Strata/模型共享根/ACME 仍由 `/etc/nixos` 管理，生产实例将来才由 NixOS 运行。真实切换在合并 PR #64 后执行，切换前的运行态仍是旧单元（[证据](../plans/knoted-v1/evidence/pcwrap-dev-service.md)）。
 
 T23 的 `notes::service::{create,get,list,update,delete}` 消费 `AppContext` 与命名输入，复用 T22 文档校验；SQL 在 `notes::repository`，service 负责事务，HTTP 返回 T03 的 Note/NotePage、ETag 与统一错误。创建/软删除使用同一 notes 树事务锁维护父可见性与同级 position；未来 T24 结构写必须遵守相同锁顺序。内容更新以 ID/version/live CAS，实体注册、语义版本和 outbox 同事务。`note.changed` 当前只保留未发布事件，索引消费属后续卡；测试入口 `crates/knoted-api/tests/t23.rs`。详见 [T23证据](../plans/knoted-v1/evidence/t23.md)。

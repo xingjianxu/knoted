@@ -42,6 +42,8 @@ function resolveTool(name) {
   throw new Error(`测试需要 ${name}：PATH 与 boot profile 里都找不到`);
 }
 
+const emptyStaticPath = mkdtempSync(join(tmpdir(), "knoted-pc-static-"));
+temporary.push(emptyStaticPath);
 const toolProfile = mkdtempSync(join(tmpdir(), "knoted-pc-tools-"));
 temporary.push(toolProfile);
 symlinkSync(resolveTool("openssl"), join(toolProfile, "openssl"));
@@ -137,7 +139,10 @@ function createCertificateFixture(hostname) {
 function prepareEnv({ runtimeRoot, instanceRoot, certDir, apiPort, httpsPort, domain }, extra = {}) {
   return {
     ...process.env,
+    // 默认只暴露临时 profile（真实 openssl + caddy stub）；/run/current-system 兜底也关掉，
+    // 否则切换后（工具装进系统 PATH）"缺依赖"的负向断言会失效。
     KNOTED_SYSTEM_PROFILE_BIN: extra.KNOTED_SYSTEM_PROFILE_BIN ?? toolProfile,
+    KNOTED_STATIC_PATH: extra.KNOTED_STATIC_PATH ?? emptyStaticPath,
     KNOTED_INSTANCE_ROOT: instanceRoot,
     KNOTED_RUNTIME_ROOT: runtimeRoot,
     KNOTED_CERT_DIR: certDir,

@@ -59,7 +59,7 @@
 - [x] `package.json` 增加 `"pc": "pcwrap"`、`@bixlab/pcwrap` 精确版本与 `test:pc`。
 - [x] 写 `pcwrap.config.json`、`process-compose.yaml`、`tools/dev/pc/*`。
 - [x] 写 `tests/pc/`：端口只回环、渲染值、证书三类失败、产物校验拒绝篡改。
-- [x] `pnpm install --frozen-lockfile` 更新锁文件后 `pnpm test:pc` 全绿（6 个套件）。
+- [x] `pnpm install --frozen-lockfile` 更新锁文件后 `pnpm test:pc` 全绿（8 个套件 / 20 个用例）。
 
 ### 任务 2：隔离验证（app）
 

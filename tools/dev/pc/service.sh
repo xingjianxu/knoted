@@ -25,7 +25,8 @@ shopt -u patsub_replacement 2>/dev/null || true
 # 运行期工具（caddy/sqlx/openssl）由 /etc/nixos 提供。它们不一定在调用者的 PATH 里
 # （例如刚安装 boot 候选、尚未 switch 时），所以把这两个稳定 bin 目录**追加**到 PATH：
 # 调用者自己的 PATH 仍优先（测试可以放 stub），缺工具时再从这里兜底。
-for tool_dir in "${KNOTED_SYSTEM_PROFILE_BIN:-/nix/var/nix/profiles/system/sw/bin}" /run/current-system/sw/bin; do
+# 两个来源都可用环境变量覆盖，测试据此把兜底关掉，保证同一套断言在切换前后都成立。
+for tool_dir in "${KNOTED_SYSTEM_PROFILE_BIN:-/nix/var/nix/profiles/system/sw/bin}" "${KNOTED_STATIC_PATH:-/run/current-system/sw/bin}"; do
   [ -d "$tool_dir" ] || continue
   case ":$PATH:" in
   *":$tool_dir:"*) ;;
