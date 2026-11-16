@@ -58,10 +58,11 @@
 - [x] **Step 4: 最小应用与夹具。** 仅新增 cursor-state 生产逻辑；夹具 stub 映射实际公开 props、useReducer 管理游标、选择器 ?task=t19 复用原服务。列表/反馈与 Confirm 都直接消费 mtone，无新控件 wrapper、不显示虚构总数。
 - [x] **Step 5: 浏览器与回归门禁。** 定向 Vitest 12 passed；全量 Playwright（T17 4/T18 7/T19 4）15 passed；typecheck/lint/test（36）/build、E2E eslint+tsc、cargo fmt/test --locked（85+1 ignored）/clippy --locked --all-targets -- -D warnings 最终全部 exit 0。逐命令日志与 exit 在 `/data/knoted-dev/tasks/t19/worker/`，迭代用定向测试，最终一次全量。
 - [x] **Step 6: 文档和本地提交。** T18 事实（PR46/master4425ab9、主线前端24/Chromium11/Rust85+1既有ignored及全部门禁exit0、task/final/并发主线冲突增量审查均通过、两个T18Worktree/分支已清理、Issue43自动关闭/ProjectsDone）已回填 T18 卡/证据/本计划。T19 仅标实现就绪待集成；提交前读有效 git-commit，自审范围/敏感信息。报告 `/data/knoted-dev/tasks/t19/worker-report.md`，主体精简，原始日志独立文件。
-- [ ] **Step 7: 主Agent交付。** 独立diff/复验、task和whole-branch review，重要发现修复并复核；普通PR合并、主线再验证、安全清理；最后在合规独立文档任务分支回填T19最终生命周期与索引（若本卡已合并后才能取得事实），不在主线直接写文档。
+- [x] **Step 7: 主Agent交付。** 独立diff/复验、task和whole-branch review，重要发现修复并复核；普通PR合并、主线再验证、安全清理；最后在合规独立文档任务分支回填T19最终生命周期与索引（若本卡已合并后才能取得事实），不在主线直接写文档。
 
 ## 进度与决定
 
 - 沿用既有设计，无新增跨模块/存储/生产边界。游标 reducer 作为应用适配，不是公共 UI 分页库。
-- 实施完成（2026-11-16）：cursor-state.ts 与夹具/测试/证据已就绪，t19_1—4 覆盖；T19 Vitest 12、全量 36、Chromium（T17+T18+T19）15，全部最终门禁 exit 0。剩余仅主 Agent 独立审查/PR/主线验证/清理（Step 7）。
+- 实施完成（2026-11-16）：cursor-state.ts 与夹具/测试/证据已就绪，t19_1—4 覆盖；T19 Vitest 12、全量 36、Chromium（T17+T18+T19）15，全部最终门禁 exit 0。
+- 交付完成（2026-11-16）：task 与 whole-branch 独立审查均 APPROVED，三个 Minor 分诊为可延后；PR #48 普通 merge 至 `6de79a8`，主线复验 36/15/85（1 既有 ignored）及 frozen install、typecheck、lint、build、fmt、clippy 全 exit 0；Issue #47 自动关闭、Projects Done，两个任务 Worktree 与已合并本地分支清理；本独立文档分支回填最终生命周期。
 - 实施者仅本地写入和提交，所有远程/上游交接由主 Agent 核查；本卡未发现缺口，不发布上游需求。
