@@ -6,7 +6,9 @@
 
 T17 已精确接入 npm `@bixlab/mtone@0.2.0`，迁移 App 静态类并移除 `packages/ui`；**PR #42 已普通 merge 至主线 `e3e1db2`，独立审查/主线验证/任务清理完成**。生产入口使用应用层 `UiProvider` 配置公开 `MtoneProvider` 的 locale/density/tokens，不转发控件 API；CSS 从应用样式入口导入。基础表单组合仅在测试夹具中，不建立生产演示路由或通用包装库。证据见 [T17](../plans/knoted-v1/evidence/t17.md)。
 
-T18 实施在同一 `UiProvider` 内注册公开 `ToastProvider`，不增加通知总线或统一弹层 API；状态为 **in-progress / 实现就绪待主 Agent 审查集成**。Modal/ConfirmDialog/DropdownMenu/ContextMenu/Popover 与通知组合只在测试夹具，测试服务 `?task=t18` 选择本卡，默认仍为 T17。真实 Chromium 验证焦点、异步失败重试与 Portal 字体/主题/层级，见 [T18 证据](../plans/knoted-v1/evidence/t18.md)。
+T18 实施在同一 `UiProvider` 内注册公开 `ToastProvider`，不增加通知总线或统一弹层 API；**PR #46 已普通 merge 至主线 `4425ab9`，独立审查/主线验证/任务清理完成**。Modal/ConfirmDialog/DropdownMenu/ContextMenu/Popover 与通知组合只在测试夹具，测试服务 `?task=t18` 选择本卡，默认仍为 T17。真实 Chromium 验证焦点、异步失败重试与 Portal 字体/主题/层级，见 [T18 证据](../plans/knoted-v1/evidence/t18.md)。
+
+T19 新增生产应用游标 reducer `apps/web/src/lib/cursor-state.ts`（无 UI），在测试夹具 `?task=t19` 直接消费公开 Tree/List/ListItem/Empty/Spinner/Alert/ConfirmDialog/Button；状态为 **in-progress / 实现就绪待主 Agent 审查集成**。Pagination 依赖 total，本卡改用 Button 组合上下页且不伪造总数；T17/T18 入口不变，见 [T19 证据](../plans/knoted-v1/evidence/t19.md)。
 
 ## 责任判定
 
@@ -66,8 +68,8 @@ T17 实测：旧 `cn('p-2', 'p-4')` 返回 `p-4`，mtone 的 `cn` 返回 `p-2 p-
 
 ## 验证与升级
 
-T17—T19 测试在 `apps/web/tests/tasks/`，验证字段关联、键盘、焦点、禁用提交、空/错/加载与取消行为。浏览器实际焦点/Portal/CSS 验收使用已有 Playwright 入口。mtone 自己的内部单元测试属于上游，不复制进本仓库。
+T17—T19 测试在 `apps/web/tests/tasks/`，验证字段关联、键盘、焦点、禁用提交、空/错/加载与取消行为。浏览器实际焦点/Portal/CSS 验收使用已有 Playwright 入口。mtone 自己的内部单元测试属于上游，不复制进本仓库。T19 另验证受控 Tree 展开/选择事件分离、disabled 节点、无 total 的 next_cursor 游标往返与筛选重置。
 
-升级必须审阅公开 API/CSS 变化并复跑受影响任务。遇到回归可回退上一已验证 npm 版本；无法满足则记录阻塞，不本地补一套通用 UI。T17 迁移与基础表单消费验证已集成；T18 实现就绪但仍待审查集成；T02/T04 历史证据保留。
+升级必须审阅公开 API/CSS 变化并复跑受影响任务。遇到回归可回退上一已验证 npm 版本；无法满足则记录阻塞，不本地补一套通用 UI。T17 迁移与基础表单消费验证已集成；T18 已集成；T19 实现就绪但仍待审查集成；T02/T04 历史证据保留。
 
-0.2.0 消费注意：菜单 disabled 项可由方向键聚焦以便发现，但 Enter/Space/点击均不执行；不要把 disabled 推断为一定跳过焦点。Modal 绕回时会短暂聚焦上游 inert guard，测试应等待焦点回到真实内容，不能自行补焦点管理。Toast 关闭按钮在 hover/focus 展开后暴露给可访问树。ConfirmDialog 拒绝后显示中文错误并保持打开可重试，pending 禁用确认/取消按钮；公开契约不保证 pending 时禁止 Esc 关闭，后续业务需按自身取消/请求生命周期语义处理，不将本卡测试误作不可关闭承诺。
+0.2.0 消费注意：菜单 disabled 项可由方向键聚焦以便发现，但 Enter/Space/点击均不执行；不要把 disabled 推断为一定跳过焦点。Modal 绕回时会短暂聚焦上游 inert guard，测试应等待焦点回到真实内容，不能自行补焦点管理。Toast 关闭按钮在 hover/focus 展开后暴露给可访问树。ConfirmDialog 拒绝后显示中文错误并保持打开可重试，pending 禁用确认/取消按钮；公开契约不保证 pending 时禁止 Esc 关闭，后续业务需按自身取消/请求生命周期语义处理，不将本卡测试误作不可关闭承诺。Tree 的 `value/onValueChange` 与 `expanded/onExpandedChange` 传递节点 id（非 label）；鼠标点展开箭头不触发选择，Enter/Space 才选择，disabled 节点 tabIndex -1 且不选择/展开。
