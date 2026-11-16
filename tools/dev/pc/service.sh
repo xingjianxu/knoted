@@ -18,6 +18,9 @@
 set -euo pipefail
 # 与 tools/dev/build-artifact.sh 一致：清单排序必须固定字节序，否则 locale 会改变 sort 结果。
 export LC_ALL=C
+# bash >= 5.2 默认开启 patsub_replacement，会把替换串里的 & 当成"匹配到的文本"。
+# 模板替换用的是 ${var//search/replace}，含 & 的 DATABASE_URL 会被破坏。
+shopt -u patsub_replacement 2>/dev/null || true
 
 # 运行期工具（caddy/sqlx/openssl）由 /etc/nixos 提供。它们不一定在调用者的 PATH 里
 # （例如刚安装 boot 候选、尚未 switch 时），所以把这两个稳定 bin 目录**追加**到 PATH：
@@ -63,6 +66,30 @@ die() {
 
 log() {
   printf 'knoted-pc: %s\n' "$1" >&2
+}
+
+# 运行期依赖一次性前置检查：缺工具时在写任何文件之前就失败，不留半个实例。
+require_tools() {
+  local missing=""
+  command -v openssl >/dev/null || missing="$missing openssl"
+  command -v caddy >/dev/null || missing="$missing caddy"
+  command -v curl >/dev/null || missing="$missing curl"
+  command -v ss >/dev/null || missing="$missing iproute2(ss)"
+  test -z "$missing" || die "缺少运行期依赖：${missing# }（由 /etc/nixos 提供：openssl / caddy / curl / iproute2）"
+}
+
+# 稳定实例不得从任务工作树运行（AGENTS.md 规则 4/11）。
+forbidden_path() {
+  case "$1" in
+  */.worktrees/*) return 0 ;;
+  *) return 1 ;;
+  esac
+}
+
+guard_worktree() {
+  if forbidden_path "$instance_root" || forbidden_path "$(readlink -f "$runtime_root" 2>/dev/null || printf '%s' "$runtime_root")"; then
+    die "实例根或运行根位于 .worktrees 任务工作区：$instance_root / $runtime_root（稳定实例必须用主检出 + /data 运行根）"
+  fi
 }
 
 prepare_instance_root() {
@@ -136,11 +163,15 @@ check_ports() {
 }
 
 command_prepare() {
-  # 先验产物再建目录：产物被篡改时不留下半个实例。
+  # 顺序：守卫 → 验产物 → 验依赖 → 建目录 → 渲染，失败时不留半个实例。
+  guard_worktree
   local revision
   revision=$(verify_runtime)
   log "固定产物 revision=$revision"
+  require_tools
   prepare_instance_root
+  local web_root
+  web_root=$(readlink -f "$runtime_root/share/knoted/web")
 
   install -d -m 0700 "$config_dir" "$state_dir" "$state_dir/https" \
     "$state_dir/https/data" "$state_dir/https/config" "$bin_dir" \
@@ -165,7 +196,7 @@ command_prepare() {
     @KEY_FILE@ "$key_file" \
     @REVISION@ "$revision" \
     @API_PORT@ "$api_port" \
-    @WEB_ROOT@ "$runtime_root/share/knoted/web"
+    @WEB_ROOT@ "$web_root"
 
   "$script_dir/check-certificate.sh" "$cert_file" "$key_file" "$domain"
   check_ports
@@ -190,24 +221,25 @@ command_install_launchers() {
     launcher_path="$(dirname "$openssl_bin"):\$PATH"
   fi
   # ACME 续期后由 /etc/nixos 的 oneshot 调用；不依赖仓库路径，只依赖稳定实例路径。
-  local reload
+  # 该单元在 ProtectSystem=strict 下运行（/data 只读），所以这里只读证书、连 admin
+  # socket，不写锁文件、不建目录；幂等重复 reload 由 caddy 自身处理。
+  local reload tmp
   reload=$bin_dir/knoted-https-reload
   (
     umask 077
-    cat >"$reload" <<EOF
+    tmp=$(mktemp "$bin_dir/.reload.XXXXXX")
+    cat >"$tmp" <<EOF
 #!/usr/bin/env bash
 # 由 tools/dev/pc/service.sh 生成的稳定入口（ACME 续期后 reload 测试 HTTPS）。
 set -euo pipefail
-bin_dir=\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)
-mkdir -p "$state_dir/https"
+bin_dir=\${BASH_SOURCE[0]%/*}
 export PATH="$launcher_path"
-exec 9>"$state_dir/https/reload.lock"
-flock 9
 "\$bin_dir/check-certificate" "$cert_file" "$key_file" "$domain"
 exec caddy reload --config "$caddy_file" --adapter caddyfile \\
   --address "unix/$admin_socket" --force
 EOF
-    chmod 0755 "$reload"
+    chmod 0755 "$tmp"
+    mv -f "$tmp" "$reload"
   )
 }
 
@@ -233,6 +265,8 @@ command_api() {
 command_https() {
   command -v caddy >/dev/null || die "需要 caddy（由 /etc/nixos 提供：pkgs.caddy）"
   test -r "$caddy_file" || die "缺少 Caddyfile $caddy_file；先完成 prepare"
+  # 重启 https 也要重新校验证书，不能只依赖 prepare 当时的结果。
+  "$script_dir/check-certificate.sh" "$cert_file" "$key_file" "$domain"
   export XDG_DATA_HOME=$state_dir/https/data
   export XDG_CONFIG_HOME=$state_dir/https/config
   exec caddy run --config "$caddy_file" --adapter caddyfile
@@ -258,7 +292,7 @@ command_paths() {
   printf 'domain=%s\n' "$domain"
   printf 'cert_file=%s\n' "$cert_file"
   printf 'key_file=%s\n' "$key_file"
-  printf 'database_url=%s\n' "$database_url"
+  printf 'database_url=%s\n' "$(printf '%s' "$database_url" | sed -E 's#(://)[^/@]*@#\1***@#')"
 }
 
 command=${1:-}

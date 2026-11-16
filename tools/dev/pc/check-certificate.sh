@@ -15,6 +15,8 @@ fail() {
   exit 1
 }
 
+command -v openssl >/dev/null || fail "缺少 openssl（由 /etc/nixos 提供：pkgs.openssl），无法校验证书"
+
 test -r "$cert" || fail "证书不可读：$cert"
 test -r "$key" || fail "私钥不可读：$key"
 
