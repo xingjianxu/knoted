@@ -7,3 +7,4 @@ pub mod db;
 pub mod files;
 pub mod intelligence;
 pub mod jobs;
+pub mod notes;
