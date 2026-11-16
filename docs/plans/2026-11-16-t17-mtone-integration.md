@@ -55,7 +55,7 @@
 - [x] **Step 5: GREEN 与真实浏览器。** 运行上述 Vitest，`pnpm exec playwright test tests/e2e/t17.spec.ts`；浏览器断言真实 CSS、生效字体、Tab、disabled/loading、表单关联并观察远程请求；测试服务有生命周期管理且不添加生产演示路由。
 - [x] **Step 6: 全量本地门禁。** `pnpm typecheck`、`pnpm lint`、`pnpm test`、`pnpm build`；`cargo fmt --check`、`cargo test`、`cargo clippy --all-targets -- -D warnings`。保存每条命令输出/退出码/非零测试数量，不重复运行昂贵全量命令直至最终状态。
 - [x] **Step 7: 回填并提交。** 证据文档区分实现就绪、审查、集成，未合并不写完成。实际读取有效 git-commit，检查范围/敏感信息，提交中文摘要 Conventional Commit。报告实现、TDD、各命令输出、风险及 SHA，禁止自行派生 Subagent、PR/主线合并。
-- [ ] **Step 8: 主 Agent 独立审查与集成。** 读取全量差异、独立复跑受影响门禁、发起 Reviewer 审查；核实反馈，普通 merge 进入集成 Worktree。创建关联 Issue 的 PR、记录输出，门禁通过后普通合并；更新干净主线并验证，才清理两 Worktree 与已合并分支。接着领取 T18。
+- [x] **Step 8: 主 Agent 独立审查与集成。** 读取全量差异、独立复跑受影响门禁、发起 Reviewer 审查；核实反馈，普通 merge 进入集成 Worktree。创建关联 Issue 的 PR、记录输出，门禁通过后普通合并；更新干净主线并验证，才清理两 Worktree 与已合并分支。接着领取 T18。
 
 ## 决策与进度
 
@@ -63,4 +63,4 @@
 - Ruling: 仅当公开包要求 Provider 时添加应用层 Provider，避免凭假设创建统一包装 API；测试与生产共享实际接入。
 - 实施提交 `225fbcb`，旧安装残留断言修复 `87f57c7`；首轮独立 task review Approved。主 Agent 独立复验前端 18、Chromium 4、Rust 85 通过，1 既有 ignored doctest，typecheck/lint/build/fmt/clippy 及产物扫描/生产 smoke 均 exit 0。
 - 旧目录存在不等于源码包存在，修复保留 ignored 残留证明 RED→GREEN；没有靠清理缓存掩盖失败。
-- 证据见 [T17](knoted-v1/evidence/t17.md) 和 `/data/knoted-dev/tasks/t17/controller/`。最终审查/PR/主线验证尚待本轮收尾，不提前勾选 Step 8。
+- 证据见 [T17](knoted-v1/evidence/t17.md) 和 `/data/knoted-dev/tasks/t17/controller/`。主 Agent 收尾事实：PR #42 普通 merge 至 `e3e1db27425a59fdc01d4dbbfc49c209f92b7500`；主线 frozen/typecheck/lint/test18/build/Chromium4/Rust fmt/test85/clippy 全部 exit 0（1 既有 ignored doctest）。Issue #41 自动关闭、Projects Done，两个任务 Worktree/已合并本地分支安全清理、主线干净。Step 8 已完成，T18 依独立计划执行。

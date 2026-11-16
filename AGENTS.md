@@ -25,7 +25,7 @@ Knoted 当前为 Rust 2024 workspace（`crates/knoted-core`、`knoted-api`、`kn
 
 ## UI 组件归属
 
-通用 UI 使用 npm `@bixlab/mtone`，不在 Knoted 实现通用组件库或 `@knoted/ui` 转发层。T17 已在任务分支移除 `packages/ui` cn 占位包并完成消费验收，实现就绪但仍待主线集成；不得重建占位包或转发层。应用保留业务组合、API/Query、权限、游标与编辑器适配；Tailwind 只做应用布局及公开主题适配，不另建基础控件体系，不直接包装 Base UI/复制源码/patch 绕过 mtone。
+通用 UI 使用 npm `@bixlab/mtone`，不在 Knoted 实现通用组件库或 `@knoted/ui` 转发层。T17 已通过 PR #42 普通 merge 至主线 `e3e1db2`，移除 `packages/ui` cn 占位包并完成消费验收与主线验证、任务 Worktree/分支清理；不得重建占位包或转发层。应用保留业务组合、API/Query、权限、游标与编辑器适配；Tailwind 只做应用布局及公开主题适配，不另建基础控件体系，不直接包装 Base UI/复制源码/patch 绕过 mtone。
 
 新增或扩展组件前使用 [mtone-component-request](.agents/skills/mtone-component-request/SKILL.md)：核查锁定发布版本和组合能力；确有通用缺口时整理完整任务提示词交给用户并存档。Agent 不修改 mtone、不代建上游 Issue/PR、不发布 npm。未发布或未通过消费端验收时记录技术依赖阻塞，不能用 link/Git/未发布 tarball 或本地通用实现替代交付。见 [UI 指南](docs/development/ui-mtone.md)、[ADR 0002](docs/decisions/0002-mtone-ui-ownership.md)。T17 实现/验证/集成状态见任务卡；本条不表示 T18—T19 已执行。
 

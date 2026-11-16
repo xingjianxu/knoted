@@ -2,7 +2,7 @@
 
 已完成 T01—T05 基础骨架：Rust 2024 workspace（`crates/knoted-core`、`knoted-api`、`knoted-worker`）、React/TypeScript 前端骨架（`apps/web`、`packages/api-client`）、OpenAPI 契约（`api/`）与 SQLx 迁移（`migrations/`）。产品功能仍按 [Knoted v1 计划](docs/plans/knoted-v1/README.md) 逐卡实施。
 
-UI 方向已确认：通用组件直接消费 npm `@bixlab/mtone`，本项目只做业务组合与适配。T17 已在任务分支精确接入 `@bixlab/mtone@0.2.0`、公开 Provider/CSS 并移除 `packages/ui` 占位包；基础表单消费验收实现就绪，待主 Agent 独立审查与主线集成。详见 [T17 证据](docs/plans/knoted-v1/evidence/t17.md)。见 [UI 指南](docs/development/ui-mtone.md) 与 [ADR 0002](docs/decisions/0002-mtone-ui-ownership.md)。
+UI 方向已确认：通用组件直接消费 npm `@bixlab/mtone`，本项目只做业务组合与适配。T17 已精确接入 `@bixlab/mtone@0.2.0`、公开 Provider/CSS 并移除 `packages/ui` 占位包；基础表单消费验收及独立审查通过，经 PR #42 普通 merge 至主线 `e3e1db2`，主线验证与任务清理完成。详见 [T17 证据](docs/plans/knoted-v1/evidence/t17.md)。见 [UI 指南](docs/development/ui-mtone.md) 与 [ADR 0002](docs/decisions/0002-mtone-ui-ownership.md)。
 
 ## 开始使用
 
