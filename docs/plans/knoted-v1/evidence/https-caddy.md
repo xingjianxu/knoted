@@ -39,4 +39,3 @@
 Caddy / PostgreSQL / Strata PID 分别为 1706466 / 1167036 / 1180032，与切换前相同。其它站点前后状态一致：receiptd 307、thesisd 307、OnlyOffice healthcheck 200。详见 runtime-checks.json、other-vhosts-{before,after}.json。
 
 待应用 PR 合入后，从主检出 down/up，确认 pcwrap 中旧 HTTPS 进程定义也已移除；该步骤结果合入后追加。没有强制 ACME 发证/续期；续期目标已纯求值与单元 postrun 校对，并实测共享 Caddy reload。无数据库或生产实例变更。
-
