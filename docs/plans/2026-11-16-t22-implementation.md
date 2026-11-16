@@ -50,10 +50,10 @@
 - [x] 分析任务、依赖与授权；Issue查重；独立 Worktree；记录基线0718e66。
 - [x] 基线全工作区测试确认（exit 0，日志见本任务 logs/baseline-test.log）。
 - [x] Task 1 已提交 `1d6eff6`；主Agent独立读取实现并复跑18个聚焦、110个全量测试及fmt/clippy（exit 0，1既有ignored）。
-- [ ] 请求独立审查，核实反馈并修复；完成分支最终审查。
+- [x] 请求独立审查，核实反馈并修复；完成分支最终审查。
 - [x] 更新T22实施状态与执行证据，纯库且尚无调用入口无需部署。
-- [ ] 通过必需本地门禁、提交、push、按模板创建PR并普通merge；远程Issue由关闭关系处理。
-- [ ] 主线快进、复跑必要验证，记录SHA，安全清理两个任务Worktree/已合并分支；读回Issue/Projects状态。
+- [x] 通过必需本地门禁、提交、push、按模板创建PR并普通merge；远程Issue由关闭关系处理。
+- [x] 主线快进、复跑必要验证，记录SHA，安全清理两个任务Worktree/已合并分支；读回Issue/Projects状态。
 
 ## Execution ledger
 
@@ -63,3 +63,5 @@
 - 契约核对：离线 Ajv 发现原 fixture 的原始 Unicode href 不符合 T03 `format: uri`；有效fixture使用ASCII URI（中文域名/路径先编码），正文中文不变。Rust URL parser 的容忍行为不能放宽契约，补充非法URI字符/转义测试。
 
 - Task 1独立审查：spec compliance/quality均Approved，无Critical/Important/Minor；主Agent集成树fmt/test/clippy全部exit 0。
+
+- 集成收尾：PR [#58](https://github.com/xingjianxu/knoted/pull/58) 于2026-11-16普通merge至 `8d4a472`；主线复跑18聚焦/110全量（1既有ignored）、fmt/clippy均exit0；Issue #57自动关闭、移除in-progress，Projects Done。两实现Worktree与feat分支已安全清理；日志和SDD档案保留 `/data/knoted-dev/tasks/t22/`。本收尾文档使用独立 `.worktrees/knoted-t22-closeout` / `docs/t22-closeout`，合入后同样复验清理。
