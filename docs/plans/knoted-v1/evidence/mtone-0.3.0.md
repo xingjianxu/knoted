@@ -66,4 +66,6 @@ Chromium 使用已存在的 `/data/knoted-dev/tasks/t17/worker/browsers` revisio
 
 独立只读 Reviewer `review-mtone-0.3.0` 已检查全部 12 个跟踪文件差异及两个新文档、发布/安装文件一致性、62 个本地链接与原始验证日志，结论 **APPROVED，Critical / Important / Minor 均无**。主 Agent 核实了 Form 手动模式、Dialog 公开外部关闭参数和所有实际测试结果。并行 Caddy 改动、未消费组件全场景、完整传递依赖安全审计与生产部署不属于此次审查背书；集成新主线后需再次验证，不以本轮结论替代。
 
-最终复跑及合并信息记录在关联 PR；只有本地门禁通过、PR 普通 merge、主线验证后，才完成任务与 Worktree/已合并分支清理。仓库没有 GitHub CI，不以远程 checks 为空当作通过证据。
+已提交实现 `0404146`，随后普通 merge 最新 `origin/master` `16832dc`，集成提交 `0d5aadc`；AGENTS/架构文档在不同段落自动合并，无冲突，主 Agent 检查 PR 相对最新主线仍仅 14 个本任务文件。用归档 `verify.sh integrated` 重新运行所有门禁（输出 `integrated-*.log`、`integrated-exit-codes.tsv`），各命令 exit 0：Vitest 54 passed、Chromium 15 passed、Rust 125 passed / 1 ignored；额外 `pnpm test:pc` 22 passed。
+
+[PR #74](https://github.com/xingjianxu/knoted/pull/74) 关联并关闭 #70，正文包含实际输出摘录和独立审查结果。最终合并 SHA、主线复跑与清理结果回写该 PR 的「合并后核对」与评论；本文件是合并前证据，不提前宣称后续阶段完成。只有本地门禁通过、PR 普通 merge、主线验证后，才完成任务与 Worktree/已合并分支清理。仓库没有 GitHub CI，不以远程 checks 为空当作通过证据。
