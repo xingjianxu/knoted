@@ -5,7 +5,7 @@
 - Decision owner: 项目维护者（本次会话用户）
 - Confirmation: 2026-11-16 用户明确要求「现在不要在本项目实现通用UI库，请使用 @bixlab/mtone 的npm库」，通用组件需求整理为提示词由用户添加；审阅直接消费、T17 移除占位包、任务卡/文档/Skill 分阶段方案后回复「请实施」。会话授权记录见[设计](../plans/2026-11-16-mtone-ui-design.md)与 Issue。
 - Related issues: [#39](https://github.com/xingjianxu/knoted/issues/39)
-- Related PRs: 由关联 Issue 的交付 PR 追踪
+- Related PRs: [#40](https://github.com/xingjianxu/knoted/pull/40)（仅补充交付元数据，不改决策内容）
 - Supersedes: 无（替换 v1 计划的 R25/自有 UI 提案，不替代已有 Accepted ADR）
 - Superseded by: 无
 

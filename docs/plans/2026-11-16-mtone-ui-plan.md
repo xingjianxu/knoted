@@ -57,9 +57,9 @@
 
 - [x] 实际执行 `cargo fmt --check`、`cargo test --workspace --locked`、`cargo clippy --workspace --all-targets -- -D warnings`，保留输出。预期 exit 0，测试非零。
 - [x] 执行 `pnpm run typecheck`、`pnpm run lint`、`pnpm run test`、`pnpm run build` 及文档检查。预期 exit 0，不改锁文件。
-- [ ] 发起全分支独立审查，核实并处理重要问题；验证记录区分实测、模拟与未测。
-- [ ] 读取有效 git-commit Skill，检查范围/敏感信息后提交；PR 关联 #39、ADR 与实际输出。
-- [ ] 合并前复核主线/ADR 编号，普通 merge 后主线复验；回填远程验收/关闭状态，清理本任务 Worktree/分支。
+- [x] 发起全分支独立审查，核实并处理重要问题；验证记录区分实测、模拟与未测。审查 `5b2512f..5f4bb56` APPROVED，无 Critical/Important/Minor。
+- [x] 读取有效 git-commit Skill，检查范围/敏感信息后提交；[PR #40](https://github.com/xingjianxu/knoted/pull/40) 关联 #39、ADR 与实际输出，首提交 `5f4bb56`。
+- [ ] 合并前复核主线/ADR 编号，普通 merge 后主线复验；回填远程验收/关闭状态，清理本任务 Worktree/分支。此项提交时待执行，最终结果以 PR #40「合并后核对」及评论为准，不为提前勾选而伪造完成。
 
 ## 进度与裁决
 
