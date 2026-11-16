@@ -1,6 +1,6 @@
 # T21 最小 HTTPS 测试部署证据
 
-状态：app/host实现并部署验收通过，待PR主线集成与任务工作区清理。最终运行版本见下方“真实部署发现与最终方案”。
+状态：app/host实现、部署验收与主线集成验证通过；最后文档分支随收尾PR合入后清理，读回结果记PR。最终运行版本见下方“真实部署发现与最终方案”。
 
 用户直接委派完成 T20—T21；Issue [#51](https://github.com/xingjianxu/knoted/issues/51)，计划 [实施清单](../../2026-11-16-t21-implementation.md)。T20 为 #50 / PR #52 / 集成e8d2c4f / 实现d68f213，前端54用例（T20 18）；本卡不添加业务接口或迁移。
 
@@ -64,3 +64,9 @@ sudo -u knoted /nix/store/gwz1f7pb6fqam460rnydhv67z6pva7r7-knoted-f35a69a4ec06/b
 独立TLS实际续期reload exit0且自身PID不变，共享Caddy PID不变；host最终报告含四场景证书validator结果和20文件manifest。host执行记录与精确回退入口：/data/knoted-dev/tasks/t21-host/evidence/report.md（定向helper会同时恢复runtime入口和previous-boot-system；手工回退仅boot，不执行已知有隐式传播的全机test/switch）。
 
 最终host提交：`33450eec0feadb608d63c3932bb5810635d90c15`，已ff集成 `/etc/nixos` main（未push），仅四个本任务文件；用户Pi diff SHA256仍为a18658e2d381c776fa48506e241692ff3039a9dbdbb9e42e66135b5a93ca17c4。候选/运行状态未因提交而改变；主机任务工作区在主线核验后清理，其他任务worktree保留。
+
+## 主线与清理核对
+
+PR [#53](https://github.com/xingjianxu/knoted/pull/53)普通merge至master `d623582ec073ba12f1d3351da60553bf028e659a`，运行源f35a69a是其祖先。主Agent t21-mainline-gates.log frozen install/api/typecheck/lint/test/build/fmt/Rust test/clippy/diff全部exit0；前端54、Rust92（1既有ignored）。既有Chromium15通过，实际HTTPS虚拟Passkey全流程通过。
+
+Issue #50/#51/#54均由PR关闭，Projects Done；host main33450ee，主线pure eval仍精确对应已部署boot候选，13项服务active及公网ready200，host任务worktree/分支已清理，其他vaultsync任务worktree和原Pi改动保留。Knoted T20与HTTP补修工作区/分支已清理；最后docs/t20-t21-close文档分支在收尾PR合入后清理，最终主线SHA、worktree list、git status和ready读回写PR核对项，不为记录清理再创建循环文档提交。

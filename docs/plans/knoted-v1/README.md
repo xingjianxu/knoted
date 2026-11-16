@@ -1,6 +1,6 @@
 # Knoted v1 文档与实施任务入口
 
-> 产品实施采用实际可用的 executing-plans 或 subagent-driven-development。当前 T01—T20 已完成、审查并集成到主线（T17 为 PR #42 / `e3e1db2`；T18 为 PR #46 / `4425ab9`；T19 为 PR #48 / `6de79a8`）；T21 实施中，T22—T72 仍待领取。
+> 产品实施采用实际可用的 executing-plans 或 subagent-driven-development。当前 T01—T21 已完成、审查并集成到主线（T17 为 PR #42 / `e3e1db2`；T18 为 PR #46 / `4425ab9`；T19 为 PR #48 / `6de79a8`）；T22—T72 仍待领取。
 
 ## 阅读顺序
 
@@ -45,7 +45,7 @@
 | [T18](tasks/T18.md) | mtone弹层菜单与通知集成 | T17 | done（PR [#46](https://github.com/xingjianxu/knoted/pull/46)，集成 `4425ab9`） |
 | [T19](tasks/T19.md) | mtone树列表与反馈集成 | T18 | done（PR [#48](https://github.com/xingjianxu/knoted/pull/48)，集成 `6de79a8`） |
 | [T20](tasks/T20.md) | 路由登录与应用外壳 | T04, T16, T19 | done（PR [#52](https://github.com/xingjianxu/knoted/pull/52)，主线 `e8d2c4f`，验证/清理完成） |
-| [T21](tasks/T21.md) | 最小HTTPS测试部署 | T06, T20 | in-progress（Issue [#51](https://github.com/xingjianxu/knoted/issues/51)，真实HTTPS与认证验收通过，PR #53待集成） |
+| [T21](tasks/T21.md) | 最小HTTPS测试部署 | T06, T20 | done（PR [#53](https://github.com/xingjianxu/knoted/pull/53)，主线 `d623582`，HTTPS/虚拟Passkey验收通过） |
 | [T22](tasks/T22.md) | 笔记JSON与提取规则 | T03, T05 | pending |
 | [T23](tasks/T23.md) | 笔记CRUD与版本 | T15, T22 | pending |
 | [T24](tasks/T24.md) | 页面树与生命周期 | T23 | pending |
@@ -118,7 +118,7 @@
 
 主线整体验证（T16 合并后 `6ad602e`）：`cargo fmt --check`、`cargo test --workspace --locked`（85 passed）、`cargo clippy --workspace --all-targets -- -D warnings` 全部 exit 0；Python 侧 `uv run --group dev pytest`（T09/T10/T11 共 40 passed，CPU 与 GPU 嵌入两种环境各跑一次）与 `ruff check/format --check` exit 0。逐卡证据与限制写在各任务卡「执行证据」及 `/data/knoted-dev/tasks/knoted-t06-t16/{reports,reviews,evidence}/`；过程记录见 `/data/knoted-dev/tasks/knoted-t06-t16/ledger.md`。
 
-T17 已由 PR #42 普通 merge 至主线 `e3e1db2`，见 [证据](evidence/t17.md)；主线前端 18 / Chromium 4 / Rust 85 通过（1 既有 ignored），其他门禁 exit 0，Issue #41 自动关闭、Projects Done、两个任务 Worktree/已合并本地分支已安全清理。T18 已由 PR #46 普通 merge 至主线 `4425ab9`，见 [证据](evidence/t18.md)；主线前端 24 / Chromium 11 / Rust 85（1 ignored）及全部门禁 exit 0，Issue #43 自动关闭、Projects Done、任务 Worktree/分支已安全清理。T19 已由 PR #48 普通 merge 至主线 `6de79a8`，见 [证据](evidence/t19.md)；主线前端 36 / Chromium 15（T17 4 + T18 7 + T19 4）/ Rust 85（1 既有 ignored）及 frozen install、typecheck、lint、build、fmt、clippy 均 exit 0，Issue #47 自动关闭、Projects Done、任务 Worktree/已合并本地分支已安全清理。三个 review Minor（夹具未知游标回落、游标重复派发压栈、卡内远程权限措辞）已分诊为可延后并在证据中记录消费约定。尚未执行：T20 起的后续任务；测试实例部署（T21 才建立，T06—T16 均为库/契约/Python 服务，无对外部署）。仍存在的跨任务限制：无真实硬件 Passkey 人工验证；Docling Office 格式由 T46—T48 承接；Strata 与 Knoted 的 provider 模块**已裁决统一并生效**（2026-11-15：host 独占部署 + app 侧纯客户端契约，`nixos-rebuild switch` 已激活，见 T12 证据 §11.3）。
+T17 已由 PR #42 普通 merge 至主线 `e3e1db2`，见 [证据](evidence/t17.md)；主线前端 18 / Chromium 4 / Rust 85 通过（1 既有 ignored），其他门禁 exit 0，Issue #41 自动关闭、Projects Done、两个任务 Worktree/已合并本地分支已安全清理。T18 已由 PR #46 普通 merge 至主线 `4425ab9`，见 [证据](evidence/t18.md)；主线前端 24 / Chromium 11 / Rust 85（1 ignored）及全部门禁 exit 0，Issue #43 自动关闭、Projects Done、任务 Worktree/分支已安全清理。T19 已由 PR #48 普通 merge 至主线 `6de79a8`，见 [证据](evidence/t19.md)；主线前端 36 / Chromium 15（T17 4 + T18 7 + T19 4）/ Rust 85（1 既有 ignored）及 frozen install、typecheck、lint、build、fmt、clippy 均 exit 0，Issue #47 自动关闭、Projects Done、任务 Worktree/已合并本地分支已安全清理。三个 review Minor（夹具未知游标回落、游标重复派发压栈、卡内远程权限措辞）已分诊为可延后并在证据中记录消费约定。后续更新：T20/T21已完成（见下方进展），T22起尚未执行；HTTPS测试实例已建立。T06—T16原交付仍为库/契约/Python服务。仍存在的跨任务限制：无真实硬件 Passkey 人工验证；Docling Office 格式由 T46—T48 承接；Strata 与 Knoted 的 provider 模块**已裁决统一并生效**（2026-11-15：host 独占部署 + app 侧纯客户端契约，`nixos-rebuild switch` 已激活，见 T12 证据 §11.3）。
 
 ## UI 规划调整（2026-11-16）
 
@@ -148,4 +148,4 @@ A基础T01—T12；B认证/UI T13—T21；C笔记T22—T32；D事务T33—T42；
 
 ## T20—T21 实施进展（2026-11-16）
 
-T20 PR [#52](https://github.com/xingjianxu/knoted/pull/52)普通merge至`e8d2c4f`，前端54 passed（T20 18）/Rust85 passed（1既有ignored），全部前端与Rust门禁通过；主线独立复跑及Chromium15例均通过，Issue #50 Closed/Projects Done，工作区与本地分支已清理。T21最终固定app提交`f35a69a4ec0686ab08ae448bd4bf33d96ecce942`构建封装并定向部署成功，真实HTTPS与虚拟Passkey验收通过；会话HTTP补修PR #55已集成，Rust测试增至92；PR #53待集成。证据见[t20](evidence/t20.md)、[t21](evidence/t21-deployment.md)。
+T20 PR [#52](https://github.com/xingjianxu/knoted/pull/52)普通merge至`e8d2c4f`，前端54 passed（T20 18）/Rust85 passed（1既有ignored），全部前端与Rust门禁通过；主线独立复跑及Chromium15例均通过，Issue #50 Closed/Projects Done，工作区与本地分支已清理。T21最终固定app提交`f35a69a4ec0686ab08ae448bd4bf33d96ecce942`构建封装并定向部署成功，真实HTTPS与虚拟Passkey验收通过；会话HTTP补修PR #55已集成，Rust测试增至92；PR #53已集成至`d623582`，主线全门禁通过；host33450ee已本地集成并清理，最后文档分支随收尾PR清理。证据见[t20](evidence/t20.md)、[t21](evidence/t21-deployment.md)。

@@ -27,7 +27,7 @@
 - [x] Task 4：运行前端全量门禁与 Rust fmt/test/clippy，保留命令输出；读取 git-commit Skill 后提交；requesting-code-review 独立审查，核实修复。
 - [x] Task 5：host 领取固定提交与产物；专用PG角色/库、稳定目录、证书检查、HTTPS15601、API15602。候选 build、完整dry（含target与依赖传播）检查、仅自身单元定向加载与健康检查、boot持久化；不再整体test/switch，保留原system和unit入口可回退，不触碰用户改动。
 - [x] Task 6：t21_1 证书失效不退HTTP、t21_2 HTTPS readiness/登录、t21_3运行SHA/产物一致；真实浏览器虚拟Passkey流程另记硬件验证限制。
-- [ ] Task 7：PR普通merge，主线检查、任务卡/证据更新、仅清理本任务已合并Worktree/分支。
+- [x] Task 7：PR普通merge，主线检查、任务卡/证据更新、仅清理本任务已合并Worktree/分支。
 
 ## 当前进度
 
@@ -36,3 +36,5 @@
 2026-11-16：T20 PR #52普通merge至e8d2c4f。app准备独立审查1项Important已RED→GREEN修复；t21-precommit门禁全部exit0。构建与部署仍按Task5等待固定app提交。
 
 2026-11-16最终验收：T15遗漏HTTP接口由Issue #54 / PR #55补修，T21固定f35a69a构建，真实HTTPS虚拟Passkey全通过，前端54/Rust92/既有Chromium15。host因共享setup/local-fs隐式传播，取消整体test/switch，采用专用db/prepare +仅五个自身单元定向加载与boot持久化；606非自身条目及既有PID不变。早期实际影响、回退、用户Pi配置保留与实体凭据恢复均写部署证据，未隐藏。Task7仍待PR集成/主线验证/清理。
+
+最终主线集成：PR #53 / d623582，主线54前端/92Rust和全部门禁通过；host33450ee主线核验并清理。剩余仅本次文档收尾分支的merge后清理，最终读回放PR核对记录。
