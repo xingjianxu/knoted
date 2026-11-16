@@ -1,8 +1,12 @@
 # 开发、测试部署与恢复
 
-## 权限
+## 管理边界
 
-本次仅文档；未来实现通过验证后部署指定测试服务。远程GitHub写、生产变更、无关服务重启均未授权。没有性能测试。所有代码编辑在主仓库 `.worktrees/<task>`。本机部署配置修改单列host任务，遵守/etc/nixos规则及重大权限变化的确认边界。
+测试实例的**应用**由本仓库的 `@bixlab/pcwrap` + process-compose 管理（[ADR 0003](../../decisions/0003-test-instance-process-management.md)）：配置渲染、迁移、API、独立 HTTPS 入口都在 `process-compose.yaml` 里，控制端口 `127.0.0.1:15600`。**外部依赖**（PostgreSQL 角色/库、Strata、机器级模型共享根、ACME 证书、防火墙）仍由 `/etc/nixos` 管理。**生产实例**将来才由 NixOS 运行，本次不部署。
+
+日常入口：`pnpm pc up -D`、`process list`、`process restart <name>`、`process logs <name>`、`down`。应用改动不需要再改 `/etc/nixos` 的 pin；只有外部依赖或生产启用才产生 host 任务。真实切换（PR #64）尚未执行时，运行态仍是旧 NixOS 单元，`pnpm pc up -D` 会因端口占用失败；切换结果记在 [证据](evidence/pcwrap-dev-service.md)。
+
+远程GitHub写默认授权；生产变更、仓库级设置与非 Knoted 服务重启仍按根 AGENTS.md 的确认边界。没有性能测试。所有代码编辑在主仓库 `.worktrees/<task>`。
 
 ## 路径与入口
 
@@ -11,7 +15,9 @@
 | 外部测试入口 | https://wlab.132140.xyz:15601/ |
 | RAG只读根 | /data/vaultsyncd-dev/dev-server/vaults/knoted-test |
 | Agent样本唯一写区 | 上述根/agent-fixtures/<task-id>/ |
-| 稳定测试实例 | /data/knoted-dev/service/{config,state,assets,staging,logs,backups} |
+| 固定产物运行根 | /data/knoted-dev/runtime/\<full-sha\>/（`bin/knoted-api`、`share/knoted/{web,migrations}`），`current` 指针原子切换 |
+| 稳定测试实例 | /data/knoted-dev/service/{config,state,assets,staging,logs,backups,bin}（属主宿主用户） |
+| 编排控制端口 | 127.0.0.1:15600（pcwrap；15601 为 HTTPS、15602 为 API） |
 | 临时任务目录 | /data/knoted-dev/tasks/<task-id>/{tmp,cache,build,evidence} |
 | 隔离恢复演练 | /data/knoted-dev/tasks/<task-id>/restore |
 | Strata独立安装 | /data/llm/strata |
@@ -24,34 +30,44 @@
 
 ## 服务约定
 
-公网Caddy HTTPS15601，静态网页和/api同源。内部默认API127.0.0.1:15602、Python127.0.0.1:15603、Strata127.0.0.1:15604、Meilisearch127.0.0.1:15605；PG独立数据库knoted_dev和专用角色，复用本机PG监听。端口启动前检查，占用时停止并报告，不杀其他进程或自动漂移。生产端口不在本计划内。
+编排有四个进程：`prepare`（校验固定产物、渲染 `knoted.toml`/`Caddyfile`、准备目录、校验证书、检查端口、安装 ACME reload 入口）、`migrate`（一次性 `sqlx migrate run`）、`knoted-api`（127.0.0.1:15602）、`knoted-https`（独立 Caddy，HTTPS 15601，静态网页与 /api 同源，`X-Knoted-Revision`）。`knoted-api` 依赖 `migrate` 成功，`knoted-https` 依赖 API healthy。
+
+PostgreSQL 使用独立库 `knoted_dev` 与专用角色，复用本机 PG 监听；角色/库 provisioning 由 `/etc/nixos` 的 `knoted-db` oneshot 完成。Python 15603、Strata 15604、Meilisearch 15605 端口保持预留，暂不纳入编排。端口启动前检查，占用时失败并报告，不杀其他进程或自动漂移。生产端口不在本计划内。
+
+重启语义：`process restart knoted-api` 不重跑迁移；改模板、编排或环境变量后需 `down` 再 `up`（`prepare` 才会重跑）。
 
 证书来源参考receiptd；不是复用其Next/Bun启动器。缺证书/过期/名称不符拒绝HTTPS入口启动；ACME续期reload测试入口。API readiness只检查阶段所需依赖；模型不可用时基本笔记业务仍可用并显示能力不可用。
 
 专用服务用户knoted，源目录仅读取权限，assets/state/staging仅其可写。Python只见staging及模型，不给源目录和PG凭据。OnlyOffice使用当前服务地址作受信任依赖，JWT通过运行凭据引用，不输出内容。保持其已有外链限制和其他应用配置。
 
-## /etc/nixos交接
+## /etc/nixos 交接
 
-每个host阶段是独立任务，不与Knoted应用提交混合：
+测试实例的应用更新**不再**产生 host 任务。host 仓库现在只负责：
 
-1. Knoted提交包/模块及说明，记录SHA，相关构建和验证通过。
-2. 在/etc/nixos按其AGENTS.md建立合规任务工作区；先读当前flake、模块和主机名，不假定Knoted的路径规则可覆盖主机仓库。
-3. 仅新增Knoted feature/包、锁定引用与必要本机启用；模型服务安装依次Docling/BGE/Strata，分别验证和提交。
-4. nix eval对应选项，构建系统候选，保存前代system引用；确认没有无关服务变更再激活测试配置。
-5. 检查测试服务及既有依赖健康；失败恢复前代配置，不覆盖应用数据库。
-6. 将主机提交SHA和应用SHA写入Knoted任务交接。不得自动推送任一仓库。
+- 实例目录与属主（`/data/knoted-dev/service` 归宿主用户）、机器级模型共享根（ADR 0001）；
+- PostgreSQL 角色/库 provisioning（`knoted-db` oneshot）、Strata 与共享服务；
+- ACME 证书、防火墙 15601、运行期可执行文件（`caddy`、`sqlx-cli`、`openssl`）；
+- ACME 续期后的 `knoted-https-reload.service` 只触发实例安装的 reload 入口；
+- 将来的生产实例（`features.server.knoted.app.enable`，本次关闭）。
 
-T10/T11/T12各自拆固定两个交付子任务：`Txx-app`只改Knoted客户端/fixture/验证报告；`Txx-host`只改/etc/nixos安装启用。每个子任务一个Agent，app先定义契约，host验证，再补app验收；不能以一个Agent任务同时改两仓库。T21/T70同样采用app/host交接。
+需要改 host 时（外部依赖变化、生产启用）仍按 host 仓库规则建独立任务工作区：
+
+1. 先读当前 flake、模块与主机名，不假定 Knoted 的路径规则可覆盖主机仓库。
+2. `nix eval` 对应选项，构建系统候选，比较非 Knoted 单元差异。
+3. 做 boot 候选安装与定向运行变更，避免会隐式重启共享 PostgreSQL/Strata 的全机 `switch`。
+4. 记录主机提交 SHA；不得自动推送 host 仓库。
+
+T10/T11/T12 的历史 app/host 拆分规则仅适用于已完成的那些外部依赖接入；`tools/dev/build-artifact.sh` 的产物构建仍在 app 侧。
 
 ## 部署门槛
 
-T21建立持续测试实例。之后每个改变运行行为且依赖齐备的任务，在审查集成后更新dev；迁移不兼容前端时功能开关默认关闭，保持当前功能可用，不等待整个阶段才部署。纯文档、未接入的库及测试任务注明无需部署。部署使用固定提交构建产物，不能从马上清理的工作树长期开服务。
+每个改变运行行为且依赖齐备的任务，在审查集成后更新测试实例；迁移不兼容前端时功能开关默认关闭，保持当前功能可用。纯文档、未接入的库及测试任务注明无需部署。实例运行固定提交产物，不能从马上清理的任务工作树长期开服务——编排与运行根都在稳定位置（`/wrd/prj/knoted` 主检出 + `/data/knoted-dev/runtime/<sha>`）。
 
-顺序：记录运行版本→相关测试→提交/审查→本地集成→固定构建→必要备份→迁移→更新实例→HTTPS/readiness/登录/本任务功能验证→保存SHA证据。不可逆迁移另需明确决策；没有授权时保留待部署，不声称完成。数据库回滚不能仅切旧二进制假装恢复。
+顺序：记录运行版本→相关测试→提交/审查→本地集成→主检出构建固定产物→`prepare` 校验→必要备份→迁移→切换 `current` 并 `process restart`（迁移则 `down` 后 `up`）→HTTPS/readiness/登录/本任务功能验证→保存 SHA 证据。不可逆迁移另需明确决策；没有授权时保留待部署，不声称完成。数据库回滚不能仅切旧二进制假装恢复。
 
 ## T68之前的迁移备份
 
-T21起若后续任务需要迁移，而统一admin backup尚未实现，先用运维维护窗口完成最小一致备份：停止本测试实例API/Worker及其Python执行，确认无应用写入，再对knoted_dev执行pg_dump，并复制本实例assets及生成摘要清单到service/backups/<timestamp>/。命令须明确数据库和实例路径，不能停止共享PostgreSQL或其他应用。新空实例无历史数据时记录“空库，无旧数据”；有数据但无法备份则不迁移。T68完成后统一替换为管理命令。模型依赖和只读源目录不参与这个备份。
+T21起若后续任务需要迁移，而统一admin backup尚未实现，先用运维维护窗口完成最小一致备份：`pnpm pc process stop knoted-api`（必要时连同 Python 执行进程），确认无应用写入，再对knoted_dev执行pg_dump，并复制本实例assets及生成摘要清单到service/backups/<timestamp>/。命令须明确数据库和实例路径，不能停止共享PostgreSQL或其他应用。新空实例无历史数据时记录“空库，无旧数据”；有数据但无法备份则不迁移。T68完成后统一替换为管理命令。模型依赖和只读源目录不参与这个备份。
 
 ## 一致备份和恢复
 

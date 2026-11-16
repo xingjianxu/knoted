@@ -12,9 +12,12 @@
     "build": "pnpm -r --if-present run build",
     "api:verify": "pnpm api:generate && test -z \"$(git status --porcelain -- packages/api-client/src/generated)\"",
     "api:check": "node api/examples/check.mjs",
-    "api:generate": "pnpm --filter @knoted/api-client run generate"
+    "api:generate": "pnpm --filter @knoted/api-client run generate",
+    "pc": "pcwrap",
+    "test:pc": "node --test tests/pc/"
   },
   "devDependencies": {
+    "@bixlab/pcwrap": "0.1.0",
     "@eslint/js": "10.0.1",
     "@playwright/test": "1.65.0",
     "ajv": "8.20.0",

@@ -1,0 +1,13 @@
+[server]
+bind = "127.0.0.1:@API_PORT@"
+
+[database]
+url = "@DATABASE_URL@"
+
+[auth]
+rp_id = "@DOMAIN@"
+origin = "https://@DOMAIN@:@HTTPS_PORT@"
+
+[logging]
+level = "@LOG_LEVEL@"
+format = "json"

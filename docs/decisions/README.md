@@ -8,5 +8,6 @@
 | --- | --- | --- | --- | --- |
 | 0001 | 模型 artifact 采用机器级共享根并按 revision 分层（[文件](0001-machine-level-model-artifact-roots.md)） | 2026-11-15 | Accepted | 无 |
 | 0002 | 通用 UI 由 mtone 提供，Knoted 直接消费 npm 包（[文件](0002-mtone-ui-ownership.md)） | 2026-11-16 | Accepted | 无；替换 v1 自有 UI 提案 |
+| 0003 | 测试实例由 pcwrap 编排，NixOS 只保留外部依赖与未来生产（[文件](0003-test-instance-process-management.md)） | 2026-11-16 | Accepted | 无；替代 T21 的「测试实例由 NixOS 单元运行」边界 |
 
 新 ADR 必须填写背景、方案、理由、正负影响、人工确认依据和关联任务。
