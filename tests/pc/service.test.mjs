@@ -387,6 +387,23 @@ describe("数据库归属", () => {
     const toml = readFileSync(join(fixture.instanceRoot, "config/knoted.toml"), "utf8");
     assert.match(toml, /url = "postgres:\/\/xingjian@127\.0\.0\.1:5432\/knoted_dev"/);
     assert.doesNotMatch(toml, /knoted_dev@/);
+
+    // 迁移实际拿到的连接串也必须是同一个默认值（不是只渲染对了 TOML）。
+    const stubDir = makeTempDir("default-url-stub");
+    const record = join(stubDir, "database-url.txt");
+    writeExecutable(
+      join(stubDir, "sqlx"),
+      `#!/usr/bin/env bash\nprintf '%s' "$DATABASE_URL" > ${JSON.stringify(record)}\nexit 0\n`,
+    );
+    const migrated = run("bash", [serviceScript, "migrate"], {
+      env: { ...env, PATH: `${stubDir}:${env.PATH}` },
+    });
+    assert.equal(migrated.status, 0, migrated.stderr);
+    assert.equal(
+      readFileSync(record, "utf8"),
+      "postgres://xingjian@127.0.0.1:5432/knoted_dev",
+      "migrate 的默认连接串必须与模板一致",
+    );
   });
 });
 

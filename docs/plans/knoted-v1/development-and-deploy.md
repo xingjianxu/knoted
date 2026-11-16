@@ -17,7 +17,7 @@
 | Agent样本唯一写区 | 上述根/agent-fixtures/<task-id>/ |
 | 固定产物运行根 | /data/knoted-dev/runtime/\<full-sha\>/（`bin/knoted-api`、`share/knoted/{web,migrations}`），`current` 指针原子切换 |
 | 稳定测试实例 | /data/knoted-dev/service/{config,state,assets,staging,logs,backups,bin}（属主宿主用户） |
-| 开发/测试库 | `knoted_dev`（属主/连接用户 `xingjian`，`createdb -h 127.0.0.1 knoted_dev`） |
+| 开发/测试库 | `knoted_dev`（`createdb -h 127.0.0.1 knoted_dev`；连接用户 `xingjian`，属主随 ADR 0004 迁给该用户） |
 | 编排控制端口 | 127.0.0.1:15600（pcwrap；15601 为 HTTPS、15602 为 API） |
 | 临时任务目录 | /data/knoted-dev/tasks/<task-id>/{tmp,cache,build,evidence} |
 | 隔离恢复演练 | /data/knoted-dev/tasks/<task-id>/restore |
@@ -33,7 +33,7 @@
 
 编排有四个进程：`prepare`（校验固定产物、渲染 `knoted.toml`/`Caddyfile`、准备目录、校验证书、检查端口、安装 ACME reload 入口）、`migrate`（一次性 `sqlx migrate run`）、`knoted-api`（127.0.0.1:15602）、`knoted-https`（独立 Caddy，HTTPS 15601，静态网页与 /api 同源，`X-Knoted-Revision`）。`knoted-api` 依赖 `migrate` 成功，`knoted-https` 依赖 API healthy。
 
-PostgreSQL 使用独立库 `knoted_dev`，属主与连接用户都是宿主用户 `xingjian`，复用本机 PG 监听与 trust 认证。建库是一次性动作，由人执行：
+PostgreSQL 使用独立库 `knoted_dev`，复用本机 PG 监听与 trust 认证；连接用户是宿主用户 `xingjian`（迁移前该库仍属 `knoted_dev` 角色，属主迁移随 ADR 0004 执行，见 [证据](evidence/db-host-user.md)）。建库是一次性动作，由人执行：
 
 ```bash
 createdb -h 127.0.0.1 knoted_dev        # 开发/测试；生产用另一个库名

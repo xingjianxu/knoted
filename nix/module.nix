@@ -1,5 +1,6 @@
-# Host owns database provisioning/migrations, runtime configuration, TLS and
-# proxying. This module starts only the implemented API.
+# Production path only (the test instance runs under tools/dev/pc + pcwrap).
+# Host owns the database lifecycle (created by the host user, ADR 0004), runtime
+# configuration, TLS and proxying. This module starts only the implemented API.
 { config, lib, ... }:
 let
   cfg = config.services.knoted;

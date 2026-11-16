@@ -1,8 +1,8 @@
 # Knoted 测试实例编排（由 @bixlab/pcwrap 管理，控制端口 15600，见 pcwrap.config.json）。
 #
 # 边界：本编排只管理 Knoted 测试应用（配置渲染、迁移、API、专用 HTTPS 入口）。
-# PostgreSQL 角色/库 provisioning、Strata、共享模型根与 ACME 证书由 /etc/nixos 管理，
-# 不出现在这里，也不随 `./pc down` 停止。
+# 数据库由宿主用户直接创建（ADR 0004），编排只跑 `sqlx migrate`；Strata、共享模型根、
+# ACME 证书与运行期工具由 /etc/nixos 提供，不出现在这里，也不随 `pnpm pc down` 停止。
 #
 # 运行根是固定提交构建产物（tools/dev/build-artifact.sh 产出，含 REVISION 与 SHA256SUMS），
 # 不在编排里做源码构建或热更新。

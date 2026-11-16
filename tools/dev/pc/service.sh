@@ -2,8 +2,10 @@
 # Knoted 测试实例的编排入口（由 process-compose 调用，人用 `pnpm pc …`）。
 #
 # 只负责测试应用：渲染运行配置与 Caddyfile、校验固定产物、准备目录、
-# 执行迁移、运行 API 与独立 HTTPS 入口。PostgreSQL 角色/库、Strata、共享模型根、
-# ACME 证书都由 /etc/nixos 管理，这里只消费。
+# 执行迁移、运行 API 与独立 HTTPS 入口。
+# 数据库由宿主用户直接创建（ADR 0004，本机用 trust 认证连接 `xingjian`），
+# 编排只负责跑迁移，不建库、不建角色；Strata、共享模型根、ACME 证书与运行期工具
+# 仍由 /etc/nixos 提供。
 #
 # 所有路径与端口可用环境变量覆盖，默认值即本机测试实例（隔离验证用同样的入口
 # 指向临时根与临时端口）：

@@ -19,9 +19,9 @@
 | 检查 | 结果 |
 |---|---|
 | `pnpm test:pc` | 9 套件全绿（含新增两个用例） |
-| 本地门禁 | `gates-dbowner.log`：Rust 125 / 前端 54 / 20+ test:pc / typecheck / lint / build / api / `git diff --check` |
-| `nix eval …systemd.services`（knoted*） | `["knoted-https-reload"]`（`knoted-db` 已消失） |
-| boot 候选 | 见 host 证据（`/data/knoted-dev/tasks/pcwrap/host-evidence/`），非全机 switch |
+| 本地门禁 | `/data/knoted-dev/tasks/pcwrap/logs/gates-dbowner2.log`：Rust 125 / 前端 54 / `test:pc` 21 / typecheck / lint / build / api / `git diff --check` |
+| `nix eval …systemd.services`（knoted*） | `["knoted-https-reload"]`（`knoted-db` 已消失），输出存档 `/data/knoted-dev/tasks/pcwrap/host-evidence/nix-eval-knoted-units.json` |
+| boot 候选 | `wiqsw3wd…`（host `0e95cde`），日志在 `/data/knoted-dev/tasks/pcwrap/host-evidence/boot-install.log`；非全机 switch |
 
 ## 数据库属主迁移与实例重启
 

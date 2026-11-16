@@ -48,13 +48,16 @@
 
 - 正面：host 少一个单元与一个选项；角色/库/属主不再跨仓库重复声明；实例与测试库同属主，`psql`/`createdb` 直接可用。
 - 负面：新机器或换库需要手工 `createdb`（一行命令，写进部署指南）；没有声明式权限校验，属主漂移只能靠迁移报错发现。
+- 可移植性成本：默认连接串把用户名写死为 `xingjian`（迁移失败提示用 `id -un`，两者在非本机环境会不一致）；`createdb` 需要 `CREATEDB` 权限或超级用户。换机器时这两点都要按宿主用户重新确认。
 - 已知取舍（明确接受）：连接用户是本机 PostgreSQL 超级用户，且依赖本机 trust 认证，**没有按服务最小权限**。这意味着本机上任何能以 `xingjian` 身份连接数据库的进程都拥有全库权限，审计粒度止于系统账号。若将来生产需要独立凭据或按服务授权，应另开决策（例如 per-service 角色 + 凭据文件），本 ADR 不预设其结论。
 - 迁移与回退：迁移前 `pg_dump`；回退 = 重建 `knoted_dev` 角色、把属主与对象转回、恢复旧连接串。数据不丢失（`ALTER DATABASE ... OWNER` + `REASSIGN OWNED` 保留字节）。
 - 安全：连接串无密码，仅本机回环；生产若需独立凭据另行决策。
 
 ## 验证与后续任务
 
-见 [证据](../plans/knoted-v1/evidence/db-host-user.md)：单元消失、库/表/数据归属 `xingjian`、`knoted_dev` 角色不存在、实例用默认连接串启动且 readiness 200、共享服务 PID 不变、本地门禁全通过。
+已完成（合并前）：单元与选项删除（`nix eval` 只剩 `knoted-https-reload`）、默认连接串与迁移失败提示、测试与门禁；证据见 [db-host-user.md](../plans/knoted-v1/evidence/db-host-user.md)。
+
+合并后执行且不提前声明：备份 → `ALTER DATABASE` / `REASSIGN OWNED` / `DROP ROLE knoted_dev` → 用默认连接串重启实例 → 核对库/表/数据归属 `xingjian`、readiness 200、共享服务 PID 不变。结果追加到同一证据文件。
 
 ## 状态历史
 
