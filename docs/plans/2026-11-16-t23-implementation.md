@@ -47,9 +47,9 @@
 
 **Interfaces:** 消费 Task 1 已审查提交；产出 PR merge、主线验证、运行SHA与HTTPS功能证据。主Agent负责集成和最终验证；host agent如需写文件各用独立工作区。
 
-- [ ] PR 用模板关联 #60 并粘贴门禁输出；普通 merge 后复验主线。
-- [ ] 按既有部署机制固定SHA构建，先一致备份再应用兼容新增迁移；HTTPS readiness/登录/本任务CRUD验证。无备份权限时保留待部署。
-- [ ] 记录真实验收，Issue/Projects Done；归档日志，清理本任务已合并分支/worktree，不删除未合并成果。
+- [x] PR 用模板关联 #60 并粘贴门禁输出；普通 merge 后复验主线。
+- [x] 按既有部署机制固定SHA构建，先一致备份再应用兼容新增迁移；HTTPS readiness/登录/本任务CRUD验证。无备份权限时保留待部署。
+- [ ] 记录真实验收，Issue/Projects Done；归档日志，并在最后收尾PR合入后清理本任务已合并分支/worktree（清理读回记PR与最终报告，不为该记录循环创建文档PR）。
 
 ## Progress / Decisions
 
@@ -61,3 +61,5 @@
 - 同级结构写使用按notes表OID隔离的事务advisory锁；内容写只锁单行。无op写保留版本/outbox。未接入索引handler时outbox保持未发布，不创建会被当前worker拒绝的job。
 
 - 独立审查发现NUL落库503的重要输入问题，已真实RED→GREEN修复；最终15聚焦/125全量pass（1既有ignored），fmt/clippy0；前端54pass/typecheck/lint/api检查0。
+
+- PR #61已合入b0409b6，主线125/54及全部门禁通过；固定7dc601a已完成一致备份后dev更新，HTTPS CRUD/CAS/outbox/软删除与会话/CSRF/logout通过；606非Knoted条目及10项共享记录不变。详情见T23证据。
