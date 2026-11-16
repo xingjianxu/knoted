@@ -2,7 +2,7 @@
 
 ## 管理边界
 
-测试实例的**应用**由本仓库的 `@bixlab/pcwrap` + process-compose 管理（[ADR 0003](../../decisions/0003-test-instance-process-management.md)）：配置渲染、迁移、API、独立 HTTPS 入口都在 `process-compose.yaml` 里，控制端口 `127.0.0.1:15600`。**外部依赖**（PostgreSQL 角色/库、Strata、机器级模型共享根、ACME 证书、防火墙）仍由 `/etc/nixos` 管理。**生产实例**将来才由 NixOS 运行，本次不部署。
+测试实例的**应用**由本仓库的 `@bixlab/pcwrap` + process-compose 管理（[ADR 0003](../../decisions/0003-test-instance-process-management.md)）：配置渲染、迁移、API、独立 HTTPS 入口都在 `process-compose.yaml` 里，控制端口 `127.0.0.1:15600`。**外部依赖**（Strata、机器级模型共享根、ACME 证书、防火墙、运行期工具）由 `/etc/nixos` 管理；**数据库由宿主用户 `xingjian` 直接创建与管理**（[ADR 0004](../../decisions/0004-database-owned-by-host-user.md)），没有 NixOS 侧的 provisioning 单元。**生产实例**将来才由 NixOS 运行，本次不部署。
 
 日常入口：`pnpm pc up -D`、`process list`、`process restart <name>`、`process logs <name>`、`down`。应用改动不需要再改 `/etc/nixos` 的 pin；只有外部依赖或生产启用才产生 host 任务。真实切换已随 PR #64 完成（运行 `4a546b2`），结果与回退入口记在 [证据](evidence/pcwrap-dev-service.md)。
 
@@ -17,6 +17,7 @@
 | Agent样本唯一写区 | 上述根/agent-fixtures/<task-id>/ |
 | 固定产物运行根 | /data/knoted-dev/runtime/\<full-sha\>/（`bin/knoted-api`、`share/knoted/{web,migrations}`），`current` 指针原子切换 |
 | 稳定测试实例 | /data/knoted-dev/service/{config,state,assets,staging,logs,backups,bin}（属主宿主用户） |
+| 开发/测试库 | `knoted_dev`（`createdb -h 127.0.0.1 knoted_dev`；连接用户 `xingjian`，属主随 ADR 0004 迁给该用户） |
 | 编排控制端口 | 127.0.0.1:15600（pcwrap；15601 为 HTTPS、15602 为 API） |
 | 临时任务目录 | /data/knoted-dev/tasks/<task-id>/{tmp,cache,build,evidence} |
 | 隔离恢复演练 | /data/knoted-dev/tasks/<task-id>/restore |
@@ -32,7 +33,13 @@
 
 编排有四个进程：`prepare`（校验固定产物、渲染 `knoted.toml`/`Caddyfile`、准备目录、校验证书、检查端口、安装 ACME reload 入口）、`migrate`（一次性 `sqlx migrate run`）、`knoted-api`（127.0.0.1:15602）、`knoted-https`（独立 Caddy，HTTPS 15601，静态网页与 /api 同源，`X-Knoted-Revision`）。`knoted-api` 依赖 `migrate` 成功，`knoted-https` 依赖 API healthy。
 
-PostgreSQL 使用独立库 `knoted_dev` 与专用角色，复用本机 PG 监听；角色/库 provisioning 由 `/etc/nixos` 的 `knoted-db` oneshot 完成。Python 15603、Strata 15604、Meilisearch 15605 端口保持预留，暂不纳入编排。端口启动前检查，占用时失败并报告，不杀其他进程或自动漂移。生产端口不在本计划内。
+PostgreSQL 使用独立库 `knoted_dev`，复用本机 PG 监听与 trust 认证；连接用户是宿主用户 `xingjian`（迁移前该库仍属 `knoted_dev` 角色，属主迁移随 ADR 0004 执行，见 [证据](evidence/db-host-user.md)）。建库是一次性动作，由人执行：
+
+```bash
+createdb -h 127.0.0.1 knoted_dev        # 开发/测试；生产用另一个库名
+```
+
+schema 由编排里的 `migrate` 进程管理（`sqlx migrate run`）；库不存在时迁移失败并打印上面这条命令。Python 15603、Strata 15604、Meilisearch 15605 端口保持预留，暂不纳入编排。端口启动前检查，占用时失败并报告，不杀其他进程或自动漂移。生产端口不在本计划内。
 
 重启语义：`process restart knoted-api` 不重跑迁移；改模板、编排或环境变量后需 `down` 再 `up`（`prepare` 才会重跑）。
 
@@ -45,7 +52,7 @@ PostgreSQL 使用独立库 `knoted_dev` 与专用角色，复用本机 PG 监听
 测试实例的应用更新**不再**产生 host 任务。host 仓库现在只负责：
 
 - 实例目录与属主（`/data/knoted-dev/service` 归宿主用户）、机器级模型共享根（ADR 0001）；
-- PostgreSQL 角色/库 provisioning（`knoted-db` oneshot）、Strata 与共享服务；
+- Strata 与共享服务（数据库不再由 host 声明：见 ADR 0004，开发/测试库由 `xingjian` 直接 `createdb`）；
 - ACME 证书、防火墙 15601、运行期可执行文件（`caddy`、`sqlx-cli`、`openssl`）；
 - ACME 续期后的 `knoted-https-reload.service` 只触发实例安装的 reload 入口；
 - 将来的生产实例（`features.server.knoted.app.enable`，本次关闭）。
