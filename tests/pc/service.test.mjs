@@ -1,5 +1,5 @@
 // Knoted 测试实例编排的场景测试（pnpm test:pc）。
-// 覆盖：pcwrap/编排配置形状、固定产物校验、模板渲染、证书校验、端口占用、迁移失败传播。
+// 覆盖：pcwrap/编排配置形状、固定产物校验、模板渲染、独立证书工具、API 端口占用、迁移失败传播。
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -28,7 +28,7 @@ const revision = "0123456789abcdef0123456789abcdef01234567";
 const temporary = [];
 
 // 运行期工具由 NixOS 提供，测试里用"临时 profile 目录"代替，避免依赖调用者 PATH：
-// openssl 必须真实（证书校验），caddy 只要求在 PATH 里可解析。
+// openssl 只供独立证书工具测试使用；API prepare 不依赖 Caddy/证书。
 function resolveTool(name) {
   const dirs = [
     ...(process.env.PATH ?? "").split(":"),
@@ -47,8 +47,6 @@ temporary.push(emptyStaticPath);
 const toolProfile = mkdtempSync(join(tmpdir(), "knoted-pc-tools-"));
 temporary.push(toolProfile);
 symlinkSync(resolveTool("openssl"), join(toolProfile, "openssl"));
-writeFileSync(join(toolProfile, "caddy"), "#!/usr/bin/env bash\nexit 0\n");
-chmodSync(join(toolProfile, "caddy"), 0o755);
 
 function makeTempDir(label) {
   const dir = mkdtempSync(join(tmpdir(), `knoted-pc-${label}-`));
@@ -139,7 +137,7 @@ function createCertificateFixture(hostname) {
 function prepareEnv({ runtimeRoot, instanceRoot, certDir, apiPort, httpsPort, domain }, extra = {}) {
   return {
     ...process.env,
-    // 默认只暴露临时 profile（真实 openssl + caddy stub）；/run/current-system 兜底也关掉，
+    // 默认只暴露临时 profile（真实 openssl）；/run/current-system 兜底也关掉，
     // 否则切换后（工具装进系统 PATH）"缺依赖"的负向断言会失效。
     KNOTED_SYSTEM_PROFILE_BIN: extra.KNOTED_SYSTEM_PROFILE_BIN ?? toolProfile,
     KNOTED_STATIC_PATH: extra.KNOTED_STATIC_PATH ?? emptyStaticPath,
@@ -189,7 +187,7 @@ describe("编排配置", () => {
 
   it("编排只含测试应用进程，控制端口不写进 yaml", () => {
     const yaml = readFileSync(join(repoRoot, "process-compose.yaml"), "utf8");
-    for (const name of ["prepare", "migrate", "knoted-api", "knoted-https"]) {
+    for (const name of ["prepare", "migrate", "knoted-api"]) {
       assert.match(yaml, new RegExp(`\\n  ${name}:`), `缺少进程 ${name}`);
     }
     assert.doesNotMatch(yaml, /^\s*port:/m, "process-compose.yaml 不接受 port 字段，控制端口由 pcwrap 注入");
@@ -199,16 +197,15 @@ describe("编排配置", () => {
       .map((line) => line.trim().replace(":", ""));
     assert.deepEqual(
       processNames.sort(),
-      ["knoted-api", "knoted-https", "migrate", "prepare"],
+      ["knoted-api", "migrate", "prepare"],
       "外部依赖（PostgreSQL/Strata）不得进编排",
     );
     assert.match(yaml, /condition: process_completed_successfully/);
-    assert.match(yaml, /condition: process_healthy/);
   });
 });
 
 describe("prepare", () => {
-  it("渲染配置/Caddyfile 并安装稳定 reload 入口", async () => {
+  it("只渲染应用配置，不生成 HTTPS 配置或 reload 入口", async () => {
     const fixture = await fullFixture();
     const result = run(
       "bash",
@@ -224,26 +221,11 @@ describe("prepare", () => {
     assert.match(toml, /url = "postgres:\/\/dev@127\.0\.0\.1:5432\/dev"/);
     assert.doesNotMatch(toml, /@[A-Z_]+@/);
 
-    const caddy = readFileSync(join(fixture.instanceRoot, "config/Caddyfile"), "utf8");
-    assert.match(caddy, new RegExp(`https://knoted\\.example\\.test:${fixture.httpsPort} \\{`));
-    assert.match(caddy, new RegExp(`X-Knoted-Revision ${revision}`));
-    assert.match(caddy, new RegExp(`reverse_proxy 127\\.0\\.0\\.1:${fixture.apiPort}`));
-    assert.match(caddy, new RegExp(`root \\* ${fixture.runtimeRoot}/share/knoted/web`));
-    assert.match(caddy, /auto_https off/);
-    assert.doesNotMatch(caddy, /@[A-Z_]+@/);
-
     assert.equal(statSync(join(fixture.instanceRoot, "config/knoted.toml")).mode & 0o777, 0o600);
     assert.equal(statSync(join(fixture.instanceRoot, "state")).mode & 0o777, 0o700);
+    assert.equal(existsSync(join(fixture.instanceRoot, "config/Caddyfile")), false);
+    assert.equal(existsSync(join(fixture.instanceRoot, "bin/knoted-https-reload")), false);
 
-    const reload = join(fixture.instanceRoot, "bin/knoted-https-reload");
-    assert.equal(statSync(reload).mode & 0o777, 0o755);
-    const reloadBody = readFileSync(reload, "utf8");
-    assert.match(reloadBody, /bin_dir=\$\{BASH_SOURCE\[0\]%\/\*\}/);
-    assert.doesNotMatch(reloadBody, /flock|mkdir/, "续期入口在 ProtectSystem=strict 下不能写文件");
-    assert.match(reloadBody, /caddy reload --config/);
-    assert.match(reloadBody, new RegExp(fixture.certDir.replaceAll("/", "\\/")));
-    assert.match(reloadBody, new RegExp(`unix/${fixture.instanceRoot}/state/https/admin.sock`));
-    assert.match(reloadBody, /export PATH=/);
   });
 
   it("拒绝被篡改或清单不完整的固定产物", async () => {
@@ -259,12 +241,23 @@ describe("prepare", () => {
     );
   });
 
-  it("证书缺失时拒绝启动", async () => {
+  it("宿主证书缺失时仍可准备 API", async () => {
     const fixture = await fullFixture();
     rmSync(join(fixture.certDir, "fullchain.pem"));
     const result = run("bash", [serviceScript, "prepare"], { env: prepareEnv(fixture) });
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /证书不可读/);
+    assert.equal(result.status, 0, result.stderr);
+  });
+
+  it("宿主 HTTPS 已监听时仍能准备 API", async () => {
+    const fixture = await fullFixture();
+    const blocker = createServer();
+    await new Promise((resolveListen) => blocker.listen(fixture.httpsPort, "127.0.0.1", resolveListen));
+    try {
+      const result = run("bash", [serviceScript, "prepare"], { env: prepareEnv(fixture) });
+      assert.equal(result.status, 0, result.stderr);
+    } finally {
+      await new Promise((resolveClose) => blocker.close(resolveClose));
+    }
   });
 
   it("端口被占用时拒绝启动", async () => {
@@ -316,10 +309,27 @@ describe("证书校验", () => {
 });
 
 describe("运行期依赖", () => {
+  it("PATH 没有 TLS 工具也能准备 API", async () => {
+    const fixture = await fullFixture();
+    const restricted = makeTempDir("api-only-path");
+    for (const tool of ["bash", "dirname", "readlink", "cat", "find", "sort", "xargs", "sha256sum", "cmp", "curl", "ss", "install", "mktemp", "chmod", "mv", "grep"]) {
+      symlinkSync(resolveTool(tool), join(restricted, tool));
+    }
+    const result = run(resolveTool("bash"), [serviceScript, "prepare"], {
+      env: prepareEnv(fixture, { PATH: restricted, KNOTED_SYSTEM_PROFILE_BIN: emptyStaticPath }),
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(existsSync(join(fixture.instanceRoot, "config/knoted.toml")), true);
+  });
+
   it("缺少工具时在写配置文件之前失败", async () => {
     const fixture = await fullFixture();
-    const result = run("bash", [serviceScript, "prepare"], {
-      env: prepareEnv(fixture, { KNOTED_SYSTEM_PROFILE_BIN: makeTempDir("empty-profile") }),
+    const restricted = makeTempDir("restricted-path");
+    for (const tool of ["bash", "dirname", "readlink", "cat", "find", "sort", "xargs", "sha256sum", "cmp"]) {
+      symlinkSync(resolveTool(tool), join(restricted, tool));
+    }
+    const result = run(resolveTool("bash"), [serviceScript, "prepare"], {
+      env: prepareEnv(fixture, { PATH: restricted, KNOTED_SYSTEM_PROFILE_BIN: emptyStaticPath }),
     });
     assert.equal(result.status, 1);
     assert.match(result.stderr, /缺少运行期依赖/);
@@ -373,7 +383,6 @@ describe("paths", () => {
     assert.match(result.stdout, /^api_port=15602$/m);
     assert.match(result.stdout, /^https_port=15601$/m);
     assert.match(result.stdout, /^domain=wlab\.132140\.xyz$/m);
-    assert.match(result.stdout, /^admin_socket=\/data\/knoted-dev\/service\/state\/https\/admin\.sock$/m);
   });
 });
 
@@ -456,15 +465,6 @@ describe("渲染与校验边界", () => {
     // 掩码覆盖 userinfo 整段（user 也可能是敏感信息）
     assert.match(result.stdout, /database_url=postgres:\/\/\*\*\*@127\.0\.0\.1:5432\/dev/);
     assert.doesNotMatch(result.stdout, /topsecret/);
-  });
-
-  it("HTTPS 重启时重新校验证书", async () => {
-    const fixture = await fullFixture();
-    run("bash", [serviceScript, "prepare"], { env: prepareEnv(fixture) });
-    rmSync(join(fixture.certDir, "fullchain.pem"));
-    const result = run("bash", [serviceScript, "https"], { env: prepareEnv(fixture) });
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /证书不可读/);
   });
 
   it("拒绝不是 PEM 的证书文件", () => {
