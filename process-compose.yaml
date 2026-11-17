@@ -1,6 +1,6 @@
 # Knoted 测试实例编排（由 @bixlab/pcwrap 管理，控制端口 15600，见 pcwrap.config.json）。
 #
-# 边界：本编排只管理 Knoted 测试应用（配置渲染、迁移、API）。
+# 边界：本编排只管理 Knoted 测试应用（配置渲染、迁移、API、Worker）。
 # 数据库由宿主用户直接创建（ADR 0004），编排只跑 `sqlx migrate`；Strata、共享模型根、
 # 共享 Caddy HTTPS、ACME 证书与运行期工具由 /etc/nixos 提供，不出现在这里，也不随 `pnpm pc down` 停止。
 #
@@ -9,7 +9,7 @@
 #
 # 常用命令：
 #   pnpm pc doctor                      # 自检配置/端口/依赖
-#   pnpm pc up -D                       # 后台启动（prepare → migrate → api）
+#   pnpm pc up -D                       # 后台启动（prepare → migrate → api/worker）
 #   pnpm pc process list                # 进程状态
 #   pnpm pc process restart knoted-api  # 只重启 API（不重跑迁移）
 #   pnpm pc process logs knoted-api -n 200
@@ -49,3 +49,13 @@ processes:
       period_seconds: 2
       timeout_seconds: 3
       failure_threshold: 60
+
+  knoted-worker:
+    command: "exec bash tools/dev/pc/service.sh worker"
+    availability:
+      restart: "on_failure"
+      backoff_seconds: 3
+      max_restarts: 5
+    depends_on:
+      migrate:
+        condition: process_completed_successfully

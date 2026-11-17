@@ -21,6 +21,7 @@ use knoted_core::{
     config::AuthConfig,
     context::AppContext,
     notes::{
+        history::{self, FlushSnapshot, ListSnapshots, RestoreSnapshot},
         service::{
             self, CreateNote, DeleteNote, DomainError, GetNote, ListNotes, Note, UpdateNote,
         },
@@ -40,6 +41,14 @@ pub fn router(config: AuthConfig, ctx: AppContext) -> Router<AppContext> {
         )
         .route("/notes/{note_id}/move", post(move_note))
         .route("/notes/{note_id}/restore", post(restore))
+        .route(
+            "/notes/{note_id}/snapshots",
+            get(list_snapshots).post(flush_snapshot),
+        )
+        .route(
+            "/notes/{note_id}/snapshots/{snapshot_id}/restore",
+            post(restore_snapshot),
+        )
         // Enough for a 2MiB raw document plus the bounded title and envelope.
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024 + 64 * 1024))
         .route_layer(from_fn_with_state(config, require_csrf))
@@ -340,6 +349,88 @@ async fn restore(
     .await
     {
         Ok(note) => response(note, StatusCode::OK),
+        Err(e) => error(id, e),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SnapshotQuery {
+    limit: Option<u32>,
+    cursor: Option<String>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SnapshotRestoreBody {
+    expected_version: i64,
+}
+async fn flush_snapshot(
+    State(ctx): State<AppContext>,
+    id: RequestId,
+    path: Result<Path<Uuid>, PathRejection>,
+) -> Response {
+    let Path(note_id) = match path {
+        Ok(p) => p,
+        Err(_) => return bad(id),
+    };
+    match history::flush_snapshot(&ctx, FlushSnapshot { note_id }).await {
+        Ok(s) => (StatusCode::CREATED, Json(s)).into_response(),
+        Err(e) => error(id, e),
+    }
+}
+async fn list_snapshots(
+    State(ctx): State<AppContext>,
+    id: RequestId,
+    path: Result<Path<Uuid>, PathRejection>,
+    query: Result<Query<SnapshotQuery>, QueryRejection>,
+) -> Response {
+    let Path(note_id) = match path {
+        Ok(p) => p,
+        Err(_) => return bad(id),
+    };
+    let Query(q) = match query {
+        Ok(q) => q,
+        Err(_) => return bad(id),
+    };
+    match history::list_snapshots(
+        &ctx,
+        ListSnapshots {
+            note_id,
+            limit: q.limit,
+            cursor: q.cursor,
+        },
+    )
+    .await
+    {
+        Ok(p) => Json(p).into_response(),
+        Err(e) => error(id, e),
+    }
+}
+async fn restore_snapshot(
+    State(ctx): State<AppContext>,
+    id: RequestId,
+    path: Result<Path<(Uuid, Uuid)>, PathRejection>,
+    body: Result<Json<SnapshotRestoreBody>, JsonRejection>,
+) -> Response {
+    let Path((note_id, snapshot_id)) = match path {
+        Ok(p) => p,
+        Err(_) => return bad(id),
+    };
+    let Json(b) = match body {
+        Ok(b) => b,
+        Err(e) => return json_error(id, e),
+    };
+    match history::restore_snapshot(
+        &ctx,
+        RestoreSnapshot {
+            note_id,
+            snapshot_id,
+            expected_version: b.expected_version,
+        },
+    )
+    .await
+    {
+        Ok(n) => response(n, StatusCode::OK),
         Err(e) => error(id, e),
     }
 }

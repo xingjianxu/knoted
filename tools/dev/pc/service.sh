@@ -2,7 +2,7 @@
 # Knoted 测试实例的编排入口（由 process-compose 调用，人用 `pnpm pc …`）。
 #
 # 只负责测试应用：渲染运行配置、校验固定产物、准备目录、
-# 执行迁移、运行 API；HTTPS 由宿主共享 Caddy 管理（ADR 0005）。
+# 执行迁移、运行 API 和 Worker；HTTPS 由宿主共享 Caddy 管理（ADR 0005）。
 # 数据库由宿主用户直接创建（ADR 0004，本机用 trust 认证连接 `xingjian`），
 # 编排只负责跑迁移，不建库、不建角色；Strata、共享模型根、ACME 证书与运行期工具
 # 仍由 /etc/nixos 提供。
@@ -108,6 +108,7 @@ verify_runtime() {
   revision=$(cat "$runtime_root/share/knoted/REVISION" 2>/dev/null || true)
   [[ $revision =~ ^[0-9a-f]{40}$ ]] || die "运行根缺少合法的 share/knoted/REVISION"
   test -x "$runtime_root/bin/knoted-api" || die "运行根缺少可执行 bin/knoted-api"
+  test -x "$runtime_root/bin/knoted-worker" || die "运行根缺少可执行 bin/knoted-worker"
   test -s "$runtime_root/share/knoted/web/index.html" || die "运行根缺少 share/knoted/web/index.html"
   test -n "$(find "$runtime_root/share/knoted/migrations" -maxdepth 1 -name '*.sql' -type f -print -quit 2>/dev/null)" ||
     die "运行根缺少 share/knoted/migrations/*.sql"
@@ -203,6 +204,11 @@ command_api() {
   exec "$runtime_root/bin/knoted-api" --config "$config_file"
 }
 
+command_worker() {
+  test -r "$config_file" || die "缺少运行配置 $config_file；先完成 prepare"
+  exec "$runtime_root/bin/knoted-worker" --config "$config_file"
+}
+
 command_probe_api() {
   curl -fsS --max-time 3 "http://127.0.0.1:$api_port/health/ready" >/dev/null
 }
@@ -222,10 +228,11 @@ case "$command" in
 prepare) command_prepare ;;
 migrate) command_migrate ;;
 api) command_api ;;
+worker) command_worker ;;
 probe-api) command_probe_api ;;
 paths) command_paths ;;
 *)
-  echo "usage: service.sh {prepare|migrate|api|probe-api|paths}" >&2
+  echo "usage: service.sh {prepare|migrate|api|worker|probe-api|paths}" >&2
   exit 2
   ;;
 esac

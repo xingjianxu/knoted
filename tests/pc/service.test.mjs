@@ -103,6 +103,7 @@ function createRuntimeFixture() {
   mkdirSync(join(root, "share/knoted/web"), { recursive: true });
   mkdirSync(join(root, "share/knoted/migrations"), { recursive: true });
   writeExecutable(join(root, "bin/knoted-api"), "#!/usr/bin/env bash\nexit 0\n");
+  writeExecutable(join(root, "bin/knoted-worker"), "#!/usr/bin/env bash\nexit 0\n");
   writeFileSync(join(root, "share/knoted/web/index.html"), "<!doctype html><title>knoted</title>\n");
   writeFileSync(join(root, "share/knoted/migrations/0001_registry.sql"), "select 1;\n");
   writeFileSync(join(root, "share/knoted/REVISION"), `${revision}\n`);
@@ -187,7 +188,7 @@ describe("编排配置", () => {
 
   it("编排只含测试应用进程，控制端口不写进 yaml", () => {
     const yaml = readFileSync(join(repoRoot, "process-compose.yaml"), "utf8");
-    for (const name of ["prepare", "migrate", "knoted-api"]) {
+    for (const name of ["prepare", "migrate", "knoted-api", "knoted-worker"]) {
       assert.match(yaml, new RegExp(`\\n  ${name}:`), `缺少进程 ${name}`);
     }
     assert.doesNotMatch(yaml, /^\s*port:/m, "process-compose.yaml 不接受 port 字段，控制端口由 pcwrap 注入");
@@ -197,7 +198,7 @@ describe("编排配置", () => {
       .map((line) => line.trim().replace(":", ""));
     assert.deepEqual(
       processNames.sort(),
-      ["knoted-api", "migrate", "prepare"],
+      ["knoted-api", "knoted-worker", "migrate", "prepare"],
       "外部依赖（PostgreSQL/Strata）不得进编排",
     );
     assert.match(yaml, /condition: process_completed_successfully/);
@@ -492,5 +493,29 @@ describe("仓库入口", () => {
     assert.equal(pkg.scripts.pc, "pcwrap");
     assert.match(pkg.scripts["test:pc"], /node --test/);
     assert.equal(pkg.devDependencies["@bixlab/pcwrap"], "0.1.0");
+  });
+});
+
+// The service entry must execute the fixed Worker with the rendered config.
+describe("T25 Worker", () => {
+  it("worker 入口传入配置并传播退出码", async () => {
+    const fixture = await fullFixture();
+    const env = prepareEnv(fixture);
+    const prepared = run("bash", [serviceScript, "prepare"], { env });
+    assert.equal(prepared.status, 0, prepared.stderr);
+    const record = join(fixture.base, "worker-args.txt");
+    writeExecutable(join(fixture.runtimeRoot, "bin/knoted-worker"), '#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$KNOTED_WORKER_ARGS"\nexit 7\n');
+    const result = run("bash", [serviceScript, "worker"], { env: { ...env, KNOTED_WORKER_ARGS: record } });
+    assert.equal(result.status, 7, result.stderr);
+    assert.deepEqual(readFileSync(record, "utf8").trim().split("\n"), ["--config", join(fixture.instanceRoot, "config/knoted.toml")]);
+  });
+  it("缺失 Worker 的产物在 prepare 之前拒绝", async () => {
+    const fixture = await fullFixture();
+    rmSync(join(fixture.runtimeRoot, "bin/knoted-worker"));
+    writeManifest(fixture.runtimeRoot);
+    const result = run("bash", [serviceScript, "prepare"], { env: prepareEnv(fixture) });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /bin\/knoted-worker/);
+    assert.equal(existsSync(join(fixture.instanceRoot, "config")), false);
   });
 });

@@ -24,11 +24,12 @@ source_dir=$(mktemp -d "$task_root/build/source.XXXXXXXX")
 # Retain isolated source and build logs for diagnosis; no secrets are copied.
 git -C "$repository" archive "$revision" | tar -x -C "$source_dir"
 cd "$source_dir"
-cargo build --locked --release -p knoted-api
+cargo build --locked --release -p knoted-api -p knoted-worker
 pnpm install --frozen-lockfile --store-dir "$task_root/cache/pnpm-store"
 pnpm --filter @knoted/web build
 mkdir -p "$output/bin" "$output/share/knoted"
 install -m 0755 "$CARGO_TARGET_DIR/release/knoted-api" "$output/bin/knoted-api"
+install -m 0755 "$CARGO_TARGET_DIR/release/knoted-worker" "$output/bin/knoted-worker"
 cp -r apps/web/dist "$output/share/knoted/web"
 cp -r migrations "$output/share/knoted/migrations"
 printf '%s\n' "$revision" > "$output/share/knoted/REVISION"
