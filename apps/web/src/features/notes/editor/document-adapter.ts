@@ -10,9 +10,26 @@ const marks: Mark[] = ["bold", "italic", "underline", "strike", "code"];
 const blockTypes: NoteBlock["type"][] = ["heading", "paragraph", "bulletListItem", "numberedListItem", "checkListItem", "image", "codeBlock"];
 
 function safeHref(href: string): string {
-  if (/\s/u.test(href) || [...href].some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) throw new Error("链接地址无效");
+  // Match the backend's URI (not IRI) spelling contract before WHATWG URL
+  // parsing can normalize invalid percent escapes, Unicode or missing slashes.
+  if (!/^(?:[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=]|%[0-9A-Fa-f]{2})*$/.test(href)
+    || href.split("#").length > 2) throw new Error("链接地址无效");
   const url = new URL(href);
-  if (!["http:", "https:", "mailto:"].includes(url.protocol)) throw new Error("链接协议不受支持");
+  if (url.protocol === "mailto:") {
+    if (!url.pathname || /[[\]]/.test(href.slice(href.indexOf(":") + 1))) throw new Error("邮件链接无效");
+  } else if (url.protocol === "http:" || url.protocol === "https:") {
+    const remainder = href.slice(href.indexOf(":") + 1);
+    if (!remainder.startsWith("//") || !url.hostname) throw new Error("链接地址无效");
+    const rest = remainder.slice(2);
+    const end = rest.search(/[/?#]/);
+    const authority = end < 0 ? rest : rest.slice(0, end);
+    const suffix = end < 0 ? "" : rest.slice(end);
+    const at = authority.lastIndexOf("@");
+    const userinfo = at < 0 ? "" : authority.slice(0, at);
+    const host = at < 0 ? authority : authority.slice(at + 1);
+    if (!authority || /[[\]]/.test(suffix) || /[[\]@]/.test(userinfo)
+      || (!host.startsWith("[") && /[[\]]/.test(host))) throw new Error("链接地址无效");
+  } else throw new Error("链接协议不受支持");
   return href;
 }
 
@@ -29,6 +46,7 @@ export function toEditorBlocks(document: NoteDocument): EditorPartialBlock[] {
     if (block.type === "image" && !block.asset_id) throw new Error("图片缺少资产 ID");
     const content = (block.content ?? []).map((node) => {
       if (node.type !== "text" && node.type !== "link") throw new Error("不支持的行内格式");
+      if (node.href !== undefined) safeHref(node.href);
       const styles: Partial<Record<Mark, boolean>> = {};
       for (const mark of node.marks ?? []) {
         if (!marks.includes(mark)) throw new Error("不支持的文字格式");
@@ -43,10 +61,10 @@ export function toEditorBlocks(document: NoteDocument): EditorPartialBlock[] {
       id: block.id,
       type: block.type,
       props: {
-        ...(block.type === "heading" ? { level: block.level } : {}),
-        ...(block.type === "checkListItem" ? { checked: block.checked ?? false } : {}),
-        ...(block.type === "codeBlock" ? { language: block.language ?? "" } : {}),
-        ...(block.type === "image" ? { assetId: block.asset_id } : {}),
+        ...(block.level !== undefined ? { level: block.level } : {}),
+        ...(block.checked !== undefined ? { checked: block.checked } : {}),
+        ...(block.language !== undefined ? { language: block.language } : {}),
+        ...(block.asset_id !== undefined ? { assetId: block.asset_id } : {}),
       },
       content,
       children: (block.children ?? []).map((child) => convert(child, depth + 1)),
@@ -55,9 +73,9 @@ export function toEditorBlocks(document: NoteDocument): EditorPartialBlock[] {
   return document.blocks.map((block) => convert(block, 1));
 }
 
-// Keep the source DTO as sidecar state, never in the editable HTML. Backend
-// permits optional fields on every block type; preserve them when another block
-// property changes, and retain unchanged inline run boundaries/mark ordering.
+// Initial sidecar data preserves unchanged inline run boundaries/mark ordering.
+// Semantic fields come exclusively from shared editor props, so native history
+// and type transitions can never resurrect an obsolete initial value.
 export function fromEditorBlocks(blocks: EditorBlock[], source?: NoteDocument): NoteDocument {
   const originals = new Map<string, NoteBlock>();
   function remember(blocks: NoteBlock[]) {
@@ -96,14 +114,22 @@ export function fromEditorBlocks(blocks: EditorBlock[], source?: NoteDocument): 
     }
     const original = originals.get(block.id);
     const unchanged = original && equivalent(original.content ?? [], content);
+    if (unchanged) {
+      for (const node of original.content ?? []) if (node.href !== undefined) safeHref(node.href);
+    }
+    const retained = { ...original };
+    delete retained.level;
+    delete retained.checked;
+    delete retained.language;
+    delete retained.asset_id;
     return {
-      ...original,
+      ...retained,
       id: block.id,
       type: block.type,
-      ...(block.type === "heading" ? { level: block.props.level } : {}),
-      ...(block.type === "checkListItem" ? { checked: block.props.checked } : {}),
-      ...(block.type === "image" ? { asset_id: block.props.assetId } : {}),
-      ...(block.type === "codeBlock" && (block.props.language || original?.language !== undefined) ? { language: block.props.language } : {}),
+      ...(block.props.level !== undefined ? { level: block.props.level } : {}),
+      ...(block.props.checked !== undefined ? { checked: block.props.checked } : {}),
+      ...(block.props.assetId !== undefined ? { asset_id: block.props.assetId } : {}),
+      ...(block.props.language !== undefined ? { language: block.props.language } : {}),
       ...(unchanged ? {} : (content.length || original?.content ? { content } : {})),
       ...(block.children.length || original?.children ? { children: block.children.map(convert) } : {}),
     };
