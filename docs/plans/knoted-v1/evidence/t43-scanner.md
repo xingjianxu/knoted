@@ -68,3 +68,28 @@
 父 Agent 停本实例写进程、备份后应用 schema12，构建固定 SHA 并切换。先观察批准根 absent 的 paused_reason=root_unavailable，再由父 Agent 仅初始化批准样本子目录。扫描读取样本后应有完整scan与observations，files计数仍为0，直到T44稳定采集登记真实source。不能把T43扫描成功当成采集、解析或索引已接通。
 
 详细交接报告：`/data/knoted-dev/tasks/t39-t50/reports/t43-implementation.md`。任务包报告 `task-43-report.md` 指向同一报告。
+
+## 独立审查修复 round1（基线 04431da）
+
+审查原文：`/data/knoted-dev/tasks/t39-t50/reviews/t43-task-review.md`，Spec FAIL / Quality CHANGES_REQUESTED。下面保留初始门禁未覆盖时序的实际失败，并补对应修复，不以此前288通过否认问题。
+
+- **R1 — Heartbeat can self-deadlock against the scan transaction's jobs row lock.** 真实 WorkerRunner 使用20ms心跳；外部事务持root锁250ms，原实现释放root后仍等待至2秒超时。runner 的 heartbeat 分支改为并发轮询 heartbeat SQL 和 handler，不派生后台任务，不改变 Handler 接口、取消确认或丢租约规则。
+- **R2 — An expired observation attempt can still publish root generation/token.** 领取观察在等待root锁后与提交前重新校验lease。回归保留并逐字段比较整个root JSON（含NULL identity、原generation/token）及scan数量，过期时事务完整回滚。
+- **R3 — Changed observations do not invalidate old content until the entire traversal ends; real cancellation discards them.** 每个普通文件观察在继续下一条目录项前，独立事务写观察并使旧内容失效；事务以jobs lease、root generation/token/identity和安全路径检查限制发布。完成reconcile只负责最终完整标记/缺失推断，不再补写此前内存观察。相同观察仍不重复增版本；过期或旧代不能写观察。
+
+R3 的core用例在更晚目录的INSERT以真实PG advisory锁暂停，证明早先文件已在遍历结束前失效；丢弃后续future仍保留失效且scan不完整。worker用例持有真实observe_root结果、暂停于reconcile之前，经真实 `request_cancel` → heartbeat → Runner丢弃execute future（DropSignal验证）→ cancelled；没有手工调用reconcile代替取消清理，来源仍present且content_fresh=false。另有等待source行锁期间lease过期的回归，观察及失效写入均回滚。
+
+测试文件：`crates/knoted-core/tests/t43.rs`、`crates/knoted-worker/tests/t43_runner.rs`。日志目录仍是本卡 `/data/knoted-dev/tasks/t43/logs/`，每条round1命令都保存独立`.exit`文件。
+
+| 精确命令 | 实际结果/日志 |
+| --- | --- |
+| `cargo test -p knoted-worker --test t43_runner t43_r1_` | RED exit101：1失败（超时）；GREEN exit0：1通过；`r1-red.log` / `r1-green.log` |
+| `cargo test -p knoted-core --test t43 t43_r2_` | RED exit101：1失败；GREEN exit0：1通过；`r2-red.log` / `r2-green.log` |
+| `cargo test --workspace t43_r3_` | RED exit101：core1失败后Cargo停止，尚未跑worker；`r3-red.log`。修复后exit0：core/worker共2通过；`r3-green.log` |
+| `cargo test -p knoted-worker --test t43_runner t43_r3_` | 单独证明worker RED exit101：1失败，实际仍fresh=true；`r3-worker-red.log` |
+| `cargo test --workspace t43_` | exit0：26通过；`round1-t43.log` |
+| `cargo test -p knoted-worker --test t07_runner --test t08_runner` | exit0：4通过；`round1-existing-runner.log` |
+| `cargo fmt --check` | exit0；`round1-fmt.log` |
+| `cargo clippy --all-targets -- -D warnings` | exit0；`round1-clippy.log` |
+
+`cargo test --workspace` 最终 exit0：293通过、1既有doc忽略，`round1-cargo-test.log` / `.exit`；提交SHA在交接报告追加。本轮未修改或重跑Web/pc，也没有修改依赖锁/公开契约或执行dev/远程操作。R4既有jsdom提示按父Agent指令留独立ledger，本轮不处理。状态仍为待父Agent限定diff复审，不自行宣称Spec/Quality已通过。

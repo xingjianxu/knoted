@@ -22,6 +22,8 @@ pub enum DomainError {
     Stale,
     #[error("invalid scan configuration")]
     InvalidConfig,
+    #[error("scan filesystem changed: {0}")]
+    Changed(&'static str),
 }
 #[derive(Debug, Clone, Default)]
 pub struct ScanRules {
@@ -106,6 +108,8 @@ pub async fn observe_root(ctx: &AppContext, input: ObserveRoot) -> Result<ScanRe
     sqlx::query("INSERT INTO file_roots(id,configured_path) VALUES($1,$2) ON CONFLICT(singleton) DO NOTHING")
         .bind(Uuid::new_v4()).bind(input.path.to_str().ok_or(DomainError::InvalidConfig)?).execute(&mut *tx).await?;
     let (root_id, configured, registered, generation): (Uuid,String,Option<Json<Identity>>,i64) = sqlx::query_as("SELECT id,configured_path,identity,generation FROM file_roots WHERE singleton FOR UPDATE").fetch_one(&mut *tx).await?;
+    // The initial check may have preceded a root-lock wait longer than the lease.
+    lock_lease(&mut tx, &input.lease).await?;
     let error = if Path::new(&configured) != input.path {
         Some("root_changed")
     } else if identity.is_none() {
@@ -136,6 +140,7 @@ pub async fn observe_root(ctx: &AppContext, input: ObserveRoot) -> Result<ScanRe
         .await?;
     sqlx::query("INSERT INTO file_scans(id,root_id,generation,token,job_id,lease_token) VALUES($1,$2,$3,$4,$5,$6)")
         .bind(scan_id).bind(root_id).bind(generation).bind(token).bind(input.lease.job_id).bind(input.lease.token).execute(&mut *tx).await?;
+    lock_lease(&mut tx, &input.lease).await?;
     tx.commit().await?;
     let mut report = ScanReport {
         scan_id,
@@ -180,36 +185,53 @@ pub async fn observe_root(ctx: &AppContext, input: ObserveRoot) -> Result<ScanRe
                 report.error = Some("cancelled");
                 break;
             }
-            let result = (|| -> std::io::Result<()> {
+            let result = (|| -> std::io::Result<Option<(String, Metadata)>> {
                 let entry = entry?;
                 let name = entry.file_name();
                 if name.to_bytes() == b"." || name.to_bytes() == b".." {
-                    return Ok(());
+                    return Ok(None);
                 }
                 let name_str = name.to_str().map_err(|_| std::io::ErrorKind::InvalidData)?;
                 let path = relative.join(name_str);
                 let entry_fd = safe_fs::open_entry(&fd, name)?;
                 let kind = FileType::from_raw_mode(fs::fstat(&entry_fd)?.st_mode);
                 if input.rules.excluded(&path, kind == FileType::Directory) {
-                    return Ok(());
+                    return Ok(None);
                 }
                 match kind {
                     FileType::Directory => pending.push(path),
                     FileType::RegularFile => {
-                        report.observations.insert(
+                        return Ok(Some((
                             path.to_str()
                                 .ok_or(std::io::ErrorKind::InvalidData)?
                                 .to_owned(),
                             safe_fs::metadata(&entry_fd)?,
-                        );
+                        )));
                     }
                     _ => (), // Never dereference symlinks or open special objects for IO.
                 }
-                Ok(())
+                Ok(None)
             })();
-            if result.is_err() {
-                report.error = Some("entry_unreadable");
-                break;
+            match result {
+                Ok(Some((path, metadata))) => {
+                    // Commit before reading another entry/directory. A dropped
+                    // execute future must not discard already observed changes.
+                    match persist_observation(ctx, &report, &path, &metadata).await {
+                        Ok(()) => {
+                            report.observations.insert(path, metadata);
+                        }
+                        Err(DomainError::Changed(reason)) => {
+                            report.error = Some(reason);
+                            break;
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+                Ok(None) => (),
+                Err(_) => {
+                    report.error = Some("entry_unreadable");
+                    break;
+                }
             }
         }
         if report.error.is_some() {
@@ -248,8 +270,50 @@ fn validate_paths(report: &ScanReport) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Persist observations, invalidate stale content and (only on success) infer
-/// absence atomically with the complete marker. A late failure is also fenced.
+/// One observed file is durable before traversal continues. This transaction
+/// never infers absence and survives cancellation of the remaining traversal.
+async fn persist_observation(
+    ctx: &AppContext,
+    report: &ScanReport,
+    path: &str,
+    metadata: &Metadata,
+) -> Result<(), DomainError> {
+    let mut tx = ctx.pool().begin().await?;
+    lock_lease(&mut tx, &report.lease).await?;
+    let (generation, token, identity): (i64, Option<Uuid>, Option<Json<Identity>>) =
+        sqlx::query_as(
+            "SELECT generation,scan_token,identity FROM file_roots WHERE id=$1 FOR UPDATE",
+        )
+        .bind(report.root_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    if generation != report.generation || token != Some(report.token) {
+        return Err(DomainError::Stale);
+    }
+    if identity.as_ref().map(|i| &i.0) != report.identity.as_ref() {
+        return Err(DomainError::Changed("root_changed"));
+    }
+    lock_lease(&mut tx, &report.lease).await?;
+    validate_paths(report).map_err(DomainError::Changed)?;
+    let value = serde_json::to_value(metadata).expect("metadata JSON");
+    sqlx::query("INSERT INTO file_observations(scan_id,relative_path,metadata) VALUES($1,$2,$3)")
+        .bind(report.scan_id)
+        .bind(path)
+        .bind(&value)
+        .execute(&mut *tx)
+        .await?;
+    // Idempotent across scan retries; content_version changes at stable capture.
+    sqlx::query("UPDATE file_sources SET observation=$1, observation_version=observation_version+1, version=version+1, content_fresh=false, updated_at=$4 WHERE root_id=$2 AND relative_path=$3 AND status='present' AND observation IS DISTINCT FROM $1")
+        .bind(&value).bind(report.root_id).bind(path).bind(ctx.now()).execute(&mut *tx).await?;
+    lock_lease(&mut tx, &report.lease).await?;
+    validate_paths(report).map_err(DomainError::Changed)?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Infer absence only on success, atomically with the complete marker. Already
+/// persisted observations remain valid evidence when the remaining scan fails.
+/// A late failure is also fenced.
 pub async fn reconcile_complete_scan(
     ctx: &AppContext,
     mut report: ScanReport,
@@ -272,22 +336,6 @@ pub async fn reconcile_complete_scan(
         } else {
             report.error = validate_paths(&report).err();
         }
-    }
-    for (path, metadata) in &report.observations {
-        let value = serde_json::to_value(metadata).expect("metadata JSON");
-        sqlx::query(
-            "INSERT INTO file_observations(scan_id,relative_path,metadata) VALUES($1,$2,$3)",
-        )
-        .bind(report.scan_id)
-        .bind(path)
-        .bind(&value)
-        .execute(&mut *tx)
-        .await?;
-        // Even a partial scan must stop exposing old captured text once new
-        // bytes/identity were observed. Repeated identical observations do not
-        // bump version; content_version changes only after T44 stable capture.
-        sqlx::query("UPDATE file_sources SET observation=$1, observation_version=observation_version+1, version=version+1, content_fresh=false, updated_at=$4 WHERE root_id=$2 AND relative_path=$3 AND status='present' AND observation IS DISTINCT FROM $1")
-            .bind(&value).bind(report.root_id).bind(path).bind(ctx.now()).execute(&mut *tx).await?;
     }
     // Locks prevent token replacement, but not wall-clock expiry while waiting.
     lock_lease(&mut tx, &report.lease).await?;

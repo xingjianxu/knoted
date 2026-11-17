@@ -398,3 +398,194 @@ async fn t43_lease_expiring_during_root_lock_wait_cannot_publish() {
         "a lease checked before waiting is not sufficient: {result:?}"
     );
 }
+
+#[tokio::test]
+async fn t43_r2_expired_observer_cannot_register_identity_or_supersede_generation() {
+    use std::time::Duration;
+    let db = TestDb::create().await.unwrap();
+    let ctx = AppContext::new(db.pool.clone());
+    let tmp = root();
+    sqlx::query(
+        "INSERT INTO file_roots(id,configured_path,generation,scan_token) VALUES($1,$2,7,$3)",
+    )
+    .bind(uuid::Uuid::new_v4())
+    .bind(tmp.path().to_str().unwrap())
+    .bind(uuid::Uuid::new_v4())
+    .execute(ctx.pool())
+    .await
+    .unwrap();
+    let before: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(r) FROM file_roots r")
+        .fetch_one(ctx.pool())
+        .await
+        .unwrap();
+    let lease = lease(&ctx).await;
+    sqlx::query(
+        "UPDATE jobs SET lease_expires_at=clock_timestamp()+interval '1 second' WHERE id=$1",
+    )
+    .bind(lease.job_id)
+    .execute(ctx.pool())
+    .await
+    .unwrap();
+    let mut lock = ctx.pool().begin().await.unwrap();
+    sqlx::query("SELECT id FROM file_roots FOR UPDATE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    let path = tmp.path().into();
+    let ctx2 = ctx.clone();
+    let pending = tokio::spawn(async move {
+        observe_root(
+            &ctx2,
+            ObserveRoot {
+                path,
+                cancel: Arc::default(),
+                lease,
+                rules: Default::default(),
+            },
+        )
+        .await
+    });
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    lock.commit().await.unwrap();
+    let stale = matches!(
+        pending.await.unwrap(),
+        Err(knoted_core::files::scanner::DomainError::Stale)
+    );
+    let after: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(r) FROM file_roots r")
+        .fetch_one(ctx.pool())
+        .await
+        .unwrap();
+    let scans: i64 = sqlx::query_scalar("SELECT count(*) FROM file_scans")
+        .fetch_one(ctx.pool())
+        .await
+        .unwrap();
+    db.drop().await;
+    assert!(
+        stale,
+        "observation setup must reject an expiry during its lock wait"
+    );
+    assert_eq!(
+        after, before,
+        "identity, generation, token and every other root field must remain unchanged"
+    );
+    assert_eq!(scans, 0);
+}
+
+#[tokio::test]
+async fn t43_r3_changed_source_is_invalidated_before_later_directory_finishes() {
+    use sqlx::Connection;
+    use std::time::Duration;
+    let db = TestDb::create().await.unwrap();
+    let ctx = AppContext::new(db.pool.clone());
+    let tmp = root();
+    std::fs::write(tmp.path().join("first.txt"), "old").unwrap();
+    std::fs::create_dir(tmp.path().join("later")).unwrap();
+    std::fs::write(tmp.path().join("later/blocked.txt"), "later").unwrap();
+    let report = scan(&ctx, tmp.path().into(), Arc::default()).await;
+    let sid = report.scan_id;
+    reconcile_complete_scan(&ctx, report).await.unwrap();
+    let id = seed(&ctx, sid, "first.txt").await;
+    std::fs::write(tmp.path().join("first.txt"), "changed").unwrap();
+    let key = (uuid::Uuid::new_v4().as_u128() as u32 & 0x7fff_ffff) as i64;
+    sqlx::query(&format!("CREATE FUNCTION hold_later_observation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.relative_path='later/blocked.txt' THEN PERFORM pg_advisory_xact_lock({key}); END IF; RETURN NEW; END $$")).execute(ctx.pool()).await.unwrap();
+    sqlx::query("CREATE TRIGGER hold_later BEFORE INSERT ON file_observations FOR EACH ROW EXECUTE FUNCTION hold_later_observation()").execute(ctx.pool()).await.unwrap();
+    let mut blocker = sqlx::PgConnection::connect_with(&ctx.pool().connect_options())
+        .await
+        .unwrap();
+    sqlx::query("SELECT pg_advisory_lock($1)")
+        .bind(key)
+        .execute(&mut blocker)
+        .await
+        .unwrap();
+    let path = tmp.path().into();
+    let ctx2 = ctx.clone();
+    let pending = tokio::spawn(async move { scan(&ctx2, path, Arc::default()).await });
+    let reached=tokio::time::timeout(Duration::from_secs(2),async {
+        loop {
+            if pending.is_finished() {return false;}
+            let held:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND classid=0 AND objid=$1::bigint::oid AND NOT granted)").bind(key).fetch_one(ctx.pool()).await.unwrap();
+            if held {return true;}tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }).await.unwrap_or(false);
+    let before = state(&ctx, id).await;
+    pending.abort();
+    let _ = pending.await;
+    blocker.close().await.unwrap();
+    let after = state(&ctx, id).await;
+    let complete: bool =
+        sqlx::query_scalar("SELECT complete FROM file_scans ORDER BY generation DESC LIMIT 1")
+            .fetch_one(ctx.pool())
+            .await
+            .unwrap();
+    db.drop().await;
+    assert!(
+        reached,
+        "the observer must persist each root-file observation before reaching the gated later directory"
+    );
+    assert_eq!(before, ("present".into(), 2, 1, 2, false));
+    assert_eq!(after, before);
+    assert!(!complete);
+}
+
+#[tokio::test]
+async fn t43_r3_expiry_while_invalidating_rolls_back_observation_and_source_change() {
+    use sqlx::Connection;
+    use std::time::Duration;
+    let db = TestDb::create().await.unwrap();
+    let ctx = AppContext::new(db.pool.clone());
+    let tmp = root();
+    std::fs::write(tmp.path().join("a.txt"), "old").unwrap();
+    let report = scan(&ctx, tmp.path().into(), Arc::default()).await;
+    let sid = report.scan_id;
+    reconcile_complete_scan(&ctx, report).await.unwrap();
+    let id = seed(&ctx, sid, "a.txt").await;
+    std::fs::write(tmp.path().join("a.txt"), "changed").unwrap();
+    let lease = lease(&ctx).await;
+    sqlx::query(
+        "UPDATE jobs SET lease_expires_at=clock_timestamp()+interval '1 second' WHERE id=$1",
+    )
+    .bind(lease.job_id)
+    .execute(ctx.pool())
+    .await
+    .unwrap();
+    let mut blocker = sqlx::PgConnection::connect_with(&ctx.pool().connect_options())
+        .await
+        .unwrap();
+    sqlx::query(&format!("SET search_path TO {}, public", db.schema()))
+        .execute(&mut blocker)
+        .await
+        .unwrap();
+    let mut lock = blocker.begin().await.unwrap();
+    sqlx::query("SELECT id FROM file_sources WHERE id=$1 FOR UPDATE")
+        .bind(id)
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    let path = tmp.path().into();
+    let ctx2 = ctx.clone();
+    let pending = tokio::spawn(async move {
+        observe_root(
+            &ctx2,
+            ObserveRoot {
+                path,
+                cancel: Arc::default(),
+                lease,
+                rules: Default::default(),
+            },
+        )
+        .await
+    });
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    lock.commit().await.unwrap();
+    let stale = matches!(
+        pending.await.unwrap(),
+        Err(knoted_core::files::scanner::DomainError::Stale)
+    );
+    let state = state(&ctx, id).await;
+    let count:i64=sqlx::query_scalar("SELECT count(*) FROM file_observations WHERE scan_id=(SELECT id FROM file_scans ORDER BY generation DESC LIMIT 1)").fetch_one(ctx.pool()).await.unwrap();
+    blocker.close().await.unwrap();
+    db.drop().await;
+    assert!(stale);
+    assert_eq!(state, ("present".into(), 1, 1, 1, true));
+    assert_eq!(count, 0);
+}
