@@ -64,7 +64,7 @@
 | [T35](tasks/T35.md) | 状态优先级与日期 | T34 | completed |
 | [T36](tasks/T36.md) | 跟进时间线与历史 | T35 | completed |
 | [T37](tasks/T37.md) | 事项归档和回收站 | T36, T08 | completed（PR [#115](https://github.com/xingjianxu/knoted/pull/115)，主线/dev `1b37e55`；[证据](evidence/t37-lifecycle.md)） |
-| [T38](tasks/T38.md) | 项目页面 | T33, T20 | pending |
+| [T38](tasks/T38.md) | 项目页面 | T33, T20 | in-progress（Issue [#117](https://github.com/xingjianxu/knoted/issues/117)；[证据](evidence/t38-project-page.md)） |
 | [T39](tasks/T39.md) | 事项页面和编辑 | T35, T37, T38 | pending |
 | [T40](tasks/T40.md) | 看板和时间线 | T36, T39 | pending |
 | [T41](tasks/T41.md) | 工作概览与到期 | T31, T39 | pending |
