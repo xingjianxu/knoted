@@ -10,13 +10,13 @@ Snapshot ID 与内容版本分离、首次未快照变化持久化计时、持�
 
 ## 真实门禁
 
-实施者、主 Agent、主线各自运行（完整输出 `/data/knoted-dev/tasks/t25/`）：
+实施者、主 Agent、主线各自运行全量 Rust 门禁和 pc 场景；实施者另运行过滤的 `t25_` 命令，主 Agent/主线的全量运行也执行这14个用例（完整输出 `/data/knoted-dev/tasks/t25/`）：
 
 | 命令 | 结果 |
 | --- | --- |
 | cargo fmt --check | exit0，无输出 |
 | cargo test --workspace --locked | exit0，153passed0failed，1既有ignored doctest |
-| cargo test --workspace --locked t25_ | exit0，14passed（HTTP5/core6/真实Worker3） |
+| cargo test --workspace --locked t25_（实施者） | exit0，14passed（HTTP5/core6/真实Worker3） |
 | cargo clippy --locked --all-targets -- -D warnings | exit0，无告警 |
 | pnpm test:pc | exit0，24passed0failed |
 | shell语法、YAML/Markdown结构与本地链接、diff/cached检查 | exit0 |
