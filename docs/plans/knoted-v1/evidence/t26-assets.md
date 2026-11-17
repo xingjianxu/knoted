@@ -1,6 +1,6 @@
 # T26 图片资产与引用实施证据
 
-Issue [#80](https://github.com/xingjianxu/knoted/issues/80)，[计划](../../2026-11-17-t26-assets.md)。状态：实现和本地检查完成，待独立审查、主线集成及实例验收。
+Issue [#80](https://github.com/xingjianxu/knoted/issues/80)，[计划](../../2026-11-17-t26-assets.md)。状态：done。实现38967ac、主线文档集成5809cfc；PR [#82](https://github.com/xingjianxu/knoted/pull/82)普通merge至`ac8cd1ff1b040244a46e68e618db17fc4f879599`，主线检查与目标dev验收及实施工作区清理完成。
 
 ## 实现边界
 
@@ -29,4 +29,22 @@ Issue [#80](https://github.com/xingjianxu/knoted/issues/80)，[计划](../../202
 
 第三方解码器的max_alloc是尽力限制，应用在分配像素前独立检查容器/编码帧像素和输出大小，捕获解码异常；不宣称进程RSS硬上限或穷尽所有损坏编码。没有在真实网络不确定COMMIT或硬件Passkey上新增验收声明。可能的未登记完整文件留给T67；读取总是由已提交ready元数据控制。
 
-独立审查、备份/迁移、固定产物、真实HTTPS、运行SHA和清理记录将在实际执行后追加。
+## 独立审查、主线与测试实例收尾
+
+T26任务审查和最终T24–T26跨卡审查均Spec/Quality PASS，无Critical/Important或新增可操作缺陷；报告 `/data/knoted-dev/tasks/t26/{review,final-review}.md`。T24的Minor注释已修正；T25可选覆盖建议仍记录在其证据，不作为已执行测试。
+
+主线ac8cd1f再次实际运行cargo fmt/test/clippy和pc场景，全部exit0；172passed0failed，1既有ignored；pc24passed。完整实际输出main-*.log，与提交前root-*.log分别保留。
+
+停止API与Worker并确认dev数据库其他连接0后，创建0700一致备份 `/data/knoted-dev/service/backups/20261117T014301Z-t26`（custom dump+assets，摘要与pg_restore目录检查通过；未声称本轮完成完整恢复演练）。固定产物5809cfc含二进制/网页/迁移且完整SHA256SUMS独立验证通过，原子切换current并pc down/up。迁移1—7全部success，实际API/Worker可执行路径均匹配`5809cfc6c1ec03109dfb144527d4724139b2cba8`，见runtime-readback.json。
+
+真实HTTPS验收（live-smoke.json）：
+
+```json
+{"result": "passed", "revision": "5809cfc6c1ec03109dfb144527d4724139b2cba8", "upload": 201, "idempotent_replay": true, "key_conflict": 409, "protected_read": 200, "anonymous_download": 401, "anonymous_upload": 401, "csrf": 403, "historical_image_ref": true, "history_restore": 200, "trash_ref": true, "pixel_bomb": 413, "credentials_changed": false}
+```
+
+现场SQL逐项确认移除当前图片后仅历史引用保留、恢复后可读取、软删后trash引用存在/current引用为0，仍引用资产zero_ref_at为null。并在同一固定产物复跑T24树/恢复/CAS与T25快照/反向恢复/停启Worker补存；live-t24-compatibility.json和live-t25-compatibility.json均passed。
+
+所有临时会话最终撤销、本任务笔记正常软删除，保留历史及图片按正常生命周期；不改用户Passkey、源文件、host或生产。目标dev在迁移前确认为0个含图片的笔记/快照；没有向其他未知既有数据集泛化迁移验收结论。
+
+实施 `.worktrees/knoted-t26` 与feat/t26已正常移除，远程分支由仓库自动删除；忽略依赖和技能scratch归档到任务worktree-generated目录。Issue80经PR关闭、Projects Done，保留原有HTTPS任务工作区。此文档收尾分支合并后也清理，运行产物与代码行为不变。
