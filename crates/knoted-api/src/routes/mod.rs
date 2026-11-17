@@ -3,6 +3,7 @@
 pub mod assets;
 pub mod auth;
 pub mod health;
+pub mod links;
 pub mod notes;
 pub mod sessions;
 
@@ -27,6 +28,7 @@ pub fn router(ctx: AppContext, auth: AuthConfig) -> Router {
             auth::router(auth.clone(), ctx.clone())
                 .merge(sessions::router(auth.clone(), ctx.clone()))
                 .merge(notes::router(auth.clone(), ctx.clone()))
+                .merge(links::router(auth.clone(), ctx.clone()))
                 .merge(assets::router(auth, ctx.clone())),
         )
         .fallback(not_found)
