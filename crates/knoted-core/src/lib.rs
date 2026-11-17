@@ -1,5 +1,6 @@
 //! Shared domain types and configuration for Knoted services.
 
+pub mod assets;
 pub mod auth;
 pub mod config;
 pub mod context;

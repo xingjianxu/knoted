@@ -1,5 +1,6 @@
 //! Note SQL. Callers own transactions; structural writers lock the tree first.
 use super::service::{DomainError, Note};
+use crate::assets::references::{ReferenceKind, ReplaceAssetRefs, replace_asset_refs};
 use chrono::{DateTime, Utc};
 use sqlx::PgConnection;
 use uuid::Uuid;
@@ -26,14 +27,16 @@ pub(crate) async fn find(
     sqlx::query_as(sql).bind(id).fetch_optional(c).await
 }
 
-pub(crate) async fn insert(c: &mut PgConnection, note: &Note) -> Result<Note, sqlx::Error> {
+pub(crate) async fn insert(c: &mut PgConnection, note: &Note) -> Result<Note, DomainError> {
     sqlx::query("INSERT INTO entity_registry (id,entity_type,created_at) VALUES ($1,'note',$2)")
         .bind(note.id)
         .bind(note.created_at)
         .execute(&mut *c)
         .await?;
-    sqlx::query_as("INSERT INTO notes (id,parent_id,title,document,position,created_at,updated_at,history_dirty_at) VALUES ($1,$2,$3,$4,$5,$6,$6,$6) RETURNING *")
-        .bind(note.id).bind(note.parent_id).bind(&note.title).bind(&note.document).bind(note.position).bind(note.created_at).fetch_one(c).await
+    let row: Note = sqlx::query_as("INSERT INTO notes (id,parent_id,title,document,position,created_at,updated_at,history_dirty_at) VALUES ($1,$2,$3,$4,$5,$6,$6,$6) RETURNING *")
+        .bind(note.id).bind(note.parent_id).bind(&note.title).bind(&note.document).bind(note.position).bind(note.created_at).fetch_one(&mut *c).await?;
+    note_refs(c, &row, ReferenceKind::Current).await?;
+    Ok(row)
 }
 
 pub(crate) async fn next_position(
@@ -49,10 +52,12 @@ pub(crate) async fn save(
     expected: i64,
 ) -> Result<Note, DomainError> {
     let row = sqlx::query_as("UPDATE notes SET title=$3,document=$4,content_version=content_version+1,updated_at=$5,history_dirty_at=COALESCE(history_dirty_at,$5) WHERE id=$1 AND content_version=$2 AND deleted_at IS NULL RETURNING *")
-        .bind(note.id).bind(expected).bind(&note.title).bind(&note.document).bind(note.updated_at).fetch_optional(c).await?;
-    row.ok_or(DomainError::Conflict {
+        .bind(note.id).bind(expected).bind(&note.title).bind(&note.document).bind(note.updated_at).fetch_optional(&mut *c).await?;
+    let row: Note = row.ok_or(DomainError::Conflict {
         current_version: Some(note.content_version),
-    })
+    })?;
+    note_refs(c, &row, ReferenceKind::Current).await?;
+    Ok(row)
 }
 
 pub(crate) async fn soft_delete(
@@ -78,7 +83,19 @@ pub(crate) async fn soft_delete(
     }
     // Position is structural metadata. Repacking does not change sibling content.
     sqlx::query("UPDATE notes SET position=position-1 WHERE parent_id IS NOT DISTINCT FROM $1 AND deleted_at IS NULL AND position>$2")
-        .bind(note.parent_id).bind(note.position).execute(c).await?;
+        .bind(note.parent_id).bind(note.position).execute(&mut *c).await?;
+    note_refs(c, note, ReferenceKind::Trash).await?;
+    replace_asset_refs(
+        c,
+        ReplaceAssetRefs {
+            kind: ReferenceKind::Current,
+            ref_id: note.id,
+            note_id: note.id,
+            document: &serde_json::json!({"blocks":[]}),
+            now,
+        },
+    )
+    .await?;
     Ok(())
 }
 
@@ -148,10 +165,25 @@ pub(crate) async fn save_structure(
     restoring: bool,
 ) -> Result<Note, DomainError> {
     let row=sqlx::query_as("UPDATE notes SET parent_id=$3,position=$4,content_version=content_version+1,updated_at=$5,deleted_at=NULL,history_dirty_at=COALESCE(history_dirty_at,$5) WHERE id=$1 AND content_version=$2 AND (deleted_at IS NOT NULL)=$6 RETURNING *")
-        .bind(note.id).bind(note.content_version).bind(note.parent_id).bind(note.position).bind(note.updated_at).bind(restoring).fetch_optional(c).await?;
-    row.ok_or(DomainError::Conflict {
+        .bind(note.id).bind(note.content_version).bind(note.parent_id).bind(note.position).bind(note.updated_at).bind(restoring).fetch_optional(&mut *c).await?;
+    let row: Note = row.ok_or(DomainError::Conflict {
         current_version: Some(note.content_version),
-    })
+    })?;
+    if restoring {
+        note_refs(c, &row, ReferenceKind::Current).await?;
+        replace_asset_refs(
+            c,
+            ReplaceAssetRefs {
+                kind: ReferenceKind::Trash,
+                ref_id: row.id,
+                note_id: row.id,
+                document: &serde_json::json!({"blocks":[]}),
+                now: row.updated_at,
+            },
+        )
+        .await?;
+    }
+    Ok(row)
 }
 
 // History writes run while holding the current note's row lock. Keep insertion
@@ -161,10 +193,10 @@ pub(crate) async fn snapshot(
     note: &Note,
     reason: &str,
     now: DateTime<Utc>,
-) -> Result<super::history::Snapshot, sqlx::Error> {
+) -> Result<super::history::Snapshot, DomainError> {
     let row=sqlx::query_as("INSERT INTO note_snapshots(snapshot_id,note_id,content_version,title,document,reason,created_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(note_id,content_version) DO NOTHING RETURNING *")
         .bind(Uuid::new_v4()).bind(note.id).bind(note.content_version).bind(&note.title).bind(&note.document).bind(reason).bind(now).fetch_optional(&mut *c).await?;
-    let snapshot = match row {
+    let snapshot: super::history::Snapshot = match row {
         Some(s) => s,
         None => {
             sqlx::query_as("SELECT * FROM note_snapshots WHERE note_id=$1 AND content_version=$2")
@@ -174,6 +206,17 @@ pub(crate) async fn snapshot(
                 .await?
         }
     };
+    replace_asset_refs(
+        c,
+        ReplaceAssetRefs {
+            kind: ReferenceKind::Snapshot,
+            ref_id: snapshot.snapshot_id,
+            note_id: note.id,
+            document: &snapshot.document,
+            now,
+        },
+    )
+    .await?;
     sqlx::query("UPDATE notes SET history_dirty_at=NULL WHERE id=$1 AND content_version=$2")
         .bind(note.id)
         .bind(note.content_version)
@@ -216,7 +259,8 @@ pub(crate) async fn history_due(
 pub(crate) async fn prune_snapshots(
     c: &mut PgConnection,
     before: DateTime<Utc>,
-) -> Result<(usize, u64), sqlx::Error> {
+    now: DateTime<Utc>,
+) -> Result<(usize, u64), DomainError> {
     // Lock notes in this transaction too: pruning cannot race a flush/restore's
     // preservation of the current version. T26 removes snapshot asset refs in
     // this same transaction before deleting the corresponding history rows.
@@ -224,7 +268,50 @@ pub(crate) async fn prune_snapshots(
         .bind(before).fetch_all(&mut *c).await?;
     let mut removed = 0;
     for id in &ids {
+        let snapshots:Vec<Uuid>=sqlx::query_scalar("SELECT s.snapshot_id FROM note_snapshots s JOIN notes n ON n.id=s.note_id WHERE n.id=$1 AND s.created_at<$2 AND s.content_version<>n.content_version").bind(id).bind(before).fetch_all(&mut *c).await?;
+        for snapshot in snapshots {
+            replace_asset_refs(
+                c,
+                ReplaceAssetRefs {
+                    kind: ReferenceKind::Snapshot,
+                    ref_id: snapshot,
+                    note_id: *id,
+                    document: &serde_json::json!({"blocks":[]}),
+                    now,
+                },
+            )
+            .await?;
+        }
         removed+=sqlx::query("DELETE FROM note_snapshots s USING notes n WHERE s.note_id=n.id AND n.id=$1 AND s.created_at<$2 AND s.content_version<>n.content_version").bind(id).bind(before).execute(&mut *c).await?.rows_affected();
     }
     Ok((ids.len(), removed))
+}
+
+async fn note_refs(
+    c: &mut PgConnection,
+    note: &Note,
+    kind: ReferenceKind,
+) -> Result<(), DomainError> {
+    replace_asset_refs(
+        c,
+        ReplaceAssetRefs {
+            kind,
+            ref_id: note.id,
+            note_id: note.id,
+            document: &note.document,
+            now: note.updated_at,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+/// All note writers lock refs before tree/row locks; the scope includes all
+/// notes in periodic maintenance and pruning, not only each individual note.
+pub(crate) async fn begin_write(
+    ctx: &crate::context::AppContext,
+) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, DomainError> {
+    let mut tx = ctx.pool().begin().await?;
+    crate::assets::references::lock_reference_writes(&mut tx).await?;
+    Ok(tx)
 }

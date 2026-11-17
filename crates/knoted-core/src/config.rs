@@ -132,6 +132,20 @@ impl Default for AuthConfig {
     }
 }
 
+/// Private asset storage. Relative roots are rejected before process startup.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct AssetsConfig {
+    pub root: PathBuf,
+}
+impl Default for AssetsConfig {
+    fn default() -> Self {
+        Self {
+            root: PathBuf::from("/data/knoted-dev/service/assets"),
+        }
+    }
+}
+
 /// Validated process configuration.
 #[derive(Clone, PartialEq, Eq)]
 pub struct AppConfig {
@@ -140,6 +154,7 @@ pub struct AppConfig {
     pub logging: LoggingConfig,
     pub credentials: CredentialsConfig,
     pub auth: AuthConfig,
+    pub assets: AssetsConfig,
     secrets: BTreeMap<String, String>,
 }
 
@@ -151,6 +166,7 @@ impl fmt::Debug for AppConfig {
             .field("logging", &self.logging)
             .field("credentials", &self.credentials)
             .field("auth", &self.auth)
+            .field("assets", &self.assets)
             .field("loaded_credentials", &self.secrets.len())
             .finish()
     }
@@ -230,6 +246,12 @@ impl AppConfig {
             validate_database(database)?;
         }
         validate_auth(&file.auth)?;
+        if !file.assets.root.is_absolute() {
+            return Err(ConfigError::Invalid {
+                field: "assets.root",
+                message: "must be an absolute path".to_owned(),
+            });
+        }
         let secrets = match &file.credentials.credential_file {
             Some(path) => load_credentials(path)?,
             None => BTreeMap::new(),
@@ -246,6 +268,7 @@ impl AppConfig {
             logging: file.logging,
             credentials: file.credentials,
             auth: file.auth,
+            assets: file.assets,
             secrets,
         })
     }
@@ -291,6 +314,8 @@ struct ConfigFile {
     credentials: CredentialsConfig,
     #[serde(default)]
     auth: AuthConfig,
+    #[serde(default)]
+    assets: AssetsConfig,
 }
 
 #[derive(Deserialize)]

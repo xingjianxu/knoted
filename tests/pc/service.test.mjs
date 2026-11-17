@@ -218,6 +218,7 @@ describe("prepare", () => {
     const toml = readFileSync(join(fixture.instanceRoot, "config/knoted.toml"), "utf8");
     assert.match(toml, new RegExp(`bind = "127\\.0\\.0\\.1:${fixture.apiPort}"`));
     assert.match(toml, /rp_id = "knoted\.example\.test"/);
+    assert.ok(toml.includes(`root = "${fixture.instanceRoot}/assets"`), "asset storage follows the isolated instance root");
     assert.match(toml, new RegExp(`origin = "https://knoted\\.example\\.test:${fixture.httpsPort}"`));
     assert.match(toml, /url = "postgres:\/\/dev@127\.0\.0\.1:5432\/dev"/);
     assert.doesNotMatch(toml, /@[A-Z_]+@/);

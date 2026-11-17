@@ -136,7 +136,12 @@ fn error(id: RequestId, error: DomainError) -> Response {
             "validation_failed",
             "invalid note document",
         ),
-        DomainError::Database(_) => (
+        DomainError::Asset(knoted_core::assets::service::DomainError::InvalidReference) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_failed",
+            "unknown image asset reference",
+        ),
+        DomainError::Asset(_) | DomainError::Database(_) => (
             StatusCode::SERVICE_UNAVAILABLE,
             "dependency_unavailable",
             "note persistence unavailable",

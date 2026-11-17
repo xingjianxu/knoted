@@ -44,12 +44,12 @@ pub async fn flush_snapshot(
     ctx: &AppContext,
     input: FlushSnapshot,
 ) -> Result<Snapshot, DomainError> {
-    let mut tx = ctx.pool().begin().await?;
+    let mut tx = repo::begin_write(ctx).await?;
     let result = async {
         let note = repo::find(&mut tx, input.note_id, true)
             .await?
             .ok_or(DomainError::NotFound)?;
-        Ok(repo::snapshot(&mut tx, &note, "flush", ctx.now()).await?)
+        repo::snapshot(&mut tx, &note, "flush", ctx.now()).await
     }
     .await;
     service::finish(tx, result).await
@@ -60,7 +60,7 @@ pub async fn restore_snapshot(
     input: RestoreSnapshot,
 ) -> Result<Note, DomainError> {
     service::version(input.expected_version)?;
-    let mut tx = ctx.pool().begin().await?;
+    let mut tx = repo::begin_write(ctx).await?;
     let result = async {
         let mut note = repo::find(&mut tx, input.note_id, true)
             .await?
@@ -181,7 +181,7 @@ pub async fn maintain_history(
     };
     let mut report = MaintenanceReport::default();
     loop {
-        let mut tx = ctx.pool().begin().await?;
+        let mut tx = repo::begin_write(ctx).await?;
         let result = async {
             let notes = repo::history_due(&mut tx, due).await?;
             let count = notes.len();
@@ -198,10 +198,8 @@ pub async fn maintain_history(
         }
     }
     loop {
-        let mut tx = ctx.pool().begin().await?;
-        let result = repo::prune_snapshots(&mut tx, now - Duration::days(90))
-            .await
-            .map_err(DomainError::from);
+        let mut tx = repo::begin_write(ctx).await?;
+        let result = repo::prune_snapshots(&mut tx, now - Duration::days(90), now).await;
         let (notes, pruned) = service::finish(tx, result).await?;
         report.pruned += pruned;
         if notes < 100 {
