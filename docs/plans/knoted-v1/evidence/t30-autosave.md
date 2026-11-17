@@ -34,7 +34,7 @@
 - RED：`pnpm --dir apps/web exec vitest run tests/tasks/t30.test.tsx`，缺模块 exit 1；`red.log`。首轮两个 controller 用例 GREEN 后扩充真实客户端边界、错误、flush、切笔记、重载与真实组件测试。
 - MOVE RED：`red-structural.log`（缺方法）、`red-concurrent-move-identity.log`（并发命令被错误共用），对应 GREEN 已观察。
 - 自审 RED：`red-self-review.log`，复现最终 Query invalidation 期间新编辑仍让 flush 成功，以及 GET 重载在途显式 retry 发并行 PATCH。修复后 `green-self-review.log`：38/38，exit 0。
-- 最终专属测试 `focused-final.log`：43/43，exit 0；完整 Web 门禁与最后日志见交付报告；本卡无 Rust 改动，Rust 全门禁由主 Agent 在审查/集成阶段独立运行。
+- 最终专属测试 `focused-final.log`：44/44，exit 0；完整 Web 门禁与最后日志见交付报告；本卡无 Rust 改动，Rust 全门禁由主 Agent 在审查/集成阶段独立运行。
 - 真实 `createApiClient` 注入 fetch，检查 PATCH/POST 路径、请求体、same-origin credentials、CSRF、中间件抛出的 ApiRequestError；Deferred 构造真实串行竞态，不制造同 note 两个非法在途 PATCH。
 - 真 NoteEditor/BlockNote 验证普通保存、Query、结构版本确认保留实例与选区；显式 reset 才重建。合成 composition 仅回归，不声称 OS IME 验收。
 - 真实 mtone Dialog/Input/Button/Alert 验证失败反馈、busy、Esc/重开保留冲突。所有 fake timers / stub globals 恢复；未增加 timeout。
@@ -46,17 +46,17 @@
 ```text
 pnpm --dir apps/web exec vitest run tests/tasks/t30.test.tsx
 Test Files  1 passed (1)
-Tests  43 passed (43)
+Tests  44 passed (44)
 pnpm --dir apps/web run lint
 $ eslint src tests vite.config.ts
 pnpm --dir apps/web run typecheck
 $ tsc --noEmit && tsc --noEmit -p tsconfig.node.json
 pnpm --dir apps/web run test
 Test Files  11 passed (11)
-Tests  152 passed (152)
+Tests  153 passed (153)
 pnpm --dir apps/web run build
 ✓ 3134 modules transformed.
-✓ built in 833ms
+✓ built in 771ms
 ```
 
 完整原始输出：`focused-final.log`、`lint-final.log`、`typecheck-final.log`、`test-final.log`、`build-final.log`。构建保留既有 618.94 kB chunk 提示，无配置放宽。

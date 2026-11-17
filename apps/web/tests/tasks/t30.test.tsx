@@ -32,7 +32,7 @@ it("t30_debounce_latest_draft uses immutable latest DTO, partial patches, CSRF a
   act(() => result.current.changeDraft({ title: "latest" })); await tick(500);
   act(() => result.current.changeDraft({ document: doc("latest doc") })); await tick(999);
   expect(requests).toHaveLength(0); await tick(1);
-  expect(requests).toHaveLength(1); expect(requests[0]!.method).toBe("PATCH");
+  expect(requests).toHaveLength(1); expect(requests[0]!.method).toBe("PATCH"); expect(new URL(requests[0]!.url).pathname).toBe("/api/v1/notes/a");
   expect(requests[0]!.headers.get("X-CSRF-Token")).toBe("public-t30-fixture");
   expect(requests[0]!.credentials).toBe("same-origin");
   expect(await requests[0]!.json()).toEqual({ expected_version: 1, title: "latest", document: doc("latest doc") });
@@ -101,7 +101,7 @@ it("t30_flush_save_then_snapshot_barrier waits serially, shares Promise and post
   act(() => { first = result.current.flush(); second = result.current.flush(); });
   expect(first).toBe(second); await act(async () => {}); expect(requests).toHaveLength(1);
   await act(async () => save.resolve(json(note("a", 2, "saved"))));
-  expect(requests).toHaveLength(2); expect(requests[1]!.method).toBe("POST"); expect(await requests[1]!.text()).toBe("");
+  expect(requests).toHaveLength(2); expect(requests[1]!.method).toBe("POST"); expect(new URL(requests[1]!.url).pathname).toBe("/api/v1/notes/a/snapshots"); expect(await requests[1]!.text()).toBe("");
   await act(async () => { history.resolve(json(snapshot(), 201)); await expect(first).resolves.toMatchObject({ content_version: 2 }); });
   expect(result.current.dirty).toBe(false);
 });
@@ -136,6 +136,7 @@ it("t30_load_server waits for flight and atomically replaces document/base/reset
   let load!: Promise<unknown>; act(() => { load = result.current.loadServer(); }); expect(requests).toHaveLength(1);
   await act(async () => save.resolve(json(note("a", 2, "local")))); expect(requests).toHaveLength(2);
   expect(result.current.baseVersion).toBe(2); expect(result.current.resetEpoch).toBe(0);
+  expect(requests[1]!.method).toBe("GET"); expect(requests[1]!.cache).toBe("no-store"); expect(new URL(requests[1]!.url).pathname).toBe("/api/v1/notes/a");
   await act(async () => { get.resolve(json(note("a", 9, "remote"))); await load; });
   expect(result.current.baseVersion).toBe(9); expect(result.current.draft.title).toBe("remote"); expect(result.current.initialDocument).toEqual(doc("remote")); expect(result.current.resetEpoch).toBe(1);
   await tick(10000); expect(requests).toHaveLength(2);
@@ -164,7 +165,7 @@ it("t30_copy_title_root captures LOCAL draft and leaves edits made during copy i
   act(() => result.current.changeDraft({ title: "😀".repeat(500), document: doc("local") }));
   let copy!: Promise<unknown>; act(() => { copy = result.current.saveCopy(); }); await act(async () => {});
   const body = await requests[0]!.json(); expect([...body.title]).toHaveLength(500); expect(body.title.endsWith("（冲突副本）")).toBe(true);
-  expect(body).toMatchObject({ parent_id: null, document: doc("local") }); expect(requests[0]!.method).toBe("POST");
+  expect(body).toMatchObject({ parent_id: null, document: doc("local") }); expect(requests[0]!.method).toBe("POST"); expect(new URL(requests[0]!.url).pathname).toBe("/api/v1/notes");
   act(() => result.current.changeDraft({ title: "newer" }));
   await act(async () => { pending.resolve(json(note("copy", 1, body.title), 201)); await copy; });
   expect(result.current.draft.title).toBe("newer"); expect(result.current.baseVersion).toBe(1); expect(result.current.dirty).toBe(true);
@@ -404,4 +405,14 @@ it("same JSON content with server object-key order is a no-op draft and valid st
   expect(result.current.dirty).toBe(false); await tick(); expect(requests).toHaveLength(0);
   await act(async () => { await result.current.runStructuralMutation(async () => ({ ...note("a", 2), document: reordered })); });
   expect(result.current.baseVersion).toBe(2); expect(result.current.status).toBe("saved");
+});
+it("independent A/B flights capture their own note paths, drafts and CAS while A settles late", async () => {
+  vi.useFakeTimers(); const a = deferred(); const b = deferred(); const { result, rerender, requests } = setup(input => new URL((input as Request).url).pathname.endsWith("/a") ? a.promise : b.promise);
+  act(() => result.current.changeDraft({ title: "A local", document: doc("A body") })); await tick();
+  rerender({ initialNote: note("b", 7, "B initial") }); act(() => result.current.changeDraft({ title: "B local", document: doc("B body") })); await tick();
+  expect(requests.map(r => new URL(r.url).pathname)).toEqual(["/api/v1/notes/a", "/api/v1/notes/b"]);
+  expect(await requests[0]!.json()).toEqual({ expected_version: 1, title: "A local", document: doc("A body") });
+  expect(await requests[1]!.json()).toEqual({ expected_version: 7, title: "B local", document: doc("B body") });
+  await act(async () => b.resolve(json(note("b", 8, "B local")))); await act(async () => a.resolve(json(note("a", 2, "A local"))));
+  expect(result.current.draft).toEqual({ title: "B local", document: doc("B body") }); expect(result.current.baseVersion).toBe(8);
 });
