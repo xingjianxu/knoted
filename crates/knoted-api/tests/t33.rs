@@ -89,15 +89,16 @@ impl Harness {
         archived: bool,
         deleted: bool,
     ) -> Uuid {
-        let id = Uuid::new_v4();
-        let mut tx = self.db.pool.begin().await.unwrap();
-        sqlx::query("INSERT INTO entity_registry(id,entity_type) VALUES($1,'task')")
-            .bind(id)
-            .execute(&mut *tx)
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO tasks(id,project_id,status,archived_at,deleted_at,created_at,updated_at) VALUES($1,$2,$3,CASE WHEN $4 THEN '2026-11-16Z'::timestamptz END, CASE WHEN $5 THEN '2026-11-16Z'::timestamptz END,'2026-11-16Z','2026-11-16Z')").bind(id).bind(project.map(uid)).bind(status).bind(archived).bind(deleted).execute(&mut *tx).await.unwrap();
-        tx.commit().await.unwrap();
+        let (code, _, task) = self
+            .send(
+                "POST",
+                "/api/v1/tasks",
+                json!({"title":"T33 fixture", "project_id":project.map(uid), "status":status}),
+            )
+            .await;
+        assert_eq!(code, StatusCode::CREATED, "{task}");
+        let id = uid(&task);
+        sqlx::query("UPDATE tasks SET archived_at=CASE WHEN $2 THEN '2026-11-16Z'::timestamptz END,deleted_at=CASE WHEN $3 THEN '2026-11-16Z'::timestamptz END WHERE id=$1").bind(id).bind(archived).bind(deleted).execute(&self.db.pool).await.unwrap();
         id
     }
     async fn snapshot(&self) -> Value {
@@ -132,11 +133,16 @@ async fn t33_1_unfinished_blocks_archive_atomically() {
         .await
         .unwrap();
     assert_eq!(h.action(&p, "archive", 1).await.0, StatusCode::CONFLICT);
-    sqlx::query("UPDATE tasks SET status='cancelled' WHERE id=$1")
-        .bind(b)
-        .execute(&h.db.pool)
+    assert_eq!(
+        h.send(
+            "PATCH",
+            &format!("/api/v1/tasks/{b}"),
+            json!({"expected_version":1,"status":"cancelled"})
+        )
         .await
-        .unwrap();
+        .0,
+        StatusCode::OK
+    );
     let (s, etag, p) = h.action(&p, "archive", 1).await;
     assert_eq!(s, StatusCode::OK, "{p}");
     assert_eq!(etag["etag"], "\"2\"");
@@ -156,12 +162,13 @@ async fn t33_1_unfinished_blocks_archive_atomically() {
         .unwrap();
     assert_eq!(arow["version"], 1);
     assert!(arow["archive_batch_id"].is_null());
-    assert_eq!(brow["version"], 2);
+    assert_eq!(brow["version"], 3);
     assert_eq!(
         brow["archive_batch_id"],
         state["projects"][0]["archive_batch_id"]
     );
-    assert_eq!(state["events"].as_array().unwrap().len(), 3);
+    // Project + two Task creates, one state PATCH, and two archive events.
+    assert_eq!(state["events"].as_array().unwrap().len(), 6);
 }
 
 // Detects note/registry/tag cascades and deleting with live terminal/archived tasks.
@@ -550,11 +557,16 @@ async fn t33_archived_readonly_and_t32_activation() {
         StatusCode::CREATED
     );
     assert_eq!(h.action(&p, "unarchive", 2).await.0, StatusCode::OK);
-    sqlx::query("UPDATE tasks SET deleted_at=now() WHERE id=$1")
-        .bind(t)
-        .execute(&h.db.pool)
+    assert_eq!(
+        h.send(
+            "DELETE",
+            &format!("/api/v1/tasks/{t}?expected_version=3"),
+            Value::Null
+        )
         .await
-        .unwrap();
+        .0,
+        StatusCode::NO_CONTENT
+    );
     assert_eq!(
         h.send("DELETE", &format!("{path}?expected_version=3"), Value::Null)
             .await
@@ -613,7 +625,7 @@ async fn t33_transactional_outbox() {
     let h = Harness::new().await;
     let p = h.project().await;
     let t = h.task(Some(&p), "done", false, false).await;
-    sqlx::query("ALTER TABLE outbox ADD CONSTRAINT t33_reject_task CHECK(topic <> 'task.changed')")
+    sqlx::query("ALTER TABLE outbox ADD CONSTRAINT t33_reject_task CHECK(topic <> 'task.changed') NOT VALID")
         .execute(&h.db.pool)
         .await
         .unwrap();
@@ -633,16 +645,21 @@ async fn t33_transactional_outbox() {
             .fetch_all(&h.db.pool)
             .await
             .unwrap();
-    assert_eq!(events.len(), 5);
+    assert_eq!(events.len(), 6);
     assert!(events.iter().any(|(topic, b)| topic == "project.changed"
         && b == &json!({"source_id":uid(&p),"content_version":1,"operation":"created"})));
     assert!(events.iter().any(|(topic, b)| topic == "task.changed"
         && b == &json!({"source_id":t,"content_version":3,"operation":"unarchived"})));
-    sqlx::query("UPDATE tasks SET deleted_at=now() WHERE id=$1")
-        .bind(t)
-        .execute(&h.db.pool)
+    assert_eq!(
+        h.send(
+            "DELETE",
+            &format!("/api/v1/tasks/{t}?expected_version=3"),
+            Value::Null
+        )
         .await
-        .unwrap();
+        .0,
+        StatusCode::NO_CONTENT
+    );
     let path = format!("/api/v1/projects/{}", uid(&p));
     assert_eq!(
         h.send("DELETE", &format!("{path}?expected_version=3"), Value::Null)
@@ -836,7 +853,7 @@ async fn t33_bulk_locks_match_t32_uuid_order() {
         .execute(&h.db.pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO tasks(id,project_id,status,created_at,updated_at) VALUES($1,$2,'done',now(),now())").bind(task).bind(uid(&p)).execute(&h.db.pool).await.unwrap();
+    sqlx::query("INSERT INTO tasks(id,project_id,title,status,created_at,updated_at) VALUES($1,$2,'fixed UUID','done',now(),now())").bind(task).bind(uid(&p)).execute(&h.db.pool).await.unwrap();
     assert!(task < uid(&p));
     let mut gate = sqlx::PgConnection::connect(&knoted_core::db::testing::test_database_url())
         .await

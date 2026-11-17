@@ -11,3 +11,4 @@ pub mod jobs;
 pub mod links;
 pub mod notes;
 pub mod projects;
+pub mod tasks;
