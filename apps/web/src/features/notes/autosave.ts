@@ -35,13 +35,15 @@ export function conflictCopyTitle(title: string): string {
 }
 
 /** Owned by one authenticated editing workspace; never put drafts in Query. */
-export function createNoteDraftStore(options: { api: ApiClient; queryClient: QueryClient }) {
+export function createNoteDraftStore(options: { api: ApiClient; queryClient: QueryClient; assertCanWrite?: (noteId: string) => void }) {
   const entries = new Map<string, NoteEditingSession>();
   return {
+    /** A confirmed deletion ends this session; a restore must open a fresh CAS base. */
+    forget(noteId: string) { entries.delete(noteId); },
     open(note: Note): NoteEditingSession {
       let session = entries.get(note.id);
       if (!session) {
-        session = new NoteEditingSession(note, options.api, options.queryClient);
+        session = new NoteEditingSession(note, options.api, options.queryClient, options.assertCanWrite);
         entries.set(note.id, session);
       }
       return session;
@@ -67,7 +69,7 @@ export class NoteEditingSession {
   private afterCommandFlush: Promise<Snapshot> | undefined;
 
   readonly noteId: string;
-  constructor(note: Note, private api: ApiClient, private queryClient: QueryClient) {
+  constructor(note: Note, private api: ApiClient, private queryClient: QueryClient, private assertCanWrite: (noteId: string) => void = () => {}) {
     this.noteId = note.id;
     this.confirmed = clone({ title: note.title, document: note.document });
     this.state = { draft: clone(this.confirmed), initialDocument: clone(note.document), resetEpoch: 0,
@@ -117,9 +119,11 @@ export class NoteEditingSession {
     const expected_version = this.state.baseVersion;
     const revision = this.revision;
     const noteId = this.noteId;
-    this.clearTimer(); this.update({ status: "saving", unresolvedWrite: true });
+    this.clearTimer(); this.update({ status: "saving" });
     const task = (async () => {
       try {
+        this.assertCanWrite(noteId);
+        this.update({ unresolvedWrite: true });
         const { data } = await this.api.raw.PATCH("/notes/{noteId}", { params: { path: { noteId } }, body: { expected_version, ...body } });
         if (!data) throw new Error("保存响应缺少笔记");
         if (this.state.resetEpoch !== epoch) return;
@@ -161,6 +165,7 @@ export class NoteEditingSession {
         while (this.flight || this.state.dirty || this.state.unresolvedWrite) await this.save();
         const version = this.state.baseVersion;
         const revision = this.revision;
+        this.assertCanWrite(this.noteId);
         const { data } = await this.api.raw.POST("/notes/{noteId}/snapshots", { params: { path: { noteId: this.noteId } } });
         if (!data) throw new Error("历史响应缺少快照");
         if (data.content_version !== version) {
@@ -207,6 +212,7 @@ export class NoteEditingSession {
       const expected = clone(this.confirmed);
       const base = this.state.baseVersion;
       try {
+        this.assertCanWrite(this.noteId);
         const note = await command(this.noteId, base);
         if (note.id !== this.noteId || note.content_version < base || !equal({ title: note.title, document: note.document }, expected)) {
           this.update({ serverUpdated: true });
@@ -235,6 +241,7 @@ export class NoteEditingSession {
       try {
         await flushed;
         return await this.replace(async () => {
+          this.assertCanWrite(this.noteId);
           commandStarted = true;
           const note = await command(this.noteId, this.state.baseVersion);
           responseReceived = true;
@@ -260,6 +267,7 @@ export class NoteEditingSession {
   saveCopy = async (title = conflictCopyTitle(this.state.draft.title)): Promise<Note> => {
     if (!title.trim() || [...title].length > 500) throw new Error("副本标题须为 1 至 500 个字符");
     const captured = clone(this.state.draft);
+    this.assertCanWrite(this.noteId);
     const { data } = await this.api.raw.POST("/notes", { body: { ...captured, title, parent_id: null } });
     if (!data) throw new Error("副本响应缺少笔记");
     await this.cache(data);

@@ -14,6 +14,9 @@ import { Route as BootstrapRouteImport } from './routes/bootstrap'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as RecoveryRouteImport } from './routes/recovery'
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated.index'
+import { Route as AuthenticatedNotesRouteImport } from './routes/_authenticated.notes'
+import { Route as AuthenticatedNotesIndexRouteImport } from './routes/_authenticated.notes.index'
+import { Route as AuthenticatedNotesNoteIdRouteImport } from './routes/_authenticated.notes.$noteId'
 import { Route as AuthenticatedSettingsSecurityRouteImport } from './routes/_authenticated.settings.security'
 
 const AuthenticatedRoute = AuthenticatedRouteImport.update({
@@ -40,6 +43,22 @@ const AuthenticatedIndexRoute = AuthenticatedIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedNotesRoute = AuthenticatedNotesRouteImport.update({
+  id: '/notes',
+  path: '/notes',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedNotesIndexRoute = AuthenticatedNotesIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AuthenticatedNotesRoute,
+} as any)
+const AuthenticatedNotesNoteIdRoute =
+  AuthenticatedNotesNoteIdRouteImport.update({
+    id: '/$noteId',
+    path: '/$noteId',
+    getParentRoute: () => AuthenticatedNotesRoute,
+  } as any)
 const AuthenticatedSettingsSecurityRoute =
   AuthenticatedSettingsSecurityRouteImport.update({
     id: '/settings/security',
@@ -52,14 +71,19 @@ export interface FileRoutesByFullPath {
   '/bootstrap': typeof BootstrapRoute
   '/login': typeof LoginRoute
   '/recovery': typeof RecoveryRoute
+  '/notes': typeof AuthenticatedNotesRouteWithChildren
+  '/notes/$noteId': typeof AuthenticatedNotesNoteIdRoute
   '/settings/security': typeof AuthenticatedSettingsSecurityRoute
+  '/notes/': typeof AuthenticatedNotesIndexRoute
 }
 export interface FileRoutesByTo {
   '/bootstrap': typeof BootstrapRoute
   '/login': typeof LoginRoute
   '/recovery': typeof RecoveryRoute
   '/': typeof AuthenticatedIndexRoute
+  '/notes/$noteId': typeof AuthenticatedNotesNoteIdRoute
   '/settings/security': typeof AuthenticatedSettingsSecurityRoute
+  '/notes': typeof AuthenticatedNotesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -67,22 +91,43 @@ export interface FileRoutesById {
   '/bootstrap': typeof BootstrapRoute
   '/login': typeof LoginRoute
   '/recovery': typeof RecoveryRoute
+  '/_authenticated/notes': typeof AuthenticatedNotesRouteWithChildren
   '/_authenticated/': typeof AuthenticatedIndexRoute
+  '/_authenticated/notes/$noteId': typeof AuthenticatedNotesNoteIdRoute
   '/_authenticated/settings/security': typeof AuthenticatedSettingsSecurityRoute
+  '/_authenticated/notes/': typeof AuthenticatedNotesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/bootstrap' | '/login' | '/recovery' | '/settings/security'
+  fullPaths:
+    | '/'
+    | '/bootstrap'
+    | '/login'
+    | '/recovery'
+    | '/notes'
+    | '/notes/$noteId'
+    | '/settings/security'
+    | '/notes/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/bootstrap' | '/login' | '/recovery' | '/' | '/settings/security'
+  to:
+    | '/bootstrap'
+    | '/login'
+    | '/recovery'
+    | '/'
+    | '/notes/$noteId'
+    | '/settings/security'
+    | '/notes'
   id:
     | '__root__'
     | '/_authenticated'
     | '/bootstrap'
     | '/login'
     | '/recovery'
+    | '/_authenticated/notes'
     | '/_authenticated/'
+    | '/_authenticated/notes/$noteId'
     | '/_authenticated/settings/security'
+    | '/_authenticated/notes/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -129,6 +174,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedIndexRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/notes': {
+      id: '/_authenticated/notes'
+      path: '/notes'
+      fullPath: '/notes'
+      preLoaderRoute: typeof AuthenticatedNotesRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/notes/': {
+      id: '/_authenticated/notes/'
+      path: '/'
+      fullPath: '/notes/'
+      preLoaderRoute: typeof AuthenticatedNotesIndexRouteImport
+      parentRoute: typeof AuthenticatedNotesRoute
+    }
+    '/_authenticated/notes/$noteId': {
+      id: '/_authenticated/notes/$noteId'
+      path: '/$noteId'
+      fullPath: '/notes/$noteId'
+      preLoaderRoute: typeof AuthenticatedNotesNoteIdRouteImport
+      parentRoute: typeof AuthenticatedNotesRoute
+    }
     '/_authenticated/settings/security': {
       id: '/_authenticated/settings/security'
       path: '/settings/security'
@@ -139,12 +205,27 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface AuthenticatedNotesRouteChildren {
+  AuthenticatedNotesNoteIdRoute: typeof AuthenticatedNotesNoteIdRoute
+  AuthenticatedNotesIndexRoute: typeof AuthenticatedNotesIndexRoute
+}
+
+const AuthenticatedNotesRouteChildren: AuthenticatedNotesRouteChildren = {
+  AuthenticatedNotesNoteIdRoute: AuthenticatedNotesNoteIdRoute,
+  AuthenticatedNotesIndexRoute: AuthenticatedNotesIndexRoute,
+}
+
+const AuthenticatedNotesRouteWithChildren =
+  AuthenticatedNotesRoute._addFileChildren(AuthenticatedNotesRouteChildren)
+
 interface AuthenticatedRouteChildren {
+  AuthenticatedNotesRoute: typeof AuthenticatedNotesRouteWithChildren
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
   AuthenticatedSettingsSecurityRoute: typeof AuthenticatedSettingsSecurityRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
+  AuthenticatedNotesRoute: AuthenticatedNotesRouteWithChildren,
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
   AuthenticatedSettingsSecurityRoute: AuthenticatedSettingsSecurityRoute,
 }

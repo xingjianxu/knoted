@@ -202,13 +202,14 @@ describe("t20 auth routes", () => {
       expect(safeReturnTo(path)).toBe("/");
     expect(safeReturnTo("/settings/security")).toBe("/settings/security");
   });
-  it("disables unimplemented navigation entries", async () => {
+  it("disables unimplemented navigation entries while notes is open", async () => {
     loggedIn = true;
     await mount("/");
-    for (const name of ["概览", "笔记", "项目", "事项", "文件", "搜索", "问答"])
+    for (const name of ["概览", "项目", "事项", "文件", "搜索", "问答"])
       expect(
         await screen.findByRole("button", { name: new RegExp(name) }),
       ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "笔记" })).toBeEnabled();
   });
   it("network errors show retry without claiming unauthenticated", async () => {
     vi.stubGlobal(

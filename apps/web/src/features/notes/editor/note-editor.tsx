@@ -11,9 +11,10 @@ export type NoteEditorProps = {
   document: NoteDocument;
   onChange: (document: NoteDocument) => void;
   children?: ReactNode;
+  readOnly?: boolean;
 };
 
-export function NoteEditor({ document, onChange, children }: NoteEditorProps) {
+export function NoteEditor({ document, onChange, children, readOnly = false }: NoteEditorProps) {
   // Deliberately independent of props: parent save/query rerenders must never
   // replace the ProseMirror view, selection or an active IME composition.
   const [initialDocument] = useState(() => document);
@@ -24,10 +25,11 @@ export function NoteEditor({ document, onChange, children }: NoteEditorProps) {
   }, []);
   return (
     <section aria-label="笔记编辑器">
-      <FormattingToolbar editor={editor} />
+      {!readOnly && <FormattingToolbar editor={editor} />}
       <BlockNoteViewRaw
         editor={editor}
-        onChange={() => onChange(fromEditorBlocks(editor.document, initialDocument))}
+        editable={!readOnly}
+        onChange={() => { if (!readOnly) onChange(fromEditorBlocks(editor.document, initialDocument)); }}
         formattingToolbar={false}
         linkToolbar={false}
         slashMenu={false}
@@ -36,7 +38,7 @@ export function NoteEditor({ document, onChange, children }: NoteEditorProps) {
         tableHandles={false}
         emojiPicker={false}
         comments={false}
-      >{children}</BlockNoteViewRaw>
+      >{!readOnly && children}</BlockNoteViewRaw>
     </section>
   );
 }
