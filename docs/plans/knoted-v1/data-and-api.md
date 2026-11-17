@@ -56,7 +56,8 @@ JSONB只接受白名单块：heading(level1—3)、paragraph、bulletListItem、
 | /notes/{id}/restore | expected_version, restore_parent?: {parent_id: UUID或null}；省略保留原父，显式null移根；父缺失时409 | T24 |
 | /notes/{id}/snapshots | GET；POST显式flush；POST /{snapshot}/restore | T25 |
 | /assets | POST multipart，返回asset_id；GET /{id}/content | T26 |
-| /tags、/links | 标签CRUD、关联POST/DELETE；link两端严格枚举 | T32 |
+| /tags、/links | 标签CRUD；GET /links 按 source_type/source_id 列表及游标；关联POST/DELETE；link两端严格枚举，列表保留失效目标原UUID | T32 |
+| /entities/{entityType}/{entityId}/tags | GET标签页；PUT/DELETE /{tagId} 幂等添加/移除；类型限定note/file/project/task，服务端检查可见与可写状态 | T32 |
 | /projects | CRUD；POST /{id}/archive、/restore、/unarchive | T33 |
 | /tasks | CRUD；PATCH含project,parent,status,priority,date | T34/T35 |
 | /tasks/{id}/activities | 人工POST/PATCH/DELETE；GET修订 | T36 |

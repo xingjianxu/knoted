@@ -482,7 +482,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** 列出来源的稳定身份关联（包括失效目标） */
+        get: operations["listLinks"];
         put?: never;
         /**
          * 建立实体关联
@@ -507,6 +508,49 @@ export interface paths {
         post?: never;
         /** 删除实体关联 */
         delete: operations["deleteLink"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/entities/{entityType}/{entityId}/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entityType: components["schemas"]["EntityEndType"];
+                entityId: string;
+            };
+            cookie?: never;
+        };
+        /** 列出实体标签 */
+        get: operations["listEntityTags"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/entities/{entityType}/{entityId}/tags/{tagId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entityType: components["schemas"]["EntityEndType"];
+                entityId: string;
+                /** @description 标签 ID。 */
+                tagId: components["parameters"]["TagId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** 添加实体标签（幂等） */
+        put: operations["assignEntityTag"];
+        post?: never;
+        /** 移除实体标签（幂等） */
+        delete: operations["removeEntityTag"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1441,6 +1485,10 @@ export interface components {
             version: number;
             /** Format: date-time */
             created_at: string;
+        };
+        EntityLinkPage: {
+            items: components["schemas"]["EntityLink"][];
+            next_cursor: string | null;
         };
         EntityLinkCreate: {
             source_type: components["schemas"]["EntityEndType"];
@@ -2960,6 +3008,39 @@ export interface operations {
             503: components["responses"]["ServiceUnavailable"];
         };
     };
+    listLinks: {
+        parameters: {
+            query: {
+                source_type: components["schemas"]["EntityEndType"];
+                source_id: string;
+                /** @description 不透明游标；服务端完整验证类型、排序键和过滤摘要，不是授权凭据。 */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description 每页数量，默认 50，最大 100。 */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EntityLinkPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
     createLink: {
         parameters: {
             query?: never;
@@ -2988,6 +3069,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["UnprocessableEntity"];
             429: components["responses"]["TooManyRequests"];
@@ -3025,6 +3107,104 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    listEntityTags: {
+        parameters: {
+            query?: {
+                /** @description 不透明游标；服务端完整验证类型、排序键和过滤摘要，不是授权凭据。 */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description 每页数量，默认 50，最大 100。 */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                entityType: components["schemas"]["EntityEndType"];
+                entityId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    assignEntityTag: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 由同源客户端中间件自动附加，值取自 `knoted_csrf` cookie，服务端同时校验 Origin。 */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
+            };
+            path: {
+                entityType: components["schemas"]["EntityEndType"];
+                entityId: string;
+                /** @description 标签 ID。 */
+                tagId: components["parameters"]["TagId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已更新 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    removeEntityTag: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 由同源客户端中间件自动附加，值取自 `knoted_csrf` cookie，服务端同时校验 Origin。 */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
+            };
+            path: {
+                entityType: components["schemas"]["EntityEndType"];
+                entityId: string;
+                /** @description 标签 ID。 */
+                tagId: components["parameters"]["TagId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已更新 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             503: components["responses"]["ServiceUnavailable"];
         };
     };
