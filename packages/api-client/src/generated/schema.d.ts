@@ -1649,6 +1649,14 @@ export interface components {
             counts: components["schemas"]["DashboardCounts"];
             tasks_by_status: components["schemas"]["DashboardTasksByStatus"];
             recent_tasks: components["schemas"]["Task"][];
+            /** @description 最近更新的未删除笔记，按更新时间与 ID 降序，最多 10 条。 */
+            recent_notes: components["schemas"]["Note"][];
+            /** @description 未删除、未归档、未终态的到期及逾期事项，复用 Asia/Shanghai 日期边界，按截止边界与 ID 排序，最多 10 条。 */
+            due_tasks: components["schemas"]["Task"][];
+            /** @description 当前 failed 任务数量，不含正文或错误堆栈。 */
+            job_failures: number;
+            /** @description 索引能力是否已启用。T53 前为 false，与任务失败分开表达。 */
+            indexing_enabled: boolean;
         };
         /** @enum {string} */
         TrashEntityType: "note" | "project" | "task";
