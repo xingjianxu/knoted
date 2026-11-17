@@ -4,7 +4,7 @@ export const Route = createFileRoute("/_authenticated/")({
   component: () => (
     <Empty
       title="欢迎使用 Knoted"
-      description="当前可管理 Passkey 与登录会话，笔记及知识库功能将在后续开放。"
+      description="当前可编辑笔记、查看历史，并管理 Passkey 与登录会话。其他知识库功能将陆续开放。"
     />
   ),
 });

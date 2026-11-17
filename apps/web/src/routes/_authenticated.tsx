@@ -3,8 +3,9 @@ import {
   Outlet,
   useNavigate,
   useRouterState,
+  useRouter,
 } from "@tanstack/react-router";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   Alert,
   Button,
@@ -13,6 +14,7 @@ import {
   NavItem,
   Sidebar,
 } from "@bixlab/mtone";
+import { NotesNavigationBlocked } from "../features/notes/navigation";
 import { AuthGate, authError } from "../features/auth/auth";
 
 export const Route = createFileRoute("/_authenticated")({
@@ -22,15 +24,28 @@ export const Route = createFileRoute("/_authenticated")({
 function Shell() {
   const bundle = Route.useRouteContext();
   const navigate = useNavigate();
+  const router = useRouter();
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
   const [busy, setBusy] = useState(false);
+  const blockedLogout = useRef<(() => void) | null>(null);
   const [error, setError] = useState("");
   async function logout() {
     setBusy(true);
     setError("");
     try {
+      if (/^\/notes(?:\/|$)/.test(router.state.location.pathname)) {
+        try {
+          await new Promise<void>((resolve, reject) => {
+            blockedLogout.current = () => reject(new Error("无法安全离开笔记，尚未退出登录。请先处理保存错误。"));
+            void navigate({ to: "/" }).then(resolve, reject);
+          });
+        } finally { blockedLogout.current = null; }
+        if (/^\/notes(?:\/|$)/.test(router.state.location.pathname)) {
+          throw new Error("无法安全离开笔记，尚未退出登录。请先处理保存错误。");
+        }
+      }
       await bundle.api.raw.POST("/auth/logout");
       await bundle.queryClient.cancelQueries();
       bundle.queryClient.clear();
@@ -56,7 +71,8 @@ function Shell() {
         }
       >
         <NavGroup label="工作空间">
-          {["概览", "笔记", "项目", "事项", "文件", "搜索", "问答"].map(
+          <NavItem active={/^\/notes(?:\/|$)/.test(pathname)} onClick={() => void navigate({ to: "/notes" })}>笔记</NavItem>
+          {["概览", "项目", "事项", "文件", "搜索", "问答"].map(
             (label) => (
               <NavItem key={label} disabled title="尚未实现">
                 {label}（待开放）
@@ -77,7 +93,9 @@ function Shell() {
         <Layout.Header>个人工作空间</Layout.Header>
         <Layout.Content className="p-6">
           {error && <Alert tone="error">{error}</Alert>}
-          <Outlet />
+          <NotesNavigationBlocked.Provider value={() => blockedLogout.current?.()}>
+            <Outlet />
+          </NotesNavigationBlocked.Provider>
         </Layout.Content>
       </Layout>
     </Layout>

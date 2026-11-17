@@ -9,12 +9,14 @@ export interface NoteAssociationsProps {
   noteId: string;
   api: ApiClient;
   readOnly?: boolean;
+  /** Fresh workspace policy; readOnly alone cannot stop an awaited continuation. */
+  assertCanWrite?: () => void;
 }
 /** Business composition; the notes page owns selection and mounts this beside the editor. */
 export function NoteAssociations(props: NoteAssociationsProps) {
   return <NoteAssociationsContent key={props.noteId} {...props} />;
 }
-function NoteAssociationsContent({ noteId, api, readOnly = false }: NoteAssociationsProps) {
+function NoteAssociationsContent({ noteId, api, readOnly = false, assertCanWrite = () => {} }: NoteAssociationsProps) {
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
@@ -64,6 +66,7 @@ function NoteAssociationsContent({ noteId, api, readOnly = false }: NoteAssociat
     finally { setBusy(false); }
   }
   async function assign(tagId: string) {
+    assertCanWrite();
     await api.raw.PUT("/entities/{entityType}/{entityId}/tags/{tagId}", { params: { path: { entityType: "note", entityId: noteId, tagId } } });
   }
   const queryError = tags.error ?? links.error ?? options.error;
@@ -74,6 +77,7 @@ function NoteAssociationsContent({ noteId, api, readOnly = false }: NoteAssociat
     {queryError && <Button onClick={() => { void tags.refetch(); void links.refetch(); void options.refetch(); }} disabled={loading}>重试读取</Button>}
     <form onSubmit={event => { event.preventDefault(); void mutate(async () => {
       if (!name.trim()) throw new Error("请输入标签名称");
+      assertCanWrite();
       const { data } = await api.raw.POST("/tags", { body: { name: name.trim() } });
       if (!data) throw new Error("无法创建标签");
       // Keep the created ID selected if assignment fails; retry does not create it twice.
@@ -90,6 +94,7 @@ function NoteAssociationsContent({ noteId, api, readOnly = false }: NoteAssociat
     </div>
     <List aria-label="笔记标签">
       {tags.data?.items.map(tag => <ListItem key={tag.id} actions={<Button disabled={disabled} aria-label={`移除标签 ${tag.name}`} onClick={() => void mutate(async () => {
+        assertCanWrite();
         await api.raw.DELETE("/entities/{entityType}/{entityId}/tags/{tagId}", { params: { path: { entityType: "note", entityId: noteId, tagId: tag.id } } });
       })}>移除</Button>}>{tag.name}</ListItem>)}
     </List>
@@ -100,6 +105,7 @@ function NoteAssociationsContent({ noteId, api, readOnly = false }: NoteAssociat
     </div>
     <form onSubmit={event => { event.preventDefault(); void mutate(async () => {
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetId.trim())) throw new Error("请输入有效的目标 ID");
+      assertCanWrite();
       await api.raw.POST("/links", { body: { source_type: "note", source_id: noteId, target_type: targetType, target_id: targetId.trim() } }); setTargetId("");
     }); }} className="flex flex-wrap items-end gap-2">
       <FormField label="关联目标类型"><Select value={targetType} onValueChange={value => { if (value) setTargetType(value as EntityType); }} options={[{ value: "note", label: "笔记" }, { value: "file", label: "文件" }, { value: "project", label: "项目" }, { value: "task", label: "事项" }]} disabled={disabled} /></FormField>
@@ -108,6 +114,7 @@ function NoteAssociationsContent({ noteId, api, readOnly = false }: NoteAssociat
     </form>
     <List aria-label="资料关联">
       {links.data?.items.map(link => <ListItem key={link.id} description={link.target_type} actions={<Button disabled={disabled} aria-label={`移除关联 ${link.target_id}`} onClick={() => void mutate(async () => {
+        assertCanWrite();
         await api.raw.DELETE("/links/{linkId}", { params: { path: { linkId: link.id }, query: { expected_version: link.version } } });
       })}>移除</Button>}>{link.target_id}</ListItem>)}
     </List>

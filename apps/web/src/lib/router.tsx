@@ -2,10 +2,10 @@ import { createRouter, type RouterHistory } from "@tanstack/react-router";
 import { createQueryClient, type QueryClientBundle } from "./query";
 import { routeTree } from "../routeTree.gen";
 
-/** Only destinations implemented in T20 may be returned to after authentication. */
+/** Strict local destinations implemented by the authenticated routes. */
 export function safeReturnTo(value: unknown): string {
   return typeof value === "string" &&
-    ["/", "/settings/security"].includes(value)
+    (["/", "/settings/security", "/notes"].includes(value) || /^\/notes\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value))
     ? value
     : "/";
 }
@@ -17,6 +17,8 @@ export function createAppRouter(
     createQueryClient({
       onUnauthorized: () => {
         const path = router.state.location.pathname;
+        // Notes owns an initialized local draft beyond server cache eviction.
+        // Its first-load 401 still redirects; mounted sessions expose explicit recovery.
         if (path === "/" || path === "/settings/security") {
           void bundle.queryClient.cancelQueries().then(() => {
             bundle.queryClient.clear();
