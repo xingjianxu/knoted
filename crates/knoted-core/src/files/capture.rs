@@ -437,6 +437,12 @@ async fn publish(
     pending.validate()?;
     // COMMIT can have succeeded even when its response/future is lost. Retain
     // from this point; later GC must prove absence of source/jobs references.
+    super::extraction::enqueue(&mut tx, id)
+        .await
+        .map_err(extraction_error)?;
+    lease_valid(&mut tx, &input.lease).await?;
+    input.open()?;
+    pending.validate()?;
     pending.retain = true;
     tx.commit().await?;
     Ok(())
@@ -580,6 +586,27 @@ async fn replay(
     };
     lease_valid(&mut tx, &input.lease).await?;
     validate_root(input)?;
-    tx.rollback().await?; // No writes, not even a timestamp/freshness refresh.
+    if receipt.is_some() {
+        let id = source(&mut tx, input, true)
+            .await?
+            .ok_or(DomainError::Stale)?
+            .id;
+        super::extraction::enqueue(&mut tx, id)
+            .await
+            .map_err(extraction_error)?;
+    }
+    lease_valid(&mut tx, &input.lease).await?;
+    validate_root(input)?;
+    tx.commit().await?; // Receipt is unchanged; extraction may be newly enabled.
     Ok(receipt)
+}
+
+fn extraction_error(error: super::extraction::DomainError) -> DomainError {
+    match error {
+        super::extraction::DomainError::Database(e)
+        | super::extraction::DomainError::Queue(crate::db::DbError::Sqlx(e)) => {
+            DomainError::Database(e)
+        }
+        _ => DomainError::Stale,
+    }
 }
