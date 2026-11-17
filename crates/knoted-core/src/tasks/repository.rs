@@ -78,16 +78,27 @@ pub(super) async fn lock_set(
 ) -> Result<(), sqlx::Error> {
     let mut tasks = Vec::new();
     let mut projects = Vec::new();
+    let mut parents = Vec::new();
     if let Some(id) = target {
+        parents.push(id);
         tasks.push(id);
         if let Some(t) = find(c, id).await? {
             tasks.extend(t.parent_id);
+            parents.extend(t.parent_id);
             projects.extend(t.project_id);
         }
-        tasks.extend(children(c, id).await?.into_iter().map(|t| t.id));
     }
     tasks.extend(parent);
+    parents.extend(parent);
     projects.extend(project);
+    // Discover all old/new parent children before any row lock. This includes
+    // siblings and trash rows; live children participate in done admission,
+    // while trash rows retain the project-migration locking exception.
+    parents.sort_unstable();
+    parents.dedup();
+    for id in parents {
+        tasks.extend(children(c, id).await?.into_iter().map(|t| t.id));
+    }
     tasks.sort_unstable();
     tasks.dedup();
     for id in &tasks {

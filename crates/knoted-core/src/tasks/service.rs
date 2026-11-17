@@ -2,7 +2,7 @@
 use super::repository as repo;
 use crate::context::AppContext;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
@@ -142,53 +142,9 @@ fn validate(t: &Task) -> Result<(), DomainError> {
     if t.description.as_ref().is_some_and(|s| s.contains('\0')) {
         return Err(DomainError::InvalidField("description"));
     }
-    let start = t
-        .start
-        .as_ref()
-        .map(|d| date_boundary(d, false))
-        .transpose()?;
-    let due = t.due.as_ref().map(|d| date_boundary(d, true)).transpose()?;
-    if start.zip(due).is_some_and(|(s, d)| s > d) {
-        return Err(DomainError::InvalidField("start/due"));
-    }
-    Ok(())
+    super::dates::validate_dates(t.start.as_ref(), t.due.as_ref())
 }
-fn date_boundary(d: &DateValue, due: bool) -> Result<NaiveDateTime, DomainError> {
-    let invalid = || DomainError::InvalidField("start/due");
-    if d.timezone != "Asia/Shanghai"
-        || d.date.len() != 10
-        || !d.date.bytes().enumerate().all(|(i, b)| {
-            if i == 4 || i == 7 {
-                b == b'-'
-            } else {
-                b.is_ascii_digit()
-            }
-        })
-    {
-        return Err(invalid());
-    }
-    let mut date = NaiveDate::parse_from_str(&d.date, "%Y-%m-%d").map_err(|_| invalid())?;
-    let time = if let Some(s) = &d.time {
-        if s.len() != 5
-            || !s.bytes().enumerate().all(|(i, b)| {
-                if i == 2 {
-                    b == b':'
-                } else {
-                    b.is_ascii_digit()
-                }
-            })
-        {
-            return Err(invalid());
-        }
-        NaiveTime::parse_from_str(s, "%H:%M").map_err(|_| invalid())?
-    } else {
-        if due {
-            date = date.succ_opt().ok_or_else(invalid)?;
-        }
-        NaiveTime::MIN
-    };
-    Ok(date.and_time(time))
-}
+
 async fn finish<T>(
     tx: sqlx::Transaction<'_, sqlx::Postgres>,
     r: Result<T, DomainError>,
@@ -289,6 +245,7 @@ pub async fn create(ctx: &AppContext, input: CreateTask) -> Result<Task, DomainE
             t.project_id = p.project_id;
         }
         project_writable(&mut tx, t.project_id, None, true).await?;
+        super::transitions::validate_final_state(&mut tx, &t, None).await?;
         let t = repo::insert(&mut tx, &t).await?;
         repo::event(&mut tx, &t, "created").await?;
         Ok(t)
@@ -315,6 +272,12 @@ pub async fn move_project(ctx: &AppContext, input: MoveTaskProject) -> Result<Ta
     .await
 }
 pub async fn update(ctx: &AppContext, input: UpdateTask) -> Result<Task, DomainError> {
+    super::transitions::transition_task(ctx, input).await
+}
+pub(super) async fn update_command(
+    ctx: &AppContext,
+    input: UpdateTask,
+) -> Result<Task, DomainError> {
     version(input.expected_version)?;
     if input.title.is_none()
         && input.description.is_none()
@@ -384,6 +347,7 @@ pub async fn update(ctx: &AppContext, input: UpdateTask) -> Result<Task, DomainE
         }
         project_writable(&mut tx, t.project_id, Some(&old), true).await?;
         validate(&t)?;
+        super::transitions::validate_final_state(&mut tx, &t, Some(&old)).await?;
         if t == old {
             return Ok(old);
         }
