@@ -41,6 +41,50 @@ afterAll(() => {
 });
 
 describe("T27 BlockNote editor", () => {
+  it("allows paragraph Enter before BlockNote assigns the new block ID", () => {
+    let editor!: ReturnType<typeof useBlockNoteEditor>;
+    function Probe() { editor = useBlockNoteEditor(); return null; }
+    const onChange = vi.fn();
+    const view = render(<UiProvider><NoteEditor document={{ blocks: [{ id: "p", type: "paragraph", content: [{ type: "text", text: "原文" }] }] }} onChange={onChange}><Probe /></NoteEditor></UiProvider>);
+    const editable = view.container.querySelector<HTMLElement>('[contenteditable="true"]')!;
+    act(() => editor.setTextCursorPosition("p", "end"));
+    fireEvent.keyDown(editable, { key: "Enter" });
+    act(() => editor.insertInlineContent("新段正文"));
+    const saved = onChange.mock.lastCall?.[0] as NoteDocument;
+    expect(saved.blocks).toHaveLength(2);
+    expect(saved.blocks[0]).toEqual({ id: "p", type: "paragraph", content: [{ type: "text", text: "原文" }] });
+    expect(saved.blocks[1]).toMatchObject({ type: "paragraph", content: [{ type: "text", text: "新段正文" }] });
+    expect(saved.blocks[1]?.id).toBeTruthy();
+    expect(saved.blocks[1]?.id).not.toBe("p");
+    expect(screen.queryByText(/未应用此次编辑/)).not.toBeInTheDocument();
+  });
+
+  it("validates new ID-less blocks in multi-paragraph paste without rejecting valid content", async () => {
+    let editor!: ReturnType<typeof useBlockNoteEditor>;
+    function Probe() { editor = useBlockNoteEditor(); return null; }
+    const onChange = vi.fn();
+    const view = render(<UiProvider><NoteEditor document={{ blocks: [{ id: "p", type: "paragraph", content: [{ type: "text", text: "原文" }] }] }} onChange={onChange}><Probe /></NoteEditor></UiProvider>);
+    const editable = view.container.querySelector<HTMLElement>('[contenteditable="true"]')!;
+    act(() => editor.setTextCursorPosition("p", "end"));
+    pasteHtml(editable, '<p>第一段</p><p>第二段<a href="https://example.com/%E4%B8%AD#ok">有效链接</a></p>', "第一段\n第二段有效链接");
+    const saved = onChange.mock.lastCall?.[0] as NoteDocument;
+    expect(saved.blocks).toHaveLength(2);
+    expect(saved.blocks[0]?.content).toEqual([{ type: "text", text: "原文第一段" }]);
+    expect(saved.blocks[1]?.content).toEqual([{ type: "text", text: "第二段" }, { type: "link", text: "有效链接", href: "https://example.com/%E4%B8%AD#ok" }]);
+    expect(saved.blocks.every(block => Boolean(block.id))).toBe(true);
+    expect(new Set(saved.blocks.map(block => block.id)).size).toBe(2);
+    // A malformed link in a newly created (initially ID-less) second paragraph
+    // must cancel the entire next paste, including its valid first paragraph.
+    const before = JSON.stringify(saved);
+    pasteHtml(editable, '<p>不应插入</p><p><a href="https://example.com/#part#two">非法新块</a></p>', "不应插入\n非法新块");
+    expect(await screen.findByText(/未应用此次编辑/)).toBeInTheDocument();
+    expect(editable).not.toHaveTextContent("不应插入");
+    expect(editable).not.toHaveTextContent("非法新块");
+    expect(JSON.stringify(onChange.mock.lastCall?.[0])).toBe(before);
+    act(() => editor.insertInlineContent("后续仍保稿"));
+    expect(JSON.stringify(onChange.mock.lastCall?.[0])).toContain("后续仍保稿");
+  });
+
   it("rejects a repeated-fragment paste atomically, then retains subsequent typing and valid encoded links", async () => {
     let editor!: ReturnType<typeof useBlockNoteEditor>;
     function Probe() { editor = useBlockNoteEditor(); return null; }
