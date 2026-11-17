@@ -218,3 +218,26 @@ async fn t41_recent_sort_limits_and_untruncated_counts_with_no_write_side_effect
     assert_eq!(before, after);
     db.drop().await;
 }
+
+#[tokio::test]
+async fn t41_valid_precise_deadline_on_skipped_midnight_day() {
+    let db = TestDb::create().await.unwrap();
+    let clock = FixedClock::new("1919-04-12T18:30:00Z".parse().unwrap());
+    let ctx = AppContext::new(db.pool.clone()).with_clock(Arc::new(clock));
+    // Shanghai skipped 00:00 on this day; 03:00 is a valid precise deadline.
+    // Creation exercises T35 validation independently of dashboard aggregation.
+    let id = task(
+        &ctx,
+        "valid historical deadline",
+        TaskStatus::Todo,
+        "1919-04-13",
+        Some("03:00"),
+    )
+    .await;
+    let result = dashboard::summary(&ctx, GetDashboard).await;
+    db.drop().await;
+    let s = result.unwrap();
+    assert_eq!(s.counts.tasks_due_today, 1);
+    assert_eq!(s.due_tasks.len(), 1);
+    assert_eq!(s.due_tasks[0].id, id);
+}

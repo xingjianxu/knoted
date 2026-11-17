@@ -136,3 +136,15 @@ async fn t41_http_completion_disappears_from_due_and_errors_are_safe() {
     assert!(error["request_id"].is_string());
     h.db.drop().await;
 }
+
+#[tokio::test]
+async fn t41_http_valid_precise_deadline_does_not_require_valid_midnight() {
+    let h = Harness::new().await;
+    let (status, _, task) = h.send("POST", "/api/v1/tasks", json!({"title":"valid historical deadline","due":{"date":"1919-04-13","time":"03:00","timezone":"Asia/Shanghai"}})).await;
+    assert_eq!(status, StatusCode::CREATED, "{task}");
+    let (status, _, s) = h.send("GET", "/api/v1/dashboard", Value::Null).await;
+    h.db.drop().await;
+    assert_eq!(status, StatusCode::OK, "{s}");
+    assert_eq!(s["due_tasks"][0]["id"], task["id"]);
+    assert_eq!(s["counts"]["tasks_open"], 1);
+}

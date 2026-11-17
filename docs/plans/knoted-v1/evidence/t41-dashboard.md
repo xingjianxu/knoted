@@ -42,3 +42,13 @@ Web `run build` 的 `tsc --noEmit` 已由 typecheck 的同一命令实际通过�
 ## 限制
 
 概览读取当前未归档事项以复用领域日期语义，未增加全文/向量索引或外部通知。到期标签表达本次读取时刻的状态；重新进入首页会刷新。dev 部署与原生 HTTPS 的最终业务验收尚未执行。
+
+## 主 Agent I1 复核修复（round 1）
+
+主 Agent 在初审后发现合法历史精确截止时间被额外午夜映射误拒绝。实际 chrono/真实 PG 回归确认：`1919-04-13 03:00 Asia/Shanghai` 可通过 T35 校验并创建，core 概览却返回 `InvalidField("start/due")`，HTTP 概览 503。`i1-red-core.log`、`i1-red-api.log` 各 1 failed、exit 101，失败发生在创建成功后的概览断言，非 fixture 或编译错误。
+
+修复仅移除概览将合法截止时间改为 `time=None` 再解析午夜的额外约束。先保留原 `date_boundary(value, true)` 验证/排序，然后使用 `NaiveDate` 读取已经验证的 `date` 字段用于日历比较；不修改 T35 时区算法。新增 core 回归固定到该上海当天验证今日计数与列表，新增 HTTP 回归验证合法任务创建后概览 200 且可见。
+
+受影响命令 `cargo test --locked -p knoted-core -p knoted-api --test t41` 实测 6 passed、exit 0（`i1-green.log`）。重新执行 `cargo fmt --check`、`cargo test --workspace --locked`（261 passed、1 ignored、0 failed）与 `cargo clippy --locked --all-targets -- -D warnings` 全部 exit 0；对应 `i1-fmt.log`、`i1-rust-test.log`、`i1-clippy.log`，见实施报告的 I1 附录。Web 未改动，无需重复其已通过门禁。
+
+首次 RED 的断言 panic 遇到既有 TestDb 同步 Drop 等待未完成回滚连接，schema 清理阻塞。仅终止本任务测试进程 `640179`、`640443`，新回归先 `await db.drop()` 再断言以取得干净失败证据。仅清理自身残留 `knoted_test_c42c5be30a1e`、`knoted_test_50bd8686bcc8`，读回 0；完整证据在 `/data/knoted-dev/tasks/t41/evidence/i1-cleanup-schemas.txt`。公共 TestDb 未修改，其他数据库/schema/进程未触碰。

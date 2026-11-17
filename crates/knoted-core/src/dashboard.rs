@@ -65,15 +65,11 @@ pub async fn summary(ctx: &AppContext, _: GetDashboard) -> Result<DashboardSumma
         if let Some(value) = &task.due {
             // Validation and deadline ordering use the exact T35 boundary.
             let boundary = date_boundary(value, true)?;
-            // Start of the deadline's calendar day selects all of today's
-            // timed/date-only tasks, including deadlines still ahead today.
-            let day = crate::tasks::service::DateValue {
-                time: None,
-                ..value.clone()
-            };
-            let date = date_boundary(&day, false)?
-                .with_timezone(&chrono_tz::Asia::Shanghai)
-                .date_naive();
+            // The original deadline is valid, but its calendar day's midnight
+            // need not exist (e.g. Shanghai 1919-04-13). Read its date without
+            // imposing a second, unrelated local-time mapping constraint.
+            let date = chrono::NaiveDate::parse_from_str(&value.date, "%Y-%m-%d")
+                .map_err(|_| DomainError::InvalidField("start/due"))?;
             if date == today {
                 tasks_due_today += 1;
             }
