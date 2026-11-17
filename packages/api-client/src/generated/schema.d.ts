@@ -685,7 +685,10 @@ export interface paths {
         get: operations["getTask"];
         put?: never;
         post?: never;
-        /** 软删除事项 */
+        /**
+         * 软删除事项
+         * @description 存在未删除子事项时返回 409；软删除保留原有关联，满 30 天后才有资格永久清理。父有尚存子行时延后清理，不缩短子事项保留期。
+         */
         delete: operations["deleteTask"];
         options?: never;
         head?: never;
@@ -767,7 +770,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 归档事项 */
+        /**
+         * 归档事项
+         * @description 仅归档当前事项，不限制终态且不级联子事项；归档仍可读、可检索。自身、父事项或项目归档时禁止正文、跟进、标签及资料关联写入。
+         */
         post: operations["archiveTask"];
         delete?: never;
         options?: never;
@@ -784,7 +790,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 取消事项归档 */
+        /**
+         * 取消事项归档
+         * @description 仅取消当前事项归档；父事项或项目不可写时返回 409，不自动取消其归档。
+         */
         post: operations["unarchiveTask"];
         delete?: never;
         options?: never;
@@ -801,7 +810,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 从回收站恢复事项 */
+        /**
+         * 从回收站恢复事项
+         * @description 未永久清理的事项按当前父与项目关系恢复；父缺失、已删除、归档、非顶层、项目不可写或继承不一致时返回 409，须先恢复父；不自动移根或重新打开已完成父事项。30 天为清理资格线而非恢复硬截止。
+         */
         post: operations["restoreTask"];
         delete?: never;
         options?: never;

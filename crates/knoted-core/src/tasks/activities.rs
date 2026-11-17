@@ -167,7 +167,7 @@ async fn finish<T>(
 }
 
 /// A follow-up write only targets a live task: a deleted task is gone, while an
-/// archived task or an archived/deleted project refuses the write.
+/// archived task or a readonly/inconsistent parent or project refuses the write.
 async fn live_task(c: &mut PgConnection, id: Uuid) -> Result<(), DomainError> {
     let t = super::repository::find(c, id)
         .await?
@@ -183,23 +183,17 @@ async fn live_task(c: &mut PgConnection, id: Uuid) -> Result<(), DomainError> {
     if t.archived_at.is_some() {
         return Err(conflict);
     }
-    if let Some(project_id) = t.project_id
-        && !matches!(
-            super::repository::project_state(c, project_id).await?,
-            Some((false, false))
-        )
-    {
-        return Err(conflict);
-    }
-    Ok(())
+    super::service::relations_writable(c, &t)
+        .await
+        .map_err(|e| match e {
+            DomainError::Conflict { .. } => conflict,
+            other => other,
+        })
 }
-/// Follow the task write lock order: relation advisory lock, then the row.
+/// Follow task write order: relation admission, then the full ordered row set.
 async fn lock_task(c: &mut PgConnection, id: Uuid) -> Result<(), DomainError> {
     crate::projects::repository::lock_relations(c).await?;
-    sqlx::query("SELECT id FROM tasks WHERE id=$1 FOR UPDATE")
-        .bind(id)
-        .fetch_optional(c)
-        .await?;
+    super::repository::lock_set(c, Some(id), None, None).await?;
     Ok(())
 }
 async fn find(

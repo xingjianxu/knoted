@@ -123,12 +123,12 @@ pub enum DomainError {
     #[error("task persistence unavailable")]
     Database(#[from] sqlx::Error),
 }
-fn conflict(t: Option<&Task>) -> DomainError {
+pub(super) fn conflict(t: Option<&Task>) -> DomainError {
     DomainError::Conflict {
         current_version: t.map(|t| t.version),
     }
 }
-fn version(v: i64) -> Result<(), DomainError> {
+pub(super) fn version(v: i64) -> Result<(), DomainError> {
     if v < 1 {
         Err(DomainError::InvalidField("expected_version"))
     } else {
@@ -145,7 +145,7 @@ fn validate(t: &Task) -> Result<(), DomainError> {
     super::dates::validate_dates(t.start.as_ref(), t.due.as_ref())
 }
 
-async fn finish<T>(
+pub(super) async fn finish<T>(
     tx: sqlx::Transaction<'_, sqlx::Postgres>,
     r: Result<T, DomainError>,
 ) -> Result<T, DomainError> {
@@ -201,6 +201,13 @@ async fn writable(c: &mut sqlx::PgConnection, t: &Task, expected: i64) -> Result
     if t.version != expected || t.archived_at.is_some() {
         return Err(conflict(Some(t)));
     }
+    relations_writable(c, t).await
+}
+/// Shared current-relation admission; callers separately check the target state.
+pub(super) async fn relations_writable(
+    c: &mut sqlx::PgConnection,
+    t: &Task,
+) -> Result<(), DomainError> {
     project_writable(c, t.project_id, Some(t), false).await?;
     if let Some(id) = t.parent_id {
         let p = parent_writable(c, id, Some(t), false).await?;
@@ -388,31 +395,7 @@ pub(super) async fn update_command(
     finish(tx, r).await
 }
 pub async fn delete(ctx: &AppContext, input: DeleteTask) -> Result<(), DomainError> {
-    version(input.expected_version)?;
-    let mut tx = ctx.pool().begin().await?;
-    let r = async {
-        crate::projects::repository::lock_relations(&mut tx).await?;
-        repo::lock_set(&mut tx, Some(input.id), None, None).await?;
-        let old = repo::find(&mut tx, input.id)
-            .await?
-            .ok_or(DomainError::NotFound)?;
-        writable(&mut tx, &old, input.expected_version).await?;
-        if repo::children(&mut tx, old.id)
-            .await?
-            .iter()
-            .any(|c| c.deleted_at.is_none())
-        {
-            return Err(conflict(Some(&old)));
-        }
-        let mut t = old.clone();
-        t.updated_at = ctx.now();
-        t.deleted_at = Some(t.updated_at);
-        let t = repo::save(&mut tx, &t, &old).await?;
-        repo::event(&mut tx, &t, "deleted").await?;
-        Ok(())
-    }
-    .await;
-    finish(tx, r).await
+    super::lifecycle::delete(ctx, input).await
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

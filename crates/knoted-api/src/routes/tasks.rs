@@ -15,14 +15,17 @@ use axum::{
     http::{StatusCode, header},
     middleware::from_fn_with_state,
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
 use knoted_core::{
     config::AuthConfig,
     context::AppContext,
-    tasks::service::{
-        self, CreateTask, DateValue, DeleteTask, DomainError, GetTask, ListTasks, Task,
-        TaskPriority, TaskStatus, UpdateTask,
+    tasks::{
+        lifecycle::{self, ArchiveTask, RestoreTask, UnarchiveTask},
+        service::{
+            self, CreateTask, DateValue, DeleteTask, DomainError, GetTask, ListTasks, Task,
+            TaskPriority, TaskStatus, UpdateTask,
+        },
     },
 };
 use serde::{Deserialize, Deserializer};
@@ -34,6 +37,9 @@ pub fn router(config: AuthConfig, ctx: AppContext) -> Router<AppContext> {
             "/tasks/{task_id}",
             get(get_task).patch(update).delete(delete),
         )
+        .route("/tasks/{task_id}/archive", post(archive))
+        .route("/tasks/{task_id}/unarchive", post(unarchive))
+        .route("/tasks/{task_id}/restore", post(restore))
         .route_layer(from_fn_with_state(config, require_csrf))
         .route_layer(from_fn_with_state(ctx, require_session))
 }
@@ -266,6 +272,89 @@ async fn delete(
     .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => error(id, e),
+    }
+}
+
+async fn archive(
+    State(ctx): State<AppContext>,
+    id: RequestId,
+    path: Result<Path<Uuid>, PathRejection>,
+    body: Result<Json<VersionQuery>, JsonRejection>,
+) -> Response {
+    let Path(task_id) = match path {
+        Ok(v) => v,
+        Err(_) => return bad(id),
+    };
+    let Json(b) = match body {
+        Ok(v) => v,
+        Err(_) => return bad(id),
+    };
+    match lifecycle::archive(
+        &ctx,
+        ArchiveTask {
+            id: task_id,
+            expected_version: b.expected_version,
+        },
+    )
+    .await
+    {
+        Ok(t) => response(t, StatusCode::OK),
+        Err(e) => error(id, e),
+    }
+}
+
+async fn restore(
+    State(ctx): State<AppContext>,
+    id: RequestId,
+    path: Result<Path<Uuid>, PathRejection>,
+    body: Result<Json<VersionQuery>, JsonRejection>,
+) -> Response {
+    let Path(task_id) = match path {
+        Ok(v) => v,
+        Err(_) => return bad(id),
+    };
+    let Json(b) = match body {
+        Ok(v) => v,
+        Err(_) => return bad(id),
+    };
+    match lifecycle::restore(
+        &ctx,
+        RestoreTask {
+            id: task_id,
+            expected_version: b.expected_version,
+        },
+    )
+    .await
+    {
+        Ok(t) => response(t, StatusCode::OK),
+        Err(e) => error(id, e),
+    }
+}
+async fn unarchive(
+    State(ctx): State<AppContext>,
+    id: RequestId,
+    path: Result<Path<Uuid>, PathRejection>,
+    body: Result<Json<VersionQuery>, JsonRejection>,
+) -> Response {
+    let Path(task_id) = match path {
+        Ok(v) => v,
+        Err(_) => return bad(id),
+    };
+    let Json(b) = match body {
+        Ok(v) => v,
+        Err(_) => return bad(id),
+    };
+    match lifecycle::unarchive(
+        &ctx,
+        UnarchiveTask {
+            id: task_id,
+            expected_version: b.expected_version,
+        },
+    )
+    .await
+    {
+        Ok(t) => response(t, StatusCode::OK),
         Err(e) => error(id, e),
     }
 }

@@ -8,6 +8,10 @@ pub(super) async fn visible(
     e: Entity,
     write: bool,
 ) -> Result<(), DomainError> {
+    // Every endpoint check takes relation admission before *any* endpoint row.
+    // This also covers reciprocal links where the task is checked second, and
+    // serializes parent/project checks with lifecycle and relationship changes.
+    crate::projects::repository::lock_relations(c).await?;
     let registered: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM entity_registry WHERE id=$1 AND entity_type=$2)",
     )
@@ -38,8 +42,25 @@ pub(super) async fn visible(
         "SELECT {archive} FROM {table} WHERE id=$1 AND {predicate} FOR UPDATE"
     ))
     .bind(e.id)
-    .fetch_optional(c)
+    .fetch_optional(&mut *c)
     .await?;
+    if write && archived == Some(false) && e.entity_type == EntityType::Task {
+        let writable: bool = sqlx::query_scalar(
+            "SELECT (t.project_id IS NULL OR EXISTS (
+                SELECT 1 FROM projects p WHERE p.id=t.project_id
+                AND p.archived_at IS NULL AND p.deleted_at IS NULL))
+             AND (t.parent_id IS NULL OR EXISTS (
+                SELECT 1 FROM tasks parent WHERE parent.id=t.parent_id
+                AND parent.parent_id IS NULL AND parent.archived_at IS NULL AND parent.deleted_at IS NULL
+                AND parent.project_id IS NOT DISTINCT FROM t.project_id))
+             FROM tasks t WHERE t.id=$1",
+        ).bind(e.id).fetch_one(&mut *c).await?;
+        if !writable {
+            return Err(DomainError::Conflict {
+                current_version: None,
+            });
+        }
+    }
     match archived {
         None => Err(DomainError::NotFound),
         Some(true) if write => Err(DomainError::Conflict {

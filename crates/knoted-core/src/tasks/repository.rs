@@ -153,7 +153,7 @@ pub(super) async fn insert(c: &mut PgConnection, t: &Task) -> Result<Task, sqlx:
 pub(super) async fn save(c: &mut PgConnection, t: &Task, old: &Task) -> Result<Task, DomainError> {
     sqlx::query_as::<_, Row>(
         "UPDATE tasks SET project_id=$3,parent_id=$4,title=$5,description=$6,status=$7,priority=$8,
-         \"start\"=$9,due=$10,deleted_at=$11,updated_at=$12,version=version+1
+         \"start\"=$9,due=$10,deleted_at=$11,updated_at=$12,archived_at=$15,archive_batch_id=$16,version=version+1
          WHERE id=$1 AND version=$2 AND archived_at IS NOT DISTINCT FROM $13
          AND deleted_at IS NOT DISTINCT FROM $14 RETURNING *",
     )
@@ -171,6 +171,8 @@ pub(super) async fn save(c: &mut PgConnection, t: &Task, old: &Task) -> Result<T
     .bind(t.updated_at)
     .bind(old.archived_at)
     .bind(old.deleted_at)
+    .bind(t.archived_at)
+    .bind(t.archive_batch_id)
     .fetch_optional(c)
     .await?
     .map(Into::into)
@@ -219,6 +221,59 @@ pub(super) async fn event(
         .await?;
     Ok(())
 }
+/// Purge changes no project or parent relation. Admission stabilizes the full
+/// candidate set; lock its task rows once in global UUID order before deletion.
+pub(super) async fn lock_trash(
+    c: &mut PgConnection,
+    cutoff: DateTime<Utc>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT id FROM tasks WHERE deleted_at <= $1 ORDER BY id FOR UPDATE")
+        .bind(cutoff)
+        .fetch_all(c)
+        .await?;
+    Ok(())
+}
+pub(super) async fn expired_leaves(
+    c: &mut PgConnection,
+    cutoff: DateTime<Utc>,
+) -> Result<Vec<Uuid>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT t.id FROM tasks t WHERE t.deleted_at <= $1
+        AND NOT EXISTS(SELECT 1 FROM tasks child WHERE child.parent_id=t.id) ORDER BY t.id",
+    )
+    .bind(cutoff)
+    .fetch_all(c)
+    .await
+}
+/// No cascading FK or detachment: every surviving child blocks its parent.
+/// Dependents are removed explicitly; stable identities, links, shared tags and
+/// durable outbox are deliberately untouched. The caller owns the transaction.
+pub(super) async fn purge_task(
+    c: &mut PgConnection,
+    id: Uuid,
+    cutoff: DateTime<Utc>,
+) -> Result<u64, sqlx::Error> {
+    sqlx::query("DELETE FROM activity_revisions WHERE activity_id IN (SELECT id FROM activities WHERE task_id=$1)")
+        .bind(id).execute(&mut *c).await?;
+    sqlx::query("DELETE FROM activities WHERE task_id=$1")
+        .bind(id)
+        .execute(&mut *c)
+        .await?;
+    sqlx::query("DELETE FROM task_tags WHERE entity_id=$1")
+        .bind(id)
+        .execute(&mut *c)
+        .await?;
+    Ok(sqlx::query(
+        "DELETE FROM tasks t WHERE id=$1 AND deleted_at <= $2
+        AND NOT EXISTS(SELECT 1 FROM tasks child WHERE child.parent_id=t.id)",
+    )
+    .bind(id)
+    .bind(cutoff)
+    .execute(c)
+    .await?
+    .rows_affected())
+}
+
 pub(super) async fn page(
     c: &mut PgConnection,
     q: &ListTasks,
