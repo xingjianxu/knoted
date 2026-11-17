@@ -4,7 +4,7 @@
 
 ## 现状与目标
 
-当前精确依赖为 **`@bixlab/mtone@0.3.0`**（`apps/web/package.json` / `pnpm-lock.yaml`），升级适配与消费复验见 [0.3.0 证据](../plans/knoted-v1/evidence/mtone-0.3.0.md)。以下 T17—T19 的 0.2.0 版本和集成 SHA 是历史记录，不代表当前锁版。
+当前精确依赖为 **`@bixlab/mtone@0.4.0`**（`apps/web/package.json` / `pnpm-lock.yaml`），升级适配与消费复验见 [0.4.0 证据](../plans/knoted-v1/evidence/mtone-0.4.0.md)。以下 T17—T19 的 0.2.0 版本、0.3.0 升级说明和集成 SHA 是历史记录，不代表当前锁版。
 
 T17 已精确接入 npm `@bixlab/mtone@0.2.0`，迁移 App 静态类并移除 `packages/ui`；**PR #42 已普通 merge 至主线 `e3e1db2`，独立审查/主线验证/任务清理完成**。生产入口使用应用层 `UiProvider` 配置公开 `MtoneProvider` 的 locale/density/tokens，不转发控件 API；CSS 从应用样式入口导入。基础表单组合仅在测试夹具中，不建立生产演示路由或通用包装库。证据见 [T17](../plans/knoted-v1/evidence/t17.md)。
 
@@ -42,7 +42,18 @@ T17 实测：旧 `cn('p-2', 'p-4')` 返回 `p-4`，mtone 的 `cn` 返回 `p-2 p-
 
 只使用 npm 已发布版本作为正式依赖；不以浮动 latest、Git、file/link、未发布 tarball 交付。不修改 API 或业务语义来迁就组件。
 
-## 0.3.0 升级与当前消费约定
+## 0.4.0 升级与当前消费约定
+
+已亲查正式 npm 发布包及其 README、llms.txt、公开声明与 CSS；exports、直接依赖与 React/ReactDOM peers 相对 0.3.0 不变，应用继续使用 React 19.3.1、公开根导出与 `@bixlab/mtone/styles.css`。lock 只替换 mtone 版本与 integrity，不升级其他依赖。
+
+- **Tree**：`TreeItem.id` 扩展为 `string | number`，原 `items/value/expanded` 及回调仍可用。笔记树在应用内以递归 `NoteTreeItem` 保留字符串 UUID 类型，不将通用数字键传播到笔记目录完整性校验，不做类型强转或 ID 转换。生产笔记目录及 T19 继续消费原公开接口，无需采用多选、勾选、拖放或虚拟滚动。
+- **其他扩展**：Tabs、Avatar、Divider 等公开类型有扩展，并新增多种组件；本任务不顺带迁移或接入未使用能力，不能以发布清单代替业务验收。
+- **安装策略**：仅将 mtone 的精确 release-age 例外替换为 `@bixlab/mtone@0.4.0`，保留原 `react-resizable-panels@4.24.0` 例外，不全局放宽等待期。包管理器重解析的无关 Babel runtime 变化已排除，frozen install 通过。
+- **消费复验**：现有 199 项 Vitest、T17—T19 共 15 项真实 Chromium 测试、前端 lint/typecheck/build 均通过。继续沿用 0.3.0 的 Dialog 外部关闭及 FormField 有效性语义适配；Provider、主题、系统字体、Portal 和编辑器无需改动。
+
+发布依据：[npm 0.4.0 元数据](https://registry.npmjs.org/@bixlab%2fmtone/0.4.0)、[README](https://unpkg.com/@bixlab/mtone@0.4.0/README.md)、[类型](https://unpkg.com/@bixlab/mtone@0.4.0/dist/index.d.ts)、[llms.txt](https://unpkg.com/@bixlab/mtone@0.4.0/llms.txt)。完整检查与限制见 [0.4.0 证据](../plans/knoted-v1/evidence/mtone-0.4.0.md)。未发现需交接的新通用能力缺口。
+
+## 0.3.0 升级记录（历史，兼容约定仍沿用）
 
 已核查正式发布包的 README、exports、类型声明、实现和 CSS；React/ReactDOM peers 仍为 `^19.2.0`，本应用继续使用 `19.3.1`。公开根导出与 `@bixlab/mtone/styles.css` 导入不变；不因新增能力重构现有表单、外壳或列表。
 
