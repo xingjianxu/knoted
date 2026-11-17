@@ -135,6 +135,18 @@
       "schema": "FileSource",
       "file": "invalid/file-source-missing-version.json",
       "valid": false
+    },
+    {
+      "document": "openapi.yaml",
+      "schema": "FileRelinkRequest",
+      "file": "valid/file-relink.json",
+      "valid": true
+    },
+    {
+      "document": "openapi.yaml",
+      "schema": "FileRelinkRequest",
+      "file": "invalid/file-relink-extra-confirm.json",
+      "valid": false
     }
   ]
 }

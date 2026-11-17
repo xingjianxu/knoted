@@ -345,6 +345,10 @@ pub async fn reconcile_complete_scan(
     }
     let complete = report.complete();
     if complete {
+        sqlx::query("UPDATE file_sources SET move_scan_id=NULL WHERE root_id=$1 AND move_scan_id IS NOT NULL")
+            .bind(report.root_id).execute(&mut *tx).await?;
+        sqlx::query("UPDATE file_sources s SET move_scan_id=$2 WHERE root_id=$1 AND status='present' AND nlink=1 AND opaque_handle IS NOT NULL AND NOT EXISTS (SELECT 1 FROM file_observations o WHERE o.scan_id=$2 AND o.relative_path=s.relative_path)")
+            .bind(report.root_id).bind(report.scan_id).execute(&mut *tx).await?;
         sqlx::query("UPDATE file_sources s SET status='missing',version=version+1,content_fresh=false,updated_at=$3 WHERE root_id=$1 AND status='present' AND NOT EXISTS (SELECT 1 FROM file_observations o WHERE o.scan_id=$2 AND o.relative_path=s.relative_path AND (o.metadata->'identity'->>'device')::numeric=s.device AND (o.metadata->'identity'->>'inode')::numeric=s.inode)")
             .bind(report.root_id).bind(report.scan_id).bind(ctx.now()).execute(&mut *tx).await?;
         sqlx::query("UPDATE file_sources s SET last_seen_at=$3,last_seen_scan_id=$2 WHERE root_id=$1 AND status='present' AND EXISTS (SELECT 1 FROM file_observations o WHERE o.scan_id=$2 AND o.relative_path=s.relative_path)")

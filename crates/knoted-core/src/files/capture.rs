@@ -406,12 +406,22 @@ async fn publish(
     if !same && let Some(old) = &current {
         sqlx::query("UPDATE file_sources SET status='missing',content_fresh=false,version=version+1,updated_at=$2 WHERE id=$1").bind(old.id).bind(ctx.now()).execute(&mut *tx).await?;
     }
+    let moved = if current.is_none() {
+        super::identity::match_move(&mut tx, input, object.sha256.as_str()).await?
+    } else {
+        None
+    };
+    if let Some(id) = moved {
+        sqlx::query("UPDATE file_sources SET relative_path=$2,status='present',observation=$3,observation_version=observation_version+1,version=version+1,move_scan_id=NULL WHERE id=$1")
+            .bind(id).bind(input.relative_path.to_str().ok_or(DomainError::Changed)?)
+            .bind(Json(m)).execute(&mut *tx).await?;
+    }
     let id = if same {
         current.as_ref().unwrap().id
     } else {
-        Uuid::new_v4()
+        moved.unwrap_or_else(Uuid::new_v4)
     };
-    if !same {
+    if !same && moved.is_none() {
         sqlx::query("INSERT INTO entity_registry(id,entity_type) VALUES($1,'file')")
             .bind(id)
             .execute(&mut *tx)

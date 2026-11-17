@@ -214,6 +214,19 @@ const EXPECTED_VERSION_SCHEMAS = [
 const REQUIRED_EXAMPLES = [
   {
     document: "openapi.yaml",
+    schema: "FileRelinkRequest",
+    file: "valid/file-relink.json",
+    valid: true,
+  },
+  {
+    document: "openapi.yaml",
+    schema: "FileRelinkRequest",
+    file: "invalid/file-relink-extra-confirm.json",
+    valid: false,
+  },
+
+  {
+    document: "openapi.yaml",
     schema: "FileSource",
     file: "valid/file-source.json",
     valid: true,

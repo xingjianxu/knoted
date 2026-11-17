@@ -933,7 +933,7 @@ export interface paths {
         put?: never;
         /**
          * 将文件来源重新关联到新来源
-         * @description 移动标签/备注/关联到新来源；expected_version 对应旧来源 FileSource.version。旧引用快照保持原版本，歧义未确认时 409。
+         * @description 明确选择 new_source_id 即确认关联目标；expected_version 对应旧来源 FileSource.version。事务迁移标签、备注与双向关联并保留目标数据，目标备注冲突时 409 且不部分迁移。旧来源身份及引用快照保持原版本；成功返回新来源与其 ETag。
          */
         post: operations["relinkFile"];
         delete?: never;
