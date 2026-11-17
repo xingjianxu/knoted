@@ -71,7 +71,7 @@
 | [T42](tasks/T42.md) | 统一回收站页面 | T24, T37, T41 | done（PR [#141](https://github.com/xingjianxu/knoted/pull/141)，主线 `d7c74ec`，dev `d7c74ec`；[证据](evidence/t42-trash.md)） |
 | [T43](tasks/T43.md) | 目录扫描与排除 | T08, T32 | done（PR [#144](https://github.com/xingjianxu/knoted/pull/144)，主线 `987ef07`，dev `987ef07`；[证据](evidence/t43-scanner.md)） |
 | [T44](tasks/T44.md) | 稳定副本与版本 | T43, T09 | done（PR [#147](https://github.com/xingjianxu/knoted/pull/147)，主线 `9160def`，dev `9160def`；[证据](evidence/t44-capture.md)） |
-| [T45](tasks/T45.md) | 移动识别和重关联 | T44 | pending |
+| [T45](tasks/T45.md) | 移动识别和重关联 | T44 | done（PR [#150](https://github.com/xingjianxu/knoted/pull/150)，主线 `c786f3e`，dev `c786f3e`；[证据](evidence/t45-identity.md)） |
 | [T46](tasks/T46.md) | 文本解析 | T44 | pending |
 | [T47](tasks/T47.md) | PDF与图片解析 | T10, T44, T46 | pending |
 | [T48](tasks/T48.md) | Office解析 | T47 | pending |
