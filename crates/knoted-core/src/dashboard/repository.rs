@@ -56,6 +56,6 @@ pub(super) async fn recent_notes(
     .fetch_all(c)
     .await
 }
-pub(super) async fn counts(c: &mut PgConnection) -> Result<(i64, i64, i64), sqlx::Error> {
-    sqlx::query_as("SELECT (SELECT count(*) FROM notes WHERE deleted_at IS NULL), (SELECT count(*) FROM projects WHERE deleted_at IS NULL AND archived_at IS NULL), (SELECT count(*) FROM jobs WHERE state='failed')").fetch_one(c).await
+pub(super) async fn counts(c: &mut PgConnection) -> Result<(i64, i64, i64, i64), sqlx::Error> {
+    sqlx::query_as("SELECT (SELECT count(*) FROM notes WHERE deleted_at IS NULL), (SELECT count(*) FROM projects WHERE deleted_at IS NULL AND archived_at IS NULL), (SELECT count(*) FROM jobs WHERE state='failed'), (SELECT count(*) FROM file_sources WHERE status='present')").fetch_one(c).await
 }
