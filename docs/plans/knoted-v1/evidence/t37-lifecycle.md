@@ -2,7 +2,7 @@
 
 任务：[T37](../tasks/T37.md)，Issue [#114](https://github.com/xingjianxu/knoted/issues/114)，[已确认设计与计划](../../2026-11-17-t37.md)。
 
-当前：实现已提交，主 Agent 已复跑门禁，独立审查 PASS；PR 集成与测试实例部署尚待完成，不标 completed。
+当前：PR [#115](https://github.com/xingjianxu/knoted/pull/115) 已普通 merge 至主线 `1b37e55`，主线门禁与固定产物测试实例 HTTPS 验收通过。Issue #114 已通过 PR 关闭关系自动关闭；任务工作区最终清理在收尾文档合入和主线复验后读回。
 
 ## 设计与范围
 
@@ -86,7 +86,14 @@ HTTP POST `/tasks/{taskId}/{archive,unarchive,restore}` 仍只接受 expected_ve
 - 基线：`c059943132be22e60e1e24e8386050b586d6540c`；T36 `f26af66`、T08 `9bd5bcd` 均为祖先。
 - 计划：`410be28`；实施：`4442f55cc4f9fdbbdb440827a80a4e6a29a23eae`。
 - 独立审查：`review.md`（同任务证据根）Spec PASS / Quality APPROVED，Critical/Important/Minor = 0/0/0；reviewer 独立运行 9 个针对性 PG 测试全部通过，包括 purge 边界/回滚、竞争以及 T32 受控 note-link/tree 锁序回归。无待修 findings。
-- PR/主线：待集成。
-- 测试实例：部署前运行 `f26af66`、迁移 11；9 个事项均已软删，过期 30 天事项 0；未对真实数据做老化或手工永久清理。
-- 新增自动物理清理启用前须停本实例 API/Worker 做数据库+assets一致备份，再部署固定产物；不改 host、不停共享数据库/Caddy/Strata。
-- 运行 SHA、HTTPS 冒烟、Worker日志、备份与工作区清理：待实际执行后补记。
+- PR/主线：PR #115 普通 merge 至 `1b37e559f27466bbaa9c9a20798d1c5b6bc9dee1`；主检出 `git merge --ff-only origin/master` 同步，工作树干净。
+- 主线验证：`cargo fmt --check`、`cargo test --workspace --locked`（255 passed / 0 failed / 1 ignored）、`cargo clippy --locked --all-targets -- -D warnings`、`pnpm api:verify` 均 exit 0；日志 `logs/master-{fmt,test,clippy,api-verify}.log`。
+- 部署前：运行 `f26af66`、迁移 11；9 个事项均已软删，过期 30 天事项 0。未对真实数据做老化或手工永久清理。
+- 固定产物：`/data/knoted-dev/runtime/1b37e559f27466bbaa9c9a20798d1c5b6bc9dee1`，由主线 SHA 的已提交源码 archive 构建 API/Worker/Web/migrations；构建及完整 SHA256SUMS 校验通过，日志 `logs/build-artifact.log`。
+- 一致备份：`/data/knoted-dev/service/backups/20261117T130809Z-t37`；通过 pcwrap 停 API/Worker，并核验原 PID 退出后 `pg_dump --format=custom` + assets 拷贝；SHA256SUMS 和 `pg_restore --list` 均通过。不需要新迁移，schema 保持11。
+- 启用：原子切换 current，再由主检出 `pnpm pc down`/`up -D` 重载编排；API/Worker `/proc/<pid>/exe` 均实际指向固定产物；HTTPS readiness 200。共享 PostgreSQL/Caddy/Strata MainPID 前后完全一致，未重启共享服务或改 host。日志 `logs/deploy.log`、`logs/runtime-{before,after}.json`。
+- 真实 HTTPS：`live-smoke.py` exit 0，验证匿名401、缺CSRF403、单项归档/归档列表可读、父及自身/项目只读时正文/跟进/标签/link写409、取消归档恢复写、软删GET404、关联保留、已删父下恢复409、先父后子恢复200、恢复后时间线接口200（内容/修订保留由 t37_2 回归验证）、项目批次归档/取消归档。每个200详情响应核验ETag，日志 `logs/live-smoke.log`。
+- 会话与fixture：冒烟只在内存生成临时会话/CSRF令牌，数据库仅存摘要，完成后撤销；未执行硬件Passkey ceremony，Passkey凭据数不变。所有验收事项/项目/标签经API软删，未撤销其他会话；读回未撤销smoke会话0、存活smoke事项0（`logs/final-fixture-readback.log`）。
+- Worker：运行日志 `note history pass snapshots=0 pruned=0 recovery=true` 与 `task trash pass purged=0`；启用时没有过期真实事项，因此不为了演示而老化真实数据。真实物理删除和下一周期/故障重试已在隔离schema的实际Worker测试中验证。
+- 收尾文档独立复核：0 Critical / 0 Important / 1 Minor（HTTPS时间线内容保留的措辞比冒烟断言略强）；已收窄为接口200，内容/修订保留准确归于 t37_2，不修改产品或虚构新测试。无未解决阻断。
+- 清理：实施工作区 `.worktrees/agent-t37-impl` 与 `feat/t37-impl` 已确认祖先且干净后安全移除；集成/收尾工作区 `.worktrees/knoted-t37`、`feat/t37` 与 `docs/t37-close` 在收尾文档PR合入、主线复验后移除，最终状态以交付时的 Git/远程读回为准。其他任务工作区保留。
