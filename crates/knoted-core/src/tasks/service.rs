@@ -352,6 +352,10 @@ pub(super) async fn update_command(
             return Ok(old);
         }
         let moving = t.project_id != old.project_id;
+        // A status change is also a follow-up record. The append shares this
+        // transaction, so a rolled-back update can never leave an event behind.
+        let status_event =
+            (t.status != old.status).then(|| super::activities::status_event(old.status, t.status));
         // A cascade must not repair a live child's historical inheritance or
         // move it out of a readonly source project. Trash children retain the
         // explicit relationship-migration exception.
@@ -366,6 +370,9 @@ pub(super) async fn update_command(
         t.updated_at = ctx.now();
         let t = repo::save(&mut tx, &t, &old).await?;
         repo::event(&mut tx, &t, "updated").await?;
+        if let Some(body) = status_event {
+            super::activities::append_system(&mut tx, t.id, body, t.updated_at).await?;
+        }
         if moving {
             for child in children {
                 if child.project_id != t.project_id {

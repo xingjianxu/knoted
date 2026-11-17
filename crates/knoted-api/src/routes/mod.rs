@@ -1,5 +1,6 @@
 //! HTTP route assembly.
 
+pub mod activities;
 pub mod assets;
 pub mod auth;
 pub mod health;
@@ -33,6 +34,7 @@ pub fn router(ctx: AppContext, auth: AuthConfig) -> Router {
                 .merge(links::router(auth.clone(), ctx.clone()))
                 .merge(projects::router(auth.clone(), ctx.clone()))
                 .merge(tasks::router(auth.clone(), ctx.clone()))
+                .merge(activities::router(auth.clone(), ctx.clone()))
                 .merge(assets::router(auth, ctx.clone())),
         )
         .fallback(not_found)

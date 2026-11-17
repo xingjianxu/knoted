@@ -914,7 +914,10 @@ async fn t34_migration_empty_upgrade_and_unknown_rows_preserved() {
     let old = include_str!("../../../migrations/0009_t33_projects.sql");
     let old = &old[old.find("CREATE TABLE tasks (").unwrap()..];
     for populated in [false, true] {
-        sqlx::raw_sql("DROP TABLE tasks")
+        // The replay starts from the T33 shape. Later cards add tables that
+        // reference `tasks`, so those are dropped first; a new dependent table
+        // must be listed here rather than hidden behind CASCADE.
+        sqlx::raw_sql("DROP TABLE IF EXISTS activity_revisions, activities, tasks")
             .execute(&h.db.pool)
             .await
             .unwrap();
