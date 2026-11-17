@@ -9,11 +9,14 @@ import { projectChoicesQuery, taskChoicesQuery, taskQuery, tasksQuery, type Proj
 import { TaskForm } from "./TaskForm";
 import { TaskList } from "./TaskList";
 import { SubtaskList } from "./SubtaskList";
+import { TaskBoard } from "./board/TaskBoard";
+import { ActivityTimeline } from "./timeline/ActivityTimeline";
 const message = (cause: unknown) => cause instanceof Error ? cause.message : "操作失败，请重试";
 export function TasksPage({ bundle, taskId, onSelectTask }: {
   bundle: QueryClientBundle; taskId?: string; onSelectTask: (id: string | null) => void;
 }) {
   const queryClient = useQueryClient();
+  const [view, setView] = useState<"list" | "board">("list"); const [boardBusy, setBoardBusy] = useState(false);
   const [archived, setArchived] = useState(false); const [projectId, setProjectId] = useState("");
   const [page, dispatch] = useReducer(cursorReducer, undefined, () => createCursorState("active"));
   const projects = useQuery(projectChoicesQuery(bundle)); const parents = useQuery(taskChoicesQuery(bundle));
@@ -34,15 +37,17 @@ export function TasksPage({ bundle, taskId, onSelectTask }: {
     </section>
     <section aria-label="事项列表" className="space-y-3"><h2>事项</h2>
       <div className="flex flex-wrap gap-3">
-        <FormField label="事项归档筛选"><Select value={archived ? "archived" : "active"} onValueChange={(value) => { setArchived(value === "archived"); dispatch({ type: "filter", filterKey: `${value}:${projectId}` }); }} options={[{ value: "active", label: "未归档" }, { value: "archived", label: "已归档" }]} /></FormField>
-        <FormField label="项目筛选"><Select value={projectId} onValueChange={(value) => { setProjectId(value ?? ""); dispatch({ type: "filter", filterKey: `${archived}:${value}` }); }} options={[{ value: "", label: "全部项目与独立事项" }, ...(projects.data ?? []).map((row) => ({ value: row.id, label: row.title }))]} /></FormField>
-        <Button disabled={list.isFetching || !page.previous.length} onClick={() => dispatch({ type: "previous" })}>上一页事项</Button>
-        <Button disabled={list.isFetching || !list.data?.next_cursor} onClick={() => dispatch({ type: "next", nextCursor: list.data?.next_cursor ?? null })}>下一页事项</Button>
-        <Button disabled={list.isFetching} onClick={() => void invalidate()}>刷新事项列表</Button>
+        <Button disabled={boardBusy} aria-pressed={view === "list"} onClick={() => setView("list")}>列表视图</Button>
+        <Button disabled={boardBusy} aria-pressed={view === "board"} onClick={() => setView("board")}>看板视图</Button>
+        <FormField label="事项归档筛选"><Select disabled={boardBusy} value={archived ? "archived" : "active"} onValueChange={(value) => { setArchived(value === "archived"); dispatch({ type: "filter", filterKey: `${value}:${projectId}` }); }} options={[{ value: "active", label: "未归档" }, { value: "archived", label: "已归档" }]} /></FormField>
+        <FormField label="项目筛选"><Select disabled={boardBusy} value={projectId} onValueChange={(value) => { setProjectId(value ?? ""); dispatch({ type: "filter", filterKey: `${archived}:${value}` }); }} options={[{ value: "", label: "全部项目与独立事项" }, ...(projects.data ?? []).map((row) => ({ value: row.id, label: row.title }))]} /></FormField>
+        <Button disabled={boardBusy || list.isFetching || !page.previous.length} onClick={() => dispatch({ type: "previous" })}>上一页事项</Button>
+        <Button disabled={boardBusy || list.isFetching || !list.data?.next_cursor} onClick={() => dispatch({ type: "next", nextCursor: list.data?.next_cursor ?? null })}>下一页事项</Button>
+        <Button disabled={boardBusy || list.isFetching} onClick={() => void invalidate()}>刷新事项列表</Button>
       </div>
       {list.isFetching && <Spinner label="正在读取事项" />}
       {list.error && <Alert tone="error">{list.error.message}<Button onClick={() => void list.refetch()}>重试事项列表</Button></Alert>}
-      <TaskList items={list.data?.items ?? []} projects={projects.data ?? []} onSelectTask={onSelectTask} />
+      {view === "list" ? <TaskList items={list.data?.items ?? []} projects={projects.data ?? []} onSelectTask={onSelectTask} /> : <TaskBoard bundle={bundle} items={list.data?.items ?? []} disabled={list.isFetching || !!list.error} onSelectTask={onSelectTask} onBusyChange={setBoardBusy} invalidate={invalidate} />}
     </section>
     {taskId ? <TaskDetail key={taskId} bundle={bundle} taskId={taskId} projects={projects.data ?? []} parents={parents.data ?? []} choicesReady={!!projects.data && !!parents.data} onSelectTask={onSelectTask} invalidate={invalidate} create={create} /> : <Empty title="未选择事项" />}
   </div>;
@@ -121,6 +126,7 @@ function TaskDetail({ bundle, taskId, projects, parents, choicesReady, onSelectT
     </div>
     {actionError && <Alert tone="error">{actionError}</Alert>}
   </section>
+    <ActivityTimeline key={taskId} bundle={bundle} taskId={taskId} disabled={readOnly || busy || refreshing || !!conflict} />
     {task.parent_id === null && <SubtaskList bundle={bundle} parent={task} projects={projects} disabled={readOnly || !choicesReady || busy || !!conflict} onCreate={create} onSelectTask={onSelectTask} />}
   </>;
 }
