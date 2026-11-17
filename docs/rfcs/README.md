@@ -11,3 +11,4 @@
 | 标题 | 文件 | 负责人 | 状态 | ADR |
 | --- | --- | --- | --- | --- |
 | Docling 与 BGE-M3 模型数据改为机器级共享目录并按 revision 分层 | [2026-11-15-docling-shared-artifacts.md](2026-11-15-docling-shared-artifacts.md) | 待指定 | Resolved | [ADR 0001](../decisions/0001-machine-level-model-artifact-roots.md) |
+| T41—T50 聚合与文件持久化契约补齐 | [2026-11-17-t39-t50-contracts.md](2026-11-17-t39-t50-contracts.md) | 用户决策，主 Agent 整理 | Resolved | [ADR 0006](../decisions/0006-file-pipeline-and-aggregate-contracts.md) |
