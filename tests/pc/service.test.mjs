@@ -107,6 +107,26 @@ function createRuntimeFixture() {
   writeFileSync(join(root, "share/knoted/web/index.html"), "<!doctype html><title>knoted</title>\n");
   writeFileSync(join(root, "share/knoted/migrations/0001_registry.sql"), "select 1;\n");
   writeFileSync(join(root, "share/knoted/REVISION"), `${revision}\n`);
+  // Only integrity fixtures: no Python computation is started by prepare.
+  writeExecutable(join(root, "bin/knoted-intelligence"), "#!/usr/bin/env bash\nexit 0\n");
+  const pythonRoot = join(root, "share/knoted/intelligence");
+  mkdirSync(join(pythonRoot, "python/bin"), { recursive: true });
+  mkdirSync(join(pythonRoot, "python/lib/python3.12/site-packages/knoted_intelligence"), { recursive: true });
+  writeExecutable(join(pythonRoot, "python/bin/python3.12"), "#!/usr/bin/env bash\nexit 0\n");
+  for (const file of [
+    "BUILD.json",
+    "requirements.txt",
+    "uv.lock",
+    "python/lib/python3.12/os.py",
+    "python/lib/python3.12/site-packages/knoted_intelligence/app.py",
+    "python/lib/python3.12/site-packages/knoted_intelligence/parsing/pdf.py",
+    "python/lib/python3.12/site-packages/docling/document_converter.py",
+    "python/lib/python3.12/site-packages/torch/__init__.py",
+    "python/lib/python3.12/site-packages/onnxruntime/__init__.py",
+  ]) {
+    mkdirSync(resolve(join(pythonRoot, file), ".."), { recursive: true });
+    writeFileSync(join(pythonRoot, file), "integrity fixture\n");
+  }
   writeManifest(root);
   return root;
 }
@@ -529,4 +549,28 @@ describe("T25 Worker", () => {
     assert.match(result.stderr, /bin\/knoted-worker/);
     assert.equal(existsSync(join(fixture.instanceRoot, "config")), false);
   });
+});
+
+describe("Python 固定产物", () => {
+  for (const file of [
+    "bin/knoted-intelligence",
+    "share/knoted/intelligence/python/bin/python3.12",
+    "share/knoted/intelligence/python/lib/python3.12/os.py",
+    "share/knoted/intelligence/python/lib/python3.12/site-packages/knoted_intelligence/app.py",
+    "share/knoted/intelligence/python/lib/python3.12/site-packages/docling/document_converter.py",
+    "share/knoted/intelligence/python/lib/python3.12/site-packages/torch/__init__.py",
+    "share/knoted/intelligence/python/lib/python3.12/site-packages/onnxruntime/__init__.py",
+    "share/knoted/intelligence/BUILD.json",
+    "share/knoted/intelligence/requirements.txt",
+    "share/knoted/intelligence/uv.lock",
+  ]) {
+    it(`重新生成清单也不能掩盖缺少 ${file}`, async () => {
+      const fixture = await fullFixture();
+      rmSync(join(fixture.runtimeRoot, file), { force: true });
+      writeManifest(fixture.runtimeRoot);
+      const result = run("bash", [serviceScript, "prepare"], { env: prepareEnv(fixture) });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /Python/);
+    });
+  }
 });

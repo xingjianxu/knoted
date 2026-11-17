@@ -75,3 +75,27 @@ the staged input as UTF-8 text with one text per non-blank line. Both reject
 invalid output with a stable error code instead of publishing a partial result.
 Parse and embed share `KNOTED_INTELLIGENCE_GPU_SLOTS` (default 1), so the two
 model families are serialised on the one Python card.
+
+## 固定 Python 产物（T47 Phase A）
+
+`tools/dev/build-intelligence.sh <完整提交SHA> <新输出目录>` 从 `git archive`
+读取已提交源码；`build-artifact.sh` 调用同一 helper 将 Python 纳入完整产物。
+构建需要已安装的 Python 3.12（`uv python find --no-python-downloads`，也可通过
+`KNOTED_BUILD_PYTHON` 指定真实解释器），不会下载解释器或安装模型。
+设置 `KNOTED_BUILD_ROOT` 将构建目录、uv 缓存与临时目录放到任务目录。
+依赖用 `uv export --locked --no-dev --no-editable --no-emit-project` 导出并带哈希安装；
+不使用开发 venv。解释器、标准库、依赖和源码全部在 `share/knoted/intelligence/`
+中，解引用文件链接后进入完整 `SHA256SUMS`；`BUILD.json` 记录解释器版本、实际
+解释器 SHA256、源码 REVISION 与 uv.lock SHA256。重复输出目录拒绝覆盖。
+
+运行入口 `bin/knoted-intelligence` 使用产物内解释器 `-I -B`，要求显式设置外部
+`KNOTED_INTELLIGENCE_STATE_DIR`、`KNOTED_INTELLIGENCE_STAGING_DIR`、`XDG_CACHE_HOME`
+与 `TMPDIR`。模型仍使用 ADR 0001 两个只读共享根，Docling 显式 CPU。
+产物搬移后无需重写入口；它仍依赖宿主 loader/glibc 等 ELF 运行库，不能视作跨机器
+独立系统闭包。`prepare` 要求 Python 必需文件存在，并对全部 bin/share 文件重算
+完整清单，拒绝多文件、少文件、篡改和链接。
+
+本阶段仅交付打包与 `parsing.pdf.parse_pdf_image` 的 PDF/JPEG/PNG/WebP 准入。
+未将该入口接入执行账本或 Rust Worker，未在 process-compose 启用 intelligence；
+超时、取消和计算进程退出证明需后续已批准协议与真实双端验证。不得据此启用旧
+生命周期服务并声称 T47 完成。

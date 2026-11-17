@@ -112,6 +112,18 @@ verify_runtime() {
   test -s "$runtime_root/share/knoted/web/index.html" || die "运行根缺少 share/knoted/web/index.html"
   test -n "$(find "$runtime_root/share/knoted/migrations" -maxdepth 1 -name '*.sql' -type f -print -quit 2>/dev/null)" ||
     die "运行根缺少 share/knoted/migrations/*.sql"
+  local python_root="$runtime_root/share/knoted/intelligence" required
+  test -x "$runtime_root/bin/knoted-intelligence" || die "Python 产物缺少可执行入口"
+  test -x "$python_root/python/bin/python3.12" || die "Python 产物缺少固定解释器"
+  for required in BUILD.json requirements.txt uv.lock \
+    python/lib/python3.12/os.py \
+    python/lib/python3.12/site-packages/knoted_intelligence/app.py \
+    python/lib/python3.12/site-packages/knoted_intelligence/parsing/pdf.py \
+    python/lib/python3.12/site-packages/docling/document_converter.py \
+    python/lib/python3.12/site-packages/torch/__init__.py \
+    python/lib/python3.12/site-packages/onnxruntime/__init__.py; do
+    test -s "$python_root/$required" || die "Python 产物缺少 $required"
+  done
   local unexpected
   unexpected=$(cd "$runtime_root" && find bin share ! -type d ! -type f -print -quit)
   test -z "$unexpected" || die "运行根含非普通文件（拒绝符号链接与特殊文件）：$unexpected"
