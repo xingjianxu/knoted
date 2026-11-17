@@ -9,7 +9,7 @@ type Mark = components["schemas"]["InlineMark"];
 const marks: Mark[] = ["bold", "italic", "underline", "strike", "code"];
 const blockTypes: NoteBlock["type"][] = ["heading", "paragraph", "bulletListItem", "numberedListItem", "checkListItem", "image", "codeBlock"];
 
-function safeHref(href: string): string {
+export function safeHref(href: string): string {
   // Match the backend's URI (not IRI) spelling contract before WHATWG URL
   // parsing can normalize invalid percent escapes, Unicode or missing slashes.
   if (!/^(?:[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=]|%[0-9A-Fa-f]{2})*$/.test(href)
