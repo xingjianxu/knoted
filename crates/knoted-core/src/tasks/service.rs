@@ -204,7 +204,7 @@ async fn writable(c: &mut sqlx::PgConnection, t: &Task, expected: i64) -> Result
     relations_writable(c, t).await
 }
 /// Shared current-relation admission; callers separately check the target state.
-pub(super) async fn relations_writable(
+pub(crate) async fn relations_writable(
     c: &mut sqlx::PgConnection,
     t: &Task,
 ) -> Result<(), DomainError> {

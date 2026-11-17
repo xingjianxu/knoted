@@ -43,7 +43,7 @@ impl From<Row> for Task {
         }
     }
 }
-pub(super) async fn find(c: &mut PgConnection, id: Uuid) -> Result<Option<Task>, sqlx::Error> {
+pub(crate) async fn find(c: &mut PgConnection, id: Uuid) -> Result<Option<Task>, sqlx::Error> {
     sqlx::query_as::<_, Row>("SELECT * FROM tasks WHERE id=$1")
         .bind(id)
         .fetch_optional(c)

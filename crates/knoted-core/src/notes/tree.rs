@@ -26,10 +26,13 @@ pub struct RestoreNote {
     pub restore_parent: Option<RestoreParent>,
 }
 
-async fn validate_parent(
+/// Writers retain row locks; snapshot readers reuse the exact parent predicate
+/// with `lock=false` and must never use this hint as command admission.
+pub(crate) async fn validate_parent(
     c: &mut sqlx::PgConnection,
     note: &Note,
     parent: Option<Uuid>,
+    lock: bool,
 ) -> Result<(), DomainError> {
     let conflict = || DomainError::Conflict {
         current_version: Some(note.content_version),
@@ -42,7 +45,12 @@ async fn validate_parent(
         }
         // Traverse stored ancestry, including deleted rows: deletion preserves
         // parent links, and those links still matter when preventing cycles.
-        let row = repo::find_any(c, id).await?.ok_or_else(conflict)?;
+        let row = if lock {
+            repo::find_any(c, id).await?
+        } else {
+            repo::find_any_readonly(c, id).await?
+        }
+        .ok_or_else(conflict)?;
         if Some(id) == parent && row.deleted_at.is_some() {
             return Err(conflict());
         }
@@ -63,7 +71,7 @@ pub async fn move_note(ctx: &AppContext, input: MoveNote) -> Result<Note, Domain
             .await?
             .ok_or(DomainError::NotFound)?;
         check_version(&note, input.expected_version)?;
-        validate_parent(&mut tx, &note, input.parent_id).await?;
+        validate_parent(&mut tx, &note, input.parent_id, true).await?;
         // Requested indices beyond the end append. Excluding the moving node
         // makes same-parent indices refer to the final sibling order.
         let position = input
@@ -107,7 +115,7 @@ pub async fn restore(ctx: &AppContext, input: RestoreNote) -> Result<Note, Domai
             });
         }
         let parent = input.restore_parent.map_or(note.parent_id, |p| p.parent_id);
-        validate_parent(&mut tx, &note, parent).await?;
+        validate_parent(&mut tx, &note, parent, true).await?;
         // Retain the former slot when possible without displacing the relative
         // order of existing live siblings. A shorter sibling list clamps it.
         let position = note

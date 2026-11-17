@@ -850,7 +850,7 @@ export interface paths {
         };
         /**
          * 列出回收站对象
-         * @description 只列当前账号对象；30 天保留原有关联。
+         * @description 只列当前账号仍存在的软删除对象，不包含仅归档对象或已物理清理的注册身份；30 天保留原有关联。恢复资格是读取快照下的默认参数提示，实际恢复仍由领域接口重新校验。
          */
         get: operations["getTrash"];
         put?: never;
@@ -1668,6 +1668,12 @@ export interface components {
             /** Format: date-time */
             deleted_at: string;
             parent_id: string | null;
+            /** @description 恢复 CAS 版本；笔记映射 content_version，项目和事项映射 version。 */
+            version: number;
+            /** @description 当前快照下使用默认恢复参数是否符合领域规则；执行时仍须复核。 */
+            can_restore: boolean;
+            /** @description 默认恢复受限时的可理解原因，可恢复时为 null；笔记显式恢复到根目录仍调用原领域接口。 */
+            reason: string | null;
         };
         TrashPage: {
             items: components["schemas"]["TrashItem"][];
@@ -4021,6 +4027,8 @@ export interface operations {
                 cursor?: components["parameters"]["Cursor"];
                 /** @description 每页数量，默认 50，最大 100。 */
                 limit?: components["parameters"]["Limit"];
+                /** @description 按对象类型筛选；游标绑定该筛选条件。 */
+                entity_type?: components["schemas"]["TrashEntityType"];
             };
             header?: never;
             path?: never;

@@ -1,0 +1,25 @@
+{
+  "items": [
+    {
+      "entity_type": "note",
+      "id": "00000000-0000-4000-8000-000000000001",
+      "title": "Deleted note",
+      "deleted_at": "2026-11-17T00:00:00Z",
+      "parent_id": "00000000-0000-4000-8000-000000000002",
+      "version": 4,
+      "can_restore": false,
+      "reason": "原父已删除，请先恢复父笔记或显式恢复到根目录"
+    },
+    {
+      "entity_type": "task",
+      "id": "00000000-0000-4000-8000-000000000003",
+      "title": "Deleted note",
+      "deleted_at": "2026-11-17T00:00:00Z",
+      "parent_id": null,
+      "version": 2,
+      "can_restore": true,
+      "reason": null
+    }
+  ],
+  "next_cursor": null
+}

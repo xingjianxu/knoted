@@ -126,6 +126,17 @@ pub(crate) async fn event(
     Ok(())
 }
 
+/// Snapshot projection: unlike structural commands this never locks a row.
+pub(crate) async fn find_any_readonly(
+    c: &mut PgConnection,
+    id: Uuid,
+) -> Result<Option<Note>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM notes WHERE id=$1")
+        .bind(id)
+        .fetch_optional(c)
+        .await
+}
+
 pub(crate) async fn find_any(c: &mut PgConnection, id: Uuid) -> Result<Option<Note>, sqlx::Error> {
     sqlx::query_as("SELECT * FROM notes WHERE id=$1 FOR UPDATE")
         .bind(id)
