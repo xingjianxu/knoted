@@ -4,3 +4,4 @@ pub mod document;
 
 pub(crate) mod repository;
 pub mod service;
+pub mod tree;
