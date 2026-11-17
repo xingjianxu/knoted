@@ -1,7 +1,7 @@
 # T24 页面树与生命周期实施证据
 
 - Issue：[#75](https://github.com/xingjianxu/knoted/issues/75)；基线 `b180e0c`；Worktree `.worktrees/knoted-t24`，分支 `feat/t24`。
-- 状态：实施及本地验证完成；待主 Agent 独立审查、合入、主线验证、测试实例更新及清理。
+- 状态：done；实现 `623e4c4`，PR [#76](https://github.com/xingjianxu/knoted/pull/76) 普通 merge 主线 `465f4ee`；主线验证、实例更新、实施 Worktree/分支清理完成。
 - 范围：新增 `notes/tree.rs` 与 HTTP move/restore 动作，沿用 T23 的删除保护、AppContext、content_version CAS、全树事务锁和 outbox。未修改 OpenAPI、生成客户端或迁移。
 
 ## 行为与并发
@@ -37,3 +37,20 @@ test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 
 T24 属于运行行为变更，须在集成后由主 Agent 更新测试实例并记录真实运行 SHA。本实施者未 push、合并、部署、关闭 Issue 或清理 Worktree。
+
+
+## 主 Agent 审查、主线与测试实例收尾
+
+独立 `requesting-code-review`：`review_t24`，报告 `/data/knoted-dev/tasks/t24/review.md`，Spec compliant / Approved，无阻断项；Minor 注释由 Every writer 改为 Every structural writer，PATCH 的内容更新仅锁自身节点。实现者与主 Agent 分别检查差异、复跑门禁；主线 `465f4ee4705025340a5292701c8c1a09a23f8c6f` 再跑 `cargo fmt --check`、`cargo test --workspace --locked`、`cargo clippy --locked --all-targets -- -D warnings` 全部 exit0，139 passed、0failed、1既有 ignored。完整输出 `root-*.log` 与 `main-*.log`。
+
+`tools/dev/build-artifact.sh` 从已提交 `623e4c401942f5596c61a7de300337ef143ddb08` 构建 release API 与网页，完整清单校验通过；原子切换 `/data/knoted-dev/runtime/current`，仅 pcwrap restart knoted-api，无迁移、无宿主/共享服务修改。真实 `/proc/<API PID>/exe` 指向该 SHA 产物。
+
+本轮真实 HTTPS 输出（`live-smoke.json`）：
+
+```json
+{"result": "passed", "revision": "623e4c401942f5596c61a7de300337ef143ddb08", "https_ready": 200, "cycle": 409, "non_cascading_delete": 409, "move": 200, "stale_move": 409, "restore_invalid_parent": 409, "restore_explicit_root": 200, "restore_original_root": 200, "anonymous": 401, "csrf": 403, "credentials_changed": false}
+```
+
+冒烟仅新建本任务笔记，收尾正常软删除；测试会话随机秘密仅在内存中，结束即撤销，不修改用户 Passkey。无硬件 Passkey 人工验收声明。
+
+Issue #75 经 PR 自动关闭，Projects Done；`.worktrees/knoted-t24` 与本地 feat/t24 已正常移除，远程分支由仓库自动删除。忽略的依赖与技能 scratch 归档至 `/data/knoted-dev/tasks/t24/worktree-generated/`，保留原有 HTTPS 工作区。本收尾文档在独立 `.worktrees/knoted-t24-closeout` 提交，合并后同样清理。

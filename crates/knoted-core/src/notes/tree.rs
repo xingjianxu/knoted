@@ -1,4 +1,4 @@
-//! Structural note operations. Every writer takes the shared tree lock before
+//! Structural note operations. Every structural writer takes the shared tree lock before
 //! row locks, so ancestor validation and sibling shifts see one serialized tree.
 use super::{
     repository as repo,
