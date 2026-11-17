@@ -1,6 +1,6 @@
 # Knoted v1 文档与实施任务入口
 
-> 产品实施采用实际可用的 executing-plans 或 subagent-driven-development。当前 T01—T26 已完成、审查并集成到主线（T17 为 PR #42 / `e3e1db2`；T18 为 PR #46 / `4425ab9`；T19 为 PR #48 / `6de79a8`；T22 为 PR #58 / `8d4a472`）；T27—T38 也已完成并通过主线与适用实例验收（T36 为 PR #110 / `f26af66`；T37 为 PR #115 / `1b37e55`；T38 为 PR #118 / `25b22309`）；T39—T40 已完成（T39 PR #123，主线/dev `bbdef36`；T40 PR #136，主线/dev `aee7c2e`）；T41 也已完成（PR #139，主线/dev `f2423b4`）；T42—T72 继续按卡推进。
+> 产品实施采用实际可用的 executing-plans 或 subagent-driven-development。当前 T01—T26 已完成、审查并集成到主线（T17 为 PR #42 / `e3e1db2`；T18 为 PR #46 / `4425ab9`；T19 为 PR #48 / `6de79a8`；T22 为 PR #58 / `8d4a472`）；T27—T38 也已完成并通过主线与适用实例验收（T36 为 PR #110 / `f26af66`；T37 为 PR #115 / `1b37e55`；T38 为 PR #118 / `25b22309`）；T39—T40 已完成（T39 PR #123，主线/dev `bbdef36`；T40 PR #136，主线/dev `aee7c2e`）；T41 也已完成（PR #139，主线/dev `f2423b4`）；T42 已完成（PR #141，主线/dev `d7c74ec`）；T43—T72 继续按卡推进。
 
 ## 阅读顺序
 
@@ -68,7 +68,7 @@
 | [T39](tasks/T39.md) | 事项页面和编辑 | T35, T37, T38 | done（PR [#123](https://github.com/xingjianxu/knoted/pull/123)，主线 `bbdef36`，dev `bbdef36`；[证据](evidence/t39-task-page.md)） |
 | [T40](tasks/T40.md) | 看板和时间线 | T36, T39 | done（PR [#136](https://github.com/xingjianxu/knoted/pull/136)，主线 `aee7c2e`，dev `aee7c2e`；[证据](evidence/t40-board-timeline.md)） |
 | [T41](tasks/T41.md) | 工作概览与到期 | T31, T39 | done（PR [#139](https://github.com/xingjianxu/knoted/pull/139)，主线 `f2423b4`，dev `f2423b4`；[证据](evidence/t41-dashboard.md)） |
-| [T42](tasks/T42.md) | 统一回收站页面 | T24, T37, T41 | pending |
+| [T42](tasks/T42.md) | 统一回收站页面 | T24, T37, T41 | done（PR [#141](https://github.com/xingjianxu/knoted/pull/141)，主线 `d7c74ec`，dev `d7c74ec`；[证据](evidence/t42-trash.md)） |
 | [T43](tasks/T43.md) | 目录扫描与排除 | T08, T32 | pending |
 | [T44](tasks/T44.md) | 稳定副本与版本 | T43, T09 | pending |
 | [T45](tasks/T45.md) | 移动识别和重关联 | T44 | pending |
