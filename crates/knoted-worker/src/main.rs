@@ -52,7 +52,11 @@ async fn main() -> ExitCode {
                 eprintln!("knoted-worker: schema not ready; run migrations before starting");
                 return ExitCode::FAILURE;
             }
-            knoted_worker::handlers::note_history::run(AppContext::new(pool)).await
+            let ctx = AppContext::new(pool);
+            tokio::select! {
+                _ = knoted_worker::handlers::note_history::run(ctx.clone()) => unreachable!(),
+                _ = knoted_worker::handlers::trash::run(ctx) => unreachable!(),
+            }
         }
         Err(error) => {
             eprintln!("knoted-worker: {error}");
