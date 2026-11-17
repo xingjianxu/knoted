@@ -7,7 +7,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
-    "lint": "eslint src tests vite.config.ts",
+    "lint": "eslint src tests vite*.ts",
     "test": "vitest run"
   },
   "dependencies": {
