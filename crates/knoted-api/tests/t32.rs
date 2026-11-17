@@ -156,25 +156,37 @@ async fn t32_3_tag_crud_and_entity_association_are_idempotent_and_undoable() {
 
 impl Harness {
     async fn fixture(&self, kind: &str) -> Uuid {
-        let table = match kind {
-            "file" => "file_sources",
-            "project" => "projects",
-            "task" => "tasks",
-            _ => panic!(),
-        };
-        sqlx::query(&if kind=="file" {"CREATE TABLE IF NOT EXISTS file_sources(id uuid PRIMARY KEY REFERENCES entity_registry(id),status text NOT NULL DEFAULT 'present',relative_path text NOT NULL DEFAULT '資料/report.md')".to_owned()} else {format!("CREATE TABLE IF NOT EXISTS {table}(id uuid PRIMARY KEY REFERENCES entity_registry(id),deleted_at timestamptz,archived_at timestamptz)")}).execute(&self.db.pool).await.unwrap();
+        if kind == "project" {
+            let (s, _, p) = self
+                .send("POST", "/api/v1/projects", json!({"title":"fixture"}))
+                .await;
+            assert_eq!(s, StatusCode::CREATED, "{p}");
+            return p["id"].as_str().unwrap().parse().unwrap();
+        }
         let id = Uuid::new_v4();
+        let mut tx = self.db.pool.begin().await.unwrap();
         sqlx::query("INSERT INTO entity_registry(id,entity_type) VALUES($1,$2)")
             .bind(id)
             .bind(kind)
-            .execute(&self.db.pool)
+            .execute(&mut *tx)
             .await
             .unwrap();
-        sqlx::query(&format!("INSERT INTO {table}(id) VALUES($1)"))
-            .bind(id)
-            .execute(&self.db.pool)
-            .await
-            .unwrap();
+        match kind {
+            "task" => {
+                sqlx::query("INSERT INTO tasks(id,status,created_at,updated_at) VALUES($1,'todo',now(),now())")
+                    .bind(id).execute(&mut *tx).await.unwrap();
+            }
+            "file" => {
+                sqlx::query("CREATE TABLE IF NOT EXISTS file_sources(id uuid PRIMARY KEY REFERENCES entity_registry(id),status text NOT NULL DEFAULT 'present',relative_path text NOT NULL DEFAULT '資料/report.md')").execute(&mut *tx).await.unwrap();
+                sqlx::query("INSERT INTO file_sources(id) VALUES($1)")
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await
+                    .unwrap();
+            }
+            _ => panic!(),
+        }
+        tx.commit().await.unwrap();
         id
     }
 }
