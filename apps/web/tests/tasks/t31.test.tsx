@@ -1,3 +1,4 @@
+import { File as NodeFile } from "node:buffer";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createBrowserHistory, createMemoryHistory } from "@tanstack/react-router";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
@@ -394,4 +395,67 @@ it("association tag creation acknowledged after independent401 pauses assignment
   fireEvent.click(screen.getByRole("button", { name: "添加已有标签" }));
   await screen.findByRole("button", { name: "移除标签 失效后保留标签" });
   expect(calls("POST", "/tags")).toHaveLength(1); expect(calls("PUT", `/tags/${id(98)}`)).toHaveLength(1);
+});
+
+it("returning A→B→A seeds a new real editor from the saved draft, retaining uploaded images and code language on the next edit", async () => {
+  const assetId = id(97);
+  notes[0]!.document = { blocks: [
+    { id: "code-return", type: "codeBlock", language: "rust", content: [{ type: "text", text: "retained code();" }] },
+    { id: "paragraph-return", type: "paragraph", content: [{ type: "text", text: "保留的第二段" }] },
+  ] };
+  intercept = (r, u) => r.method === "POST" && u.pathname === "/api/v1/assets"
+    ? json({ id: assetId, mime: "image/png", size: 68, sha256: "a".repeat(64), state: "ready", created_at: "2026-11-17T00:00:00Z" }, 201) : undefined;
+  const { bundle, router } = await mount(); await title();
+  fireEvent.click(await screen.findByRole("combobox", { name: "代码语言" }));
+  const javascript = await screen.findByRole("option", { name: "JavaScript" });
+  fireEvent.pointerDown(javascript, { pointerType: "mouse" }); fireEvent.click(javascript);
+  const nativeForm = await new BrowserRequest("/", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: "" }).formData();
+  vi.stubGlobal("FormData", nativeForm.constructor); vi.stubGlobal("File", NodeFile);
+  fireEvent.change(screen.getByLabelText("选择文件"), { target: { files: [new File(["public PNG fixture"], "return.png", { type: "image/png" })] } });
+  await screen.findByText("上传成功");
+  const current = screen.getByRole("region", { name: "当前笔记" });
+  const editable = current.querySelector<HTMLElement>('[contenteditable="true"]')!;
+  const selection = window.getSelection()!;
+  await act(async () => {
+    editable.focus();
+    const codeText = document.createTreeWalker(current.querySelector("pre code")!, NodeFilter.SHOW_TEXT).nextNode()!;
+    const range = document.createRange(); range.setStart(codeText, 2); range.collapse(true);
+    selection.removeAllRanges(); selection.addRange(range); document.dispatchEvent(new Event("selectionchange"));
+  });
+  const anchor = selection.anchorNode; const offset = selection.anchorOffset;
+  // Observe the real 1000ms debounce; do not replace a timer already created by the editor.
+  await waitFor(() => expect(calls("PATCH", id(1))).toHaveLength(1), { timeout: 2500 });
+  await waitFor(() => expect(current.querySelector("p[role=status]")).toHaveTextContent("已保存 · 当前基础版本 2"));
+  expect(current.querySelector('[contenteditable="true"]')).toBe(editable);
+  expect(selection.anchorNode).toBe(anchor); expect(selection.anchorOffset).toBe(offset);
+  const saved = await calls("PATCH", id(1))[0]!.json();
+  expect(saved.document.blocks).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: "code-return", type: "codeBlock", language: "javascript" }),
+    expect.objectContaining({ type: "image", asset_id: assetId }),
+    expect.objectContaining({ id: "paragraph-return", type: "paragraph" }),
+  ]));
+  act(() => bundle.queryClient.setQueryData(queryKeys.notes.detail(id(1)), { ...structuredClone(notes[0]!), updated_at: "2026-11-17T00:01:00Z" }));
+  expect(current.querySelector('[contenteditable="true"]')).toBe(editable);
+  expect(selection.anchorNode).toBe(anchor); expect(selection.anchorOffset).toBe(offset);
+  await act(async () => { await router.navigate({ to: "/notes/$noteId", params: { noteId: id(2) } }); });
+  expect(await title()).toHaveValue("笔记2");
+  await act(async () => { await router.navigate({ to: "/notes/$noteId", params: { noteId: id(1) } }); });
+  expect(await title()).toHaveValue("笔记1");
+  const reopened = screen.getByRole("region", { name: "当前笔记" });
+  expect(reopened.querySelector('[contenteditable="true"]')).not.toBe(editable);
+  expect(within(reopened).getByRole("img", { name: "笔记图片" })).toHaveAttribute("src", `/api/v1/assets/${assetId}/content`);
+  expect(reopened.querySelector("pre")).toHaveAttribute("data-language", "javascript");
+  expect(within(reopened).getByText("保留的第二段")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("combobox", { name: "代码语言" }));
+  const python = await screen.findByRole("option", { name: "Python" }); fireEvent.pointerDown(python, { pointerType: "mouse" }); fireEvent.click(python);
+  fireEvent.click(screen.getByRole("button", { name: "保存并记录历史" }));
+  await waitFor(() => expect(calls("PATCH", id(1))).toHaveLength(2));
+  const afterReturn = await calls("PATCH", id(1))[1]!.json();
+  expect(afterReturn.expected_version).toBe(2);
+  expect(afterReturn.document.blocks).toHaveLength(3);
+  expect(afterReturn.document.blocks).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: "code-return", type: "codeBlock", language: "python", content: [{ type: "text", text: "retained code();" }] }),
+    expect.objectContaining({ type: "image", asset_id: assetId }),
+    expect.objectContaining({ id: "paragraph-return", type: "paragraph", content: [{ type: "text", text: "保留的第二段" }] }),
+  ]));
 });
