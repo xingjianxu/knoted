@@ -1,5 +1,4 @@
-//! Deterministic real PostgreSQL overlap tests. The simulated T34 writers use
-//! the very same relation helper; replace them with T34 services when available.
+//! Deterministic real PostgreSQL overlap tests using the actual Task services.
 use super::{
     repository as repo,
     service::{self, ArchiveProject, CreateProject, DomainError},
@@ -26,61 +25,52 @@ async fn connection(db: &TestDb) -> PgConnection {
         .unwrap();
     c
 }
-async fn insert_task(c: &mut PgConnection, id: Uuid, project: Option<Uuid>, status: &str) {
-    sqlx::query("INSERT INTO entity_registry(id,entity_type) VALUES($1,'task')")
-        .bind(id)
-        .execute(&mut *c)
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO tasks(id,project_id,status,created_at,updated_at) VALUES($1,$2,$3,now(),now())").bind(id).bind(project).bind(status).execute(c).await.unwrap();
-}
-// Mirrors the future admission contract, using production's exact lock helper.
-async fn simulate_t34(
-    c: &mut PgConnection,
+async fn task_write(
+    ctx: &AppContext,
     project: Uuid,
     task: Uuid,
     kind: TaskWrite,
-) -> Result<(), DomainError> {
-    repo::lock_relations(c).await?;
-    let mut rows = vec![(project, false)];
-    if !matches!(kind, TaskWrite::Create) {
-        rows.push((task, true));
-    }
-    rows.sort_by_key(|r| r.0);
-    for (id, is_task) in rows {
-        sqlx::query(if is_task {
-            "SELECT id FROM tasks WHERE id=$1 FOR UPDATE"
-        } else {
-            "SELECT id FROM projects WHERE id=$1 FOR UPDATE"
-        })
-        .bind(id)
-        .execute(&mut *c)
-        .await?;
-    }
-    let p = repo::find(c, project).await?.ok_or(DomainError::NotFound)?;
-    if p.archived_at.is_some() || p.deleted_at.is_some() {
-        return Err(DomainError::Conflict {
-            current_version: Some(p.version),
-        });
-    }
+) -> Result<(), crate::tasks::service::DomainError> {
+    use crate::tasks::service::{
+        self as tasks, CreateTask, MoveTaskProject, TaskStatus, UpdateTask,
+    };
     match kind {
-        TaskWrite::Create => insert_task(c, task, Some(project), "todo").await,
-        TaskWrite::Move | TaskWrite::State => {
-            let archived: bool = sqlx::query_scalar(
-                "SELECT archived_at IS NOT NULL OR deleted_at IS NOT NULL FROM tasks WHERE id=$1",
+        TaskWrite::Create => {
+            tasks::create(
+                ctx,
+                CreateTask {
+                    title: "race child".into(),
+                    project_id: Some(Some(project)),
+                    ..Default::default()
+                },
             )
-            .bind(task)
-            .fetch_one(&mut *c)
-            .await?;
-            if archived {
-                return Err(DomainError::Conflict {
-                    current_version: None,
-                });
-            }
-            sqlx::query("UPDATE tasks SET project_id=$2,status='todo',version=version+1,updated_at=now() WHERE id=$1").bind(task).bind(project).execute(c).await?;
+            .await
+        }
+        TaskWrite::Move => {
+            tasks::move_project(
+                ctx,
+                MoveTaskProject {
+                    id: task,
+                    expected_version: 1,
+                    project_id: Some(project),
+                },
+            )
+            .await
+        }
+        TaskWrite::State => {
+            tasks::update(
+                ctx,
+                UpdateTask {
+                    id: task,
+                    expected_version: 1,
+                    status: Some(TaskStatus::Todo),
+                    ..Default::default()
+                },
+            )
+            .await
         }
     }
-    Ok(())
+    .map(|_| ())
 }
 async fn blocked(c: &mut PgConnection, by: i32, exclude: Option<i32>) -> i32 {
     tokio::time::timeout(Duration::from_secs(5),async{
@@ -104,58 +94,55 @@ async fn race(kind: TaskWrite, writer_first: bool) {
     )
     .await
     .unwrap();
-    let task = Uuid::from_u128(1);
-    let mut gate = connection(&db).await;
-    if !matches!(kind, TaskWrite::Create) {
-        insert_task(
-            &mut gate,
-            task,
-            if matches!(kind, TaskWrite::Move) {
-                None
-            } else {
-                Some(p.id)
+    use crate::tasks::service::{self as tasks, CreateTask, TaskStatus};
+    let task = if matches!(kind, TaskWrite::Create) {
+        Uuid::nil()
+    } else {
+        tasks::create(
+            &ctx,
+            CreateTask {
+                title: "race task".into(),
+                project_id: Some(if matches!(kind, TaskWrite::Move) {
+                    None
+                } else {
+                    Some(p.id)
+                }),
+                status: if matches!(kind, TaskWrite::State) {
+                    TaskStatus::Done
+                } else {
+                    TaskStatus::Todo
+                },
+                ..Default::default()
             },
-            "done",
         )
-        .await;
-    }
+        .await
+        .unwrap()
+        .id
+    };
+    let mut gate = connection(&db).await;
     let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
         .fetch_one(&mut gate)
         .await
         .unwrap();
     let mut tx = gate.begin().await.unwrap();
-    if writer_first {
-        simulate_t34(&mut tx, p.id, task, kind).await.unwrap();
-        let clone = ctx.clone();
-        let id = p.id;
-        let archive = tokio::spawn(async move {
-            service::archive(
-                &clone,
-                ArchiveProject {
-                    id,
-                    expected_version: 1,
-                },
-            )
-            .await
-        });
-        blocked(&mut tx, pid, None).await;
-        tx.commit().await.unwrap();
-        assert!(matches!(
-            tokio::time::timeout(Duration::from_secs(5), archive)
-                .await
-                .unwrap()
-                .unwrap(),
-            Err(DomainError::Conflict { .. })
-        ));
+    let (row, table) = if !writer_first || matches!(kind, TaskWrite::Create) || p.id < task {
+        (p.id, "projects")
     } else {
-        sqlx::query("SELECT id FROM projects WHERE id=$1 FOR UPDATE")
-            .bind(p.id)
-            .execute(&mut *tx)
-            .await
-            .unwrap();
+        (task, "tasks")
+    };
+    sqlx::query(&format!("SELECT id FROM {table} WHERE id=$1 FOR UPDATE"))
+        .bind(row)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let id = p.id;
+    let spawn_writer = || {
         let clone = ctx.clone();
-        let id = p.id;
-        let archive = tokio::spawn(async move {
+        tokio::spawn(async move { task_write(&clone, id, task, kind).await })
+    };
+    let spawn_archive = || {
+        let clone = ctx.clone();
+        tokio::spawn(async move {
             service::archive(
                 &clone,
                 ArchiveProject {
@@ -164,38 +151,53 @@ async fn race(kind: TaskWrite, writer_first: bool) {
                 },
             )
             .await
-        });
-        let arch_pid = blocked(&mut tx, pid, None).await;
-        let pool = db.pool.clone();
-        let writer = tokio::spawn(async move {
-            let mut tx = pool.begin().await.unwrap();
-            let result = simulate_t34(&mut tx, id, task, kind).await;
-            match result {
-                Ok(()) => {
-                    tx.commit().await.unwrap();
-                    Ok(())
-                }
-                Err(e) => {
-                    tx.rollback().await.unwrap();
-                    Err(e)
-                }
-            }
-        });
-        blocked(&mut tx, arch_pid, Some(arch_pid)).await;
-        tx.commit().await.unwrap();
-        tokio::time::timeout(Duration::from_secs(5), archive)
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        assert!(matches!(
-            tokio::time::timeout(Duration::from_secs(5), writer)
-                .await
-                .unwrap()
-                .unwrap(),
-            Err(DomainError::Conflict { .. })
-        ));
+        })
+    };
+    let (writer, archive) = if writer_first {
+        let writer = spawn_writer();
+        let writer_pid = blocked(&mut tx, pid, None).await;
+        let archive = spawn_archive();
+        blocked(&mut tx, writer_pid, Some(writer_pid)).await;
+        (writer, archive)
+    } else {
+        let archive = spawn_archive();
+        let archive_pid = blocked(&mut tx, pid, None).await;
+        let writer = spawn_writer();
+        blocked(&mut tx, archive_pid, Some(archive_pid)).await;
+        (writer, archive)
+    };
+    tx.commit().await.unwrap();
+    let (writer, archive) = tokio::time::timeout(Duration::from_secs(10), async {
+        (writer.await.unwrap(), archive.await.unwrap())
+    })
+    .await
+    .unwrap();
+    if writer_first {
+        writer.unwrap();
+        assert!(matches!(archive, Err(DomainError::Conflict { .. })));
+    } else {
+        archive.unwrap();
+        assert!(matches!(writer, Err(tasks::DomainError::Conflict { .. })));
     }
+    let events: i64 = sqlx::query_scalar("SELECT count(*) FROM outbox")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    let baseline = if matches!(kind, TaskWrite::Create) {
+        1
+    } else {
+        2
+    };
+    let cascade = if !writer_first && matches!(kind, TaskWrite::State) {
+        1
+    } else {
+        0
+    };
+    assert_eq!(
+        events,
+        baseline + 1 + cascade,
+        "only the admitted writer and exact archive cascade emit"
+    );
     let invalid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM projects p JOIN tasks t ON t.project_id=p.id WHERE p.archived_at IS NOT NULL AND t.deleted_at IS NULL AND t.status NOT IN ('done','cancelled'))").fetch_one(&db.pool).await.unwrap();
     assert!(!invalid);
 }
@@ -229,7 +231,16 @@ async fn t33_relation_lock_release_on_error() {
     .await
     .unwrap();
     let mut c = connection(&db).await;
-    insert_task(&mut c, Uuid::new_v4(), Some(p.id), "todo").await;
+    crate::tasks::service::create(
+        &ctx,
+        crate::tasks::service::CreateTask {
+            title: "block archive".into(),
+            project_id: Some(Some(p.id)),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     for expected in [99, 1] {
         assert!(matches!(
             service::archive(
