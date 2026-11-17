@@ -15,13 +15,16 @@ use axum::{
     http::{StatusCode, header},
     middleware::from_fn_with_state,
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
 use knoted_core::{
     config::AuthConfig,
     context::AppContext,
-    notes::service::{
-        self, CreateNote, DeleteNote, DomainError, GetNote, ListNotes, Note, UpdateNote,
+    notes::{
+        service::{
+            self, CreateNote, DeleteNote, DomainError, GetNote, ListNotes, Note, UpdateNote,
+        },
+        tree::{self, MoveNote, RestoreNote, RestoreParent},
     },
 };
 use serde::{Deserialize, Deserializer};
@@ -35,6 +38,8 @@ pub fn router(config: AuthConfig, ctx: AppContext) -> Router<AppContext> {
             "/notes/{note_id}",
             get(get_note).patch(update).delete(delete),
         )
+        .route("/notes/{note_id}/move", post(move_note))
+        .route("/notes/{note_id}/restore", post(restore))
         // Enough for a 2MiB raw document plus the bounded title and envelope.
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024 + 64 * 1024))
         .route_layer(from_fn_with_state(config, require_csrf))
@@ -250,6 +255,91 @@ async fn delete(
     .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => error(id, e),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MoveBody {
+    // The deserializer makes the nullable field required, as in T03.
+    #[serde(deserialize_with = "required_parent")]
+    parent_id: Option<Uuid>,
+    position: i64,
+    expected_version: i64,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RestoreParentBody {
+    #[serde(deserialize_with = "required_parent")]
+    parent_id: Option<Uuid>,
+}
+fn required_parent<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Uuid>, D::Error> {
+    Option::<Uuid>::deserialize(d)
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RestoreBody {
+    expected_version: i64,
+    #[serde(default, deserialize_with = "present")]
+    restore_parent: Option<RestoreParentBody>,
+}
+async fn move_note(
+    State(ctx): State<AppContext>,
+    id: RequestId,
+    path: Result<Path<Uuid>, PathRejection>,
+    body: Result<Json<MoveBody>, JsonRejection>,
+) -> Response {
+    let Path(note_id) = match path {
+        Ok(v) => v,
+        Err(_) => return bad(id),
+    };
+    let Json(body) = match body {
+        Ok(v) => v,
+        Err(e) => return json_error(id, e),
+    };
+    match tree::move_note(
+        &ctx,
+        MoveNote {
+            id: note_id,
+            parent_id: body.parent_id,
+            position: body.position,
+            expected_version: body.expected_version,
+        },
+    )
+    .await
+    {
+        Ok(note) => response(note, StatusCode::OK),
+        Err(e) => error(id, e),
+    }
+}
+async fn restore(
+    State(ctx): State<AppContext>,
+    id: RequestId,
+    path: Result<Path<Uuid>, PathRejection>,
+    body: Result<Json<RestoreBody>, JsonRejection>,
+) -> Response {
+    let Path(note_id) = match path {
+        Ok(v) => v,
+        Err(_) => return bad(id),
+    };
+    let Json(body) = match body {
+        Ok(v) => v,
+        Err(e) => return json_error(id, e),
+    };
+    match tree::restore(
+        &ctx,
+        RestoreNote {
+            id: note_id,
+            expected_version: body.expected_version,
+            restore_parent: body.restore_parent.map(|p| RestoreParent {
+                parent_id: p.parent_id,
+            }),
+        },
+    )
+    .await
+    {
+        Ok(note) => response(note, StatusCode::OK),
         Err(e) => error(id, e),
     }
 }

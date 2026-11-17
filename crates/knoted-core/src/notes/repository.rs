@@ -108,3 +108,48 @@ pub(crate) async fn event(
         .await?;
     Ok(())
 }
+
+pub(crate) async fn find_any(c: &mut PgConnection, id: Uuid) -> Result<Option<Note>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM notes WHERE id=$1 FOR UPDATE")
+        .bind(id)
+        .fetch_optional(c)
+        .await
+}
+
+pub(crate) async fn sibling_count(
+    c: &mut PgConnection,
+    parent: Option<Uuid>,
+    except: Uuid,
+) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT count(*) FROM notes WHERE parent_id IS NOT DISTINCT FROM $1 AND deleted_at IS NULL AND id<>$2")
+        .bind(parent).bind(except).fetch_one(c).await
+}
+
+pub(crate) async fn remove_position(c: &mut PgConnection, note: &Note) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE notes SET position=position-1 WHERE parent_id IS NOT DISTINCT FROM $1 AND deleted_at IS NULL AND position>$2 AND id<>$3")
+        .bind(note.parent_id).bind(note.position).bind(note.id).execute(c).await?;
+    Ok(())
+}
+
+pub(crate) async fn insert_position(
+    c: &mut PgConnection,
+    parent: Option<Uuid>,
+    position: i64,
+    except: Uuid,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE notes SET position=position+1 WHERE parent_id IS NOT DISTINCT FROM $1 AND deleted_at IS NULL AND position>=$2 AND id<>$3")
+        .bind(parent).bind(position).bind(except).execute(c).await?;
+    Ok(())
+}
+
+pub(crate) async fn save_structure(
+    c: &mut PgConnection,
+    note: &Note,
+    restoring: bool,
+) -> Result<Note, DomainError> {
+    let row=sqlx::query_as("UPDATE notes SET parent_id=$3,position=$4,content_version=content_version+1,updated_at=$5,deleted_at=NULL WHERE id=$1 AND content_version=$2 AND (deleted_at IS NOT NULL)=$6 RETURNING *")
+        .bind(note.id).bind(note.content_version).bind(note.parent_id).bind(note.position).bind(note.updated_at).bind(restoring).fetch_optional(c).await?;
+    row.ok_or(DomainError::Conflict {
+        current_version: Some(note.content_version),
+    })
+}

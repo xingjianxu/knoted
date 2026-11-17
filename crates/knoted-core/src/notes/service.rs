@@ -76,7 +76,7 @@ fn title(value: &str) -> Result<(), DomainError> {
     }
     Ok(())
 }
-fn version(value: i64) -> Result<(), DomainError> {
+pub(super) fn version(value: i64) -> Result<(), DomainError> {
     if value < 1 {
         return Err(DomainError::InvalidField("expected_version"));
     }
@@ -109,7 +109,7 @@ fn contains_nul(value: &Value) -> bool {
         _ => false,
     }
 }
-fn check_version(note: &Note, expected: i64) -> Result<(), DomainError> {
+pub(super) fn check_version(note: &Note, expected: i64) -> Result<(), DomainError> {
     if note.content_version != expected {
         return Err(DomainError::Conflict {
             current_version: Some(note.content_version),
@@ -219,7 +219,7 @@ pub async fn delete(ctx: &AppContext, input: DeleteNote) -> Result<(), DomainErr
 
 // Await cleanup before responding: a rejected parent/version must release locks
 // even if the caller performs no later database operation on this connection.
-async fn finish<T>(
+pub(super) async fn finish<T>(
     tx: sqlx::Transaction<'_, sqlx::Postgres>,
     result: Result<T, DomainError>,
 ) -> Result<T, DomainError> {
