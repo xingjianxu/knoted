@@ -37,7 +37,8 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
   const navigate = useNavigate();
   const notifyBlocked = useContext(NotesNavigationBlocked);
   const pathname = useRouterState({ select: state => state.location.pathname });
-  const noteId = pathname.match(/^\/notes\/([0-9a-f-]+)\/?$/i)?.[1];
+  // UUID identity is case-insensitive; server DTOs and retained sessions use lowercase.
+  const noteId = pathname.match(/^\/notes\/([0-9a-f-]+)\/?$/i)?.[1]?.toLowerCase();
   const [writeAccess] = useState(createNoteWriteAccess);
   const [expired, setExpired] = useState(false);
   const assertCanWrite = writeAccess.assertCanWrite;

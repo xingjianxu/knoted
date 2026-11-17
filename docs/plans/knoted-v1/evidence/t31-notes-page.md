@@ -75,3 +75,16 @@ T30 仅增加可选 `assertCanWrite(noteId)`，在实际 PATCH、history POST、
 - GREEN：单场景 `i2-green.log` exit0；最终 T27/T30/T31 `i2-focused-final2.log` exit0，3 文件/103 测试（T31 33 条）。
 - 全部门禁：`i2-lint-final2.log`、`i2-typecheck-final2.log`、`i2-test-final2.log`、`i2-build.log` 全部 exit0；12 文件/191 测试，构建 3257 modules、801ms，保留已披露 chunk 提示。命令及任务 TMPDIR/XDG_CACHE_HOME 前缀沿用上表，focused 命令为 `pnpm --dir apps/web exec vitest run tests/tasks/t27.test.tsx tests/tasks/t30.test.tsx tests/tasks/t31.test.tsx`。
 - 此修复未执行 dev 写入、远程操作或跨卡改动；主 Agent 负责新 PR、主线门禁及真实 HTTPS 复验。父浏览器 harness 的 alertdialog selector 修正独立处理，不计作产品修复。
+
+## 真实 HTTPS 修复 I3：大写 UUID 失败重认证仍保留本地会话
+
+修复基线为 PR #103 合入的 `3b8a07a47c6f007ecd88609bd62c6123af44dbbd`，分支 `fix/t31-uppercase-recovery`。主 Agent 的完整真实 HTTPS 流程已通过，但其独立定点场景发现：合法大写 UUID URL 的笔记在首次 401 后仍有本地稿，再次点击重新认证且 GET `/auth/session` 仍 401 后，标题和编辑器消失。
+
+根因是 route noteId 保留大写，而后端 Note.id、opened、draftStore 与确认缓存使用小写；首次服务器缓存移除后旧 observer data 可能暂时仍显示，失败重认证的 setError 触发父级重绘后，大写 key 无法命中已初始化的本地稿。现只将路由提取的 noteId 归一化小写，再用于 Query、目录选择和会话查找。`safeReturnTo` 的严格白名单与 `/i` 不变，URL 和登录策略不放宽，也没有新缓存框架。
+
+真实 App/Router/ApiClient/Error/Query 回归使用含 a–f 的 canonical UUID，并明确断言 uppercase 与 lowercase 不相同。首先真实 PATCH401，确认 session Query 被移除且输入仍在；随后重认证 GET401，必须保留同一个只读编辑器、标题、正文、复制与 base1，并留在原 URL。之后认证成功只按原 CAS1 重试 PATCH，不偷升版本。
+
+- 有效 RED：`i3-red-confirmed.log` exit1；首个 401 后的输入断言通过，第二次 session401 后找不到标题 textbox；1 failed /33 skipped。初版同一失败保留于 `i3-red.log`。
+- GREEN：`i3-green.log` exit0，单场景 1 passed /33 skipped；T20/T30/T31 `i3-focused-final.log` exit0，3 文件/101 测试（T31 34 条）。
+- 全部门禁：`i3-lint-final.log`、`i3-typecheck-final.log`、`i3-test-final.log`、`i3-build.log` 全部 exit0；12 文件/192 测试，构建 3257 modules、1.03s，保留已披露 chunk 提示。命令和 TMPDIR/XDG_CACHE_HOME 前缀沿用上表；focused 命令为 `pnpm --dir apps/web exec vitest run tests/tasks/t20.test.tsx tests/tasks/t30.test.tsx tests/tasks/t31.test.tsx`。
+- 主 Agent 负责新 PR、Rust/主线门禁及固定 SHA 的真实 HTTPS 定向复验。本修复没有远程、dev、后端、依赖或跨卡改动。
