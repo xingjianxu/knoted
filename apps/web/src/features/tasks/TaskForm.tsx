@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -37,12 +37,27 @@ type Draft = z.infer<typeof schema>;
 function initial(task?: Task, parent?: Task): Draft {
   return { title: task?.title ?? "", description: task?.description ?? "", status: task?.status ?? "todo", priority: task?.priority ?? "none", project_id: task?.project_id ?? parent?.project_id ?? "", parent_id: task?.parent_id ?? parent?.id ?? "", startDate: task?.start?.date ?? "", startTime: task?.start?.time ?? "", dueDate: task?.due?.date ?? "", dueTime: task?.due?.time ?? "" };
 }
-export function TaskForm({ task, parent, projects, parents, disabled = false, pending = false, conflict, onSubmit, submitLabel }: {
+export function TaskForm({ task, parent, projects, parents, disabled = false, pending = false, conflict, rebaseTask, onSubmit, submitLabel }: {
   task?: Task; parent?: Task; projects: Project[]; parents: Task[]; disabled?: boolean; pending?: boolean;
-  conflict?: boolean; onSubmit: (input: components["schemas"]["TaskCreate"]) => Promise<void>; submitLabel: string;
+  conflict?: boolean; rebaseTask?: Task;
+  onSubmit: (input: components["schemas"]["TaskCreate"], expectedVersion?: number) => Promise<Task | void>; submitLabel: string;
 }) {
-  const { register, control, handleSubmit, setError, reset, formState: { errors, isSubmitting } } = useForm<Draft>({ resolver: zodResolver(schema), defaultValues: initial(task, parent) });
+  const { register, control, handleSubmit, setError, reset, formState: { errors, isSubmitting, isDirty } } = useForm<Draft>({ resolver: zodResolver(schema), defaultValues: initial(task, parent) });
   const [error, setMessage] = useState(""); const [copyMessage, setCopyMessage] = useState("");
+  // A dirty draft and its CAS base are one snapshot. Query invalidation must
+  // never rebase retained fields onto a newer server version behind the user.
+  const baseVersion = useRef(task?.version);
+  const appliedRebase = useRef<Task | undefined>(undefined);
+  useEffect(() => {
+    if (rebaseTask && rebaseTask !== appliedRebase.current) {
+      baseVersion.current = rebaseTask.version;
+      appliedRebase.current = rebaseTask;
+    }
+    if (task && !isDirty && !isSubmitting) {
+      reset(initial(task));
+      baseVersion.current = task.version;
+    }
+  }, [task, rebaseTask, isDirty, isSubmitting, reset]);
   const draft = useWatch({ control }) as Draft;
   const parentId = draft.parent_id; const selectedParent = parent ?? parents.find((row) => row.id === parentId);
   const busy = pending || isSubmitting;
@@ -54,9 +69,15 @@ export function TaskForm({ task, parent, projects, parents, disabled = false, pe
     due: value.dueDate ? { date: value.dueDate, time: value.dueTime || null, timezone: "Asia/Shanghai" } : null,
   });
   const copy = JSON.stringify(input(draft), null, 2);
-  const submit = handleSubmit(async (value) => {
+  async function submitDraft(value: Draft) {
     setMessage("");
-    try { await onSubmit(input(value)); if (!task) reset(initial(undefined, parent)); }
+    try {
+      const saved = await onSubmit(input(value), baseVersion.current);
+      if (saved) {
+        reset(initial(saved));
+        baseVersion.current = saved.version;
+      } else if (!task) reset(initial(undefined, parent));
+    }
     catch (cause) {
       if (cause instanceof ApiRequestError) {
         for (const field of cause.fieldErrors ?? []) {
@@ -66,8 +87,8 @@ export function TaskForm({ task, parent, projects, parents, disabled = false, pe
       }
       setMessage(cause instanceof Error ? cause.message : "保存失败，请重试");
     }
-  });
-  return <form noValidate onSubmit={(event) => void submit(event)} className="space-y-3">
+  }
+  return <form noValidate onSubmit={(event) => void handleSubmit(submitDraft)(event)} className="space-y-3">
     <FormField label="事项标题" error={errors.title?.message}><Input {...register("title")} disabled={locked} /></FormField>
     <FormField label="事项说明" error={errors.description?.message}><Textarea {...register("description")} rows={3} disabled={locked} /></FormField>
     <div className="flex flex-wrap gap-3">

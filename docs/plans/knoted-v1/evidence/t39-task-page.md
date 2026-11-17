@@ -51,3 +51,20 @@ DateValue 原样保留 `{date,time,timezone:"Asia/Shanghai"}`。前端使用 Int
 - Web 测试出现与基线一致的 jsdom `Window.scrollTo` 未实现提示；构建提示已有大块资源及外部 outDir 不自动清空，不影响退出码。未修改依赖或掩盖警告。
 - 本地消费测试不等于真实浏览器/HTTPS dev 验收。dev 运行 SHA、部署和主线全门禁由主 Agent 完成并回写。
 - 未 push、未创建 PR、未合并；未修改 README 主状态、其他业务模块、host 或生产配置。Worktree 和分支保留供独立审查。
+
+## 独立审查修正 I1（round 1）
+
+审查指出：详情查询普通刷新会拿到新 version，而旧表单仍保留旧完整字段，保存时可能用新 version 静默覆盖远端修改。已用两个回归先观察有效失败：dirty 草稿经普通列表刷新后未产生预期409；pristine 表单未同步远端字段（`fix1-red.log`，17用例中2失败）。
+
+修正后 TaskForm 将草稿与 CAS 基础版本绑定，普通查询刷新不提升 dirty 草稿基础版本；未修改的表单随服务端同步。只有保存成功（以 PATCH 返回的 DTO 为新基础）或明确成功完成冲突刷新，才推进保留草稿基础版本。保存回写详情缓存，避免成功响应被旧缓存回刷。回归覆盖列表刷新和创建其他事项触发失效两条路径，断言原版号提交产生409且远端说明/日期未覆盖，并覆盖 pristine 同步及连续两次保存版号推进。
+
+| 命令 | 退出码 | 实际结果 | 日志 |
+| --- | --- | --- | --- |
+| `pnpm --filter @knoted/web exec vitest run tests/tasks/t39.test.tsx`（RED） | 1 | 17用例中2失败，复现I1及pristine不同步 | `fix1-red.log` |
+| `pnpm --filter @knoted/web exec vitest run tests/tasks/t39.test.tsx` | 0 | 18/18通过 | `fix1-t39.log` |
+| `pnpm --filter @knoted/web test` | 0 | 14文件 / 223用例通过 | `fix1-web-test.log` |
+| `pnpm --filter @knoted/web typecheck` | 0 | 通过 | `fix1-typecheck.log` |
+| `pnpm --filter @knoted/web lint` | 0 | 无错误或警告 | `fix1-lint.log` |
+| `pnpm --filter @knoted/web build --outDir /data/knoted-dev/tasks/t39/build/web` | 0 | 通过，保留原有大块资源/outDir提示 | `fix1-build.log` |
+
+Rust 文件未再变化，本轮未重跑 Rust；上一轮实测结果保留。待主 Agent 限定复审与集成，未新增部署声明。

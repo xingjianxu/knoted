@@ -57,6 +57,7 @@ function TaskDetail({ bundle, taskId, projects, parents, choicesReady, onSelectT
   const [conflict, setConflict] = useState(""); const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState(""); const [actionError, setActionError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [rebaseTask, setRebaseTask] = useState<Task>();
   const ancestorBlocked = !!task && (
     !!task.parent_id && (!parent.data || parent.isError || parent.data.archived_at !== null || parent.data.deleted_at !== null)
     || !!task.project_id && (!project.data || project.isError || project.data.archived_at !== null || project.data.deleted_at !== null)
@@ -73,18 +74,22 @@ function TaskDetail({ bundle, taskId, projects, parents, choicesReady, onSelectT
       // Recheck writable relationships before allowing a retained draft to retry.
       if (latest.data.parent_id) await bundle.queryClient.fetchQuery({ ...taskQuery(bundle, latest.data.parent_id), staleTime: 0 });
       if (latest.data.project_id) await bundle.queryClient.fetchQuery({ ...projectQuery(bundle, latest.data.project_id), staleTime: 0 });
-      await invalidate(); setConflict("");
+      await invalidate(); setRebaseTask(latest.data); setConflict("");
     } catch (cause) { setRefreshError(`刷新失败：${message(cause)}`); }
     finally { setRefreshing(false); }
   }
   if (!task && query.isPending) return <Spinner label="正在读取事项详情" />;
   if (!task) return <Alert tone="error">{query.error?.message ?? "事项不可用"}<Button onClick={() => void query.refetch()}>重试事项详情</Button></Alert>;
   const readOnly = ancestorBlocked || task.archived_at !== null || task.deleted_at !== null;
-  async function save(input: components["schemas"]["TaskCreate"]) {
+  async function save(input: components["schemas"]["TaskCreate"], expectedVersion?: number) {
     setBusy(true);
     try {
-      await bundle.api.raw.PATCH("/tasks/{taskId}", { params: { path: { taskId } }, body: { ...input, expected_version: task!.version } });
+      if (expectedVersion === undefined) throw new Error("草稿基础版本不可用，请重新打开事项");
+      const { data } = await bundle.api.raw.PATCH("/tasks/{taskId}", { params: { path: { taskId } }, body: { ...input, expected_version: expectedVersion } });
+      if (!data) throw new Error("无法读取保存后的事项");
+      bundle.queryClient.setQueryData(queryKeys.tasks.detail(taskId), data);
       await invalidate();
+      return data;
     } catch (cause) { recordConflict(cause); throw cause; }
     finally { setBusy(false); }
   }
@@ -104,7 +109,7 @@ function TaskDetail({ bundle, taskId, projects, parents, choicesReady, onSelectT
     {query.error && <Alert tone="error">读取事项失败：{query.error.message}</Alert>}
     {conflict && <Alert tone="warning">{conflict}<Button disabled={refreshing} onClick={() => void refresh()}>刷新服务端版本</Button></Alert>}
     {refreshError && <Alert tone="error">{refreshError}</Alert>}
-    <TaskForm task={task} projects={projects} parents={parent.data && !parents.some((row) => row.id === parent.data.id) ? [...parents, parent.data] : parents} disabled={readOnly || !choicesReady || refreshing || busy} conflict={!!conflict} onSubmit={save} submitLabel="保存事项" />
+    <TaskForm task={task} projects={projects} parents={parent.data && !parents.some((row) => row.id === parent.data.id) ? [...parents, parent.data] : parents} disabled={readOnly || !choicesReady || refreshing || busy} conflict={!!conflict} rebaseTask={rebaseTask} onSubmit={save} submitLabel="保存事项" />
     <div className="flex gap-2">
       <Button disabled={ancestorBlocked || busy || refreshing || !!conflict} onClick={() => void lifecycle(task.archived_at ? "unarchive" : "archive")}>{task.archived_at ? "取消事项归档" : "归档事项"}</Button>
       <ConfirmDialog title="删除事项？" description="事项进入回收站，30天内可恢复。存在子事项时须先处理子事项。" confirmText="确认删除事项" cancelText="取消" danger trigger={<Button danger disabled={readOnly || busy || refreshing || !!conflict}>删除事项</Button>} onConfirm={async () => {

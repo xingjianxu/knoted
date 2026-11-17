@@ -154,6 +154,42 @@ describe("T39 事项页面", () => {
     await waitFor(() => expect(h.rows[0]!.version).toBe(8));
     await open("第二事项"); expect(await within(screen.getByRole("region", { name: "事项详情" })).findByLabelText("事项标题")).toHaveValue("第二事项");
   });
+  it.each(["列表刷新", "创建其他事项"])("dirty草稿在%s后仍以原版本保存，不能覆盖远端说明和日期", async (trigger) => {
+    const h = harness(); renderPage(h.bundle); const detail = within(await open());
+    fireEvent.change(detail.getByLabelText("事项标题"), { target: { value: "本地标题草稿" } });
+    h.rows[0]!.description = "远端说明";
+    h.rows[0]!.due = { date: "2026-12-20", time: "10:30", timezone: "Asia/Shanghai" };
+    h.rows[0]!.version = 2;
+    if (trigger === "列表刷新") fireEvent.click(screen.getByRole("button", { name: "刷新事项列表" }));
+    else {
+      const create = within(screen.getByRole("region", { name: "创建事项" }));
+      fireEvent.change(create.getByLabelText("事项标题"), { target: { value: "其他事项" } });
+      fireEvent.click(create.getByRole("button", { name: "创建事项" }));
+    }
+    await detail.findByText("版本 2");
+    expect(detail.getByLabelText("事项标题")).toHaveValue("本地标题草稿");
+    fireEvent.click(detail.getByRole("button", { name: "保存事项" }));
+    expect(await detail.findByText(/草稿已保留/)).toBeInTheDocument();
+    expect(h.rows[0]!.description).toBe("远端说明");
+    expect(h.rows[0]!.due).toEqual({ date: "2026-12-20", time: "10:30", timezone: "Asia/Shanghai" });
+    const patch = h.requests.find((request) => request.method === "PATCH");
+    expect(await patch?.json()).toMatchObject({ expected_version: 1, title: "本地标题草稿" });
+  });
+  it("未修改表单随普通刷新同步，成功保存后使用新的基础版本", async () => {
+    const h = harness(); renderPage(h.bundle); const detail = within(await open());
+    h.rows[0]!.title = "远端标题"; h.rows[0]!.description = "远端说明"; h.rows[0]!.version = 2;
+    fireEvent.click(screen.getByRole("button", { name: "刷新事项列表" }));
+    await waitFor(() => expect(detail.getByLabelText("事项标题")).toHaveValue("远端标题"));
+    expect(detail.getByLabelText("事项说明")).toHaveValue("远端说明");
+    fireEvent.change(detail.getByLabelText("事项标题"), { target: { value: "第一次保存" } });
+    fireEvent.click(detail.getByRole("button", { name: "保存事项" }));
+    await waitFor(() => expect(h.rows[0]!.version).toBe(3));
+    await waitFor(() => expect(detail.getByRole("button", { name: "保存事项" })).toBeEnabled());
+    fireEvent.change(detail.getByLabelText("事项标题"), { target: { value: "再次保存" } });
+    fireEvent.click(detail.getByRole("button", { name: "保存事项" }));
+    await waitFor(() => expect(h.rows[0]!.version).toBe(4));
+    expect(h.rows[0]!.description).toBe("远端说明");
+  });
   it("刷新失败继续禁止冲突重试，草稿仍可手动复制", async () => {
     const h = harness(); renderPage(h.bundle); const detail = within(await open());
     h.rows[0]!.version = 2; h.failRefresh();
