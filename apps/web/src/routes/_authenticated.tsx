@@ -72,7 +72,8 @@ function Shell() {
       >
         <NavGroup label="工作空间">
           <NavItem active={/^\/notes(?:\/|$)/.test(pathname)} onClick={() => void navigate({ to: "/notes" })}>笔记</NavItem>
-          {["概览", "项目", "事项", "文件", "搜索", "问答"].map(
+          <NavItem active={/^\/projects(?:\/|$)/.test(pathname)} onClick={() => void navigate({ to: "/projects" })}>项目</NavItem>
+          {["概览", "事项", "文件", "搜索", "问答"].map(
             (label) => (
               <NavItem key={label} disabled title="尚未实现">
                 {label}（待开放）
