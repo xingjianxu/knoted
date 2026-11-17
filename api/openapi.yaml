@@ -1991,10 +1991,16 @@ paths:
         - Trash
       summary: 列出回收站对象
       operationId: getTrash
-      description: 只列当前账号对象；30 天保留原有关联。
+      description: 只列当前账号仍存在的软删除对象，不包含仅归档对象或已物理清理的注册身份；30 天保留原有关联。恢复资格是读取快照下的默认参数提示，实际恢复仍由领域接口重新校验。
       parameters:
         - $ref: "#/components/parameters/Cursor"
         - $ref: "#/components/parameters/Limit"
+        - name: entity_type
+          in: query
+          required: false
+          description: 按对象类型筛选；游标绑定该筛选条件。
+          schema:
+            $ref: "#/components/schemas/TrashEntityType"
       responses:
         "200":
           description: 成功
@@ -4063,6 +4069,9 @@ components:
         - title
         - deleted_at
         - parent_id
+        - version
+        - can_restore
+        - reason
       properties:
         entity_type:
           $ref: "#/components/schemas/TrashEntityType"
@@ -4079,6 +4088,18 @@ components:
             - type: string
               format: uuid
             - type: "null"
+        version:
+          type: integer
+          minimum: 1
+          description: 恢复 CAS 版本；笔记映射 content_version，项目和事项映射 version。
+        can_restore:
+          type: boolean
+          description: 当前快照下使用默认恢复参数是否符合领域规则；执行时仍须复核。
+        reason:
+          type:
+            - string
+            - "null"
+          description: 默认恢复受限时的可理解原因，可恢复时为 null；笔记显式恢复到根目录仍调用原领域接口。
     TrashPage:
       type: object
       additionalProperties: false

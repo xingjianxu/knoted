@@ -214,6 +214,18 @@ const EXPECTED_VERSION_SCHEMAS = [
 const REQUIRED_EXAMPLES = [
   {
     document: "openapi.yaml",
+    schema: "TrashPage",
+    file: "valid/trash-page.json",
+    valid: true,
+  },
+  {
+    document: "openapi.yaml",
+    schema: "TrashItem",
+    file: "invalid/trash-item-missing-version.json",
+    valid: false,
+  },
+  {
+    document: "openapi.yaml",
     schema: "DashboardSummary",
     file: "valid/dashboard-summary.json",
     valid: true,

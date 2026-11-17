@@ -1,0 +1,9 @@
+{
+  "entity_type": "task",
+  "id": "00000000-0000-4000-8000-000000000003",
+  "title": "Deleted note",
+  "deleted_at": "2026-11-17T00:00:00Z",
+  "parent_id": null,
+  "can_restore": true,
+  "reason": null
+}
