@@ -388,10 +388,14 @@ pub async fn update(ctx: &AppContext, input: UpdateTask) -> Result<Task, DomainE
             return Ok(old);
         }
         let moving = t.project_id != old.project_id;
+        // A cascade must not repair a live child's historical inheritance or
+        // move it out of a readonly source project. Trash children retain the
+        // explicit relationship-migration exception.
         if moving
-            && children
-                .iter()
-                .any(|c| c.deleted_at.is_none() && c.archived_at.is_some())
+            && children.iter().any(|c| {
+                c.deleted_at.is_none()
+                    && (c.archived_at.is_some() || c.project_id != old.project_id)
+            })
         {
             return Err(conflict(Some(&old)));
         }

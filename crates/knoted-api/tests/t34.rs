@@ -1245,3 +1245,118 @@ async fn t34_reference_states_fail_closed() {
         StatusCode::CONFLICT
     );
 }
+
+// A parent cascade must not repair a live child's historical inheritance or
+// let that child escape a readonly source project. Each case exercises PATCH
+// after an explicit historical SQL fixture and compares the full write snapshot.
+async fn mismatched_child_move(source: &str, deleted_child: bool) {
+    let h = Harness::new().await;
+    let original = h.project().await;
+    let alternate = h.project().await;
+    let destination = h.project().await;
+    let parent = h
+        .task(json!({"title":"parent","project_id":original["id"]}))
+        .await;
+    let child = h
+        .task(json!({"title":"child","parent_id":parent["id"],"description":"preserved"}))
+        .await;
+    if deleted_child {
+        assert_eq!(h.delete(&child, 1).await, StatusCode::NO_CONTENT);
+    }
+    let source_id = match source {
+        "null" => None,
+        "destination" => Some(uid(&destination)),
+        "active" | "archived" | "deleted" => Some(uid(&alternate)),
+        _ => unreachable!("test source must be a declared fixture"),
+    };
+    sqlx::query("UPDATE tasks SET project_id=$2 WHERE id=$1")
+        .bind(uid(&child))
+        .bind(source_id)
+        .execute(&h.db.pool)
+        .await
+        .unwrap();
+    match source {
+        "archived" => {
+            sqlx::query("UPDATE projects SET archived_at=now() WHERE id=$1")
+                .bind(uid(&alternate))
+                .execute(&h.db.pool)
+                .await
+                .unwrap();
+        }
+        "deleted" => {
+            sqlx::query("UPDATE projects SET deleted_at=now() WHERE id=$1")
+                .bind(uid(&alternate))
+                .execute(&h.db.pool)
+                .await
+                .unwrap();
+        }
+        _ => {}
+    }
+    let before = h.snapshot().await;
+    let (status, _, body) = h
+        .patch(
+            &parent,
+            json!({"expected_version":1,"project_id":destination["id"]}),
+        )
+        .await;
+    if !deleted_child {
+        assert_eq!(status, StatusCode::CONFLICT, "source={source}: {body}");
+        assert_eq!(body["current_version"], 1);
+        assert_eq!(
+            h.snapshot().await,
+            before,
+            "rejected cascade must preserve tasks, registry and outbox"
+        );
+    } else {
+        assert_eq!(status, StatusCode::OK, "deleted child exception: {body}");
+        assert_eq!(body["version"], 2);
+        let after = h.snapshot().await;
+        let find_child = |snapshot: &Value| {
+            snapshot["tasks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["id"] == child["id"])
+                .unwrap()
+                .clone()
+        };
+        let mut expected = find_child(&before);
+        expected["project_id"] = destination["id"].clone();
+        expected["version"] = json!(3);
+        assert_eq!(
+            find_child(&after),
+            expected,
+            "trash child changes only project/version/time"
+        );
+        assert_eq!(after["registry"], before["registry"]);
+        assert_eq!(
+            after["events"].as_array().unwrap().len(),
+            before["events"].as_array().unwrap().len() + 2
+        );
+        assert!(after["events"].as_array().unwrap().iter().any(|e| e["topic"] == "task.changed" && e["payload"] == json!({"source_id":uid(&child),"content_version":3,"operation":"updated"})));
+    }
+}
+#[tokio::test]
+async fn t34_parent_move_rejects_mismatched_active_child_project() {
+    mismatched_child_move("active", false).await;
+}
+#[tokio::test]
+async fn t34_parent_move_rejects_mismatched_archived_child_project() {
+    mismatched_child_move("archived", false).await;
+}
+#[tokio::test]
+async fn t34_parent_move_rejects_mismatched_deleted_child_project() {
+    mismatched_child_move("deleted", false).await;
+}
+#[tokio::test]
+async fn t34_parent_move_rejects_mismatched_null_child_project() {
+    mismatched_child_move("null", false).await;
+}
+#[tokio::test]
+async fn t34_parent_move_rejects_mismatched_child_already_at_destination() {
+    mismatched_child_move("destination", false).await;
+}
+#[tokio::test]
+async fn t34_parent_move_preserves_mismatched_deleted_child_exception() {
+    mismatched_child_move("archived", true).await;
+}
