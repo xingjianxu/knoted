@@ -75,8 +75,8 @@
 | [T46](tasks/T46.md) | 文本解析 | T44 | done（PR [#154](https://github.com/xingjianxu/knoted/pull/154)，主线 `e10ee8e`，dev `e10ee8e`；[证据](evidence/t46-text.md)） |
 | [T47](tasks/T47.md) | PDF与图片解析 | T10, T44, T46 | in progress（阶段 A：[草稿 PR #157](https://github.com/xingjianxu/knoted/pull/157)；阶段 B 待补充退出契约确认） |
 | [T48](tasks/T48.md) | Office解析 | T47 | in progress（阶段 A：[草稿 PR #159](https://github.com/xingjianxu/knoted/pull/159)；整卡验收待 T47） |
-| [T49](tasks/T49.md) | 文件浏览备注下载 | T45, T48, T32 | in progress（独立业务阶段 A 实施中；整卡验收待 T48） |
-| [T50](tasks/T50.md) | PDF图片文本预览 | T49 | pending |
+| [T49](tasks/T49.md) | 文件浏览备注下载 | T45, T48, T32 | in progress（阶段 A：[草稿 PR #161](https://github.com/xingjianxu/knoted/pull/161)；整卡验收待 T48） |
+| [T50](tasks/T50.md) | PDF图片文本预览 | T49 | in progress（阶段 A：[草稿 PR #162](https://github.com/xingjianxu/knoted/pull/162)；整卡验收待 T49） |
 | [T51](tasks/T51.md) | OnlyOffice授权后端 | T49, T15 | pending |
 | [T52](tasks/T52.md) | OnlyOffice网页接入 | T51, T50 | pending |
 | [T53](tasks/T53.md) | 全文索引发布 | T07, T48, T36 | pending |
