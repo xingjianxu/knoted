@@ -1,6 +1,6 @@
 # T38：项目页面
 
-- 状态：implemented（本地 TDD、门禁与独立审查完成后提交；主线门禁、PR 集成与真实 HTTPS 验收由主 Agent 在本文件后续小节回填）。
+- 状态：implemented（本地 TDD、门禁与独立审查修复已完成并提交；主线门禁、PR 集成与真实 HTTPS 验收由主 Agent 在本文件后续小节回填）。
 - Issue：[#117](https://github.com/xingjianxu/knoted/issues/117)。基线 `83d0e30ebc3ba3a3b4f18ae8fac22a7b01e566b1`（T37 PR #115 已合入）；工作区 `.worktrees/knoted-t38`，分支 `feat/t38`。
 - 执行依据：[T38](../tasks/T38.md)、[需求](../requirements.md)（R06/R10/R11）、[数据/API](../data-and-api.md)、[ADR 0002](../../../decisions/0002-mtone-ui-ownership.md)、[UI 指南](../../development/ui-mtone.md)、[Worktree 指南](../../development/git-worktree.md)。
 - 直接依赖实际核对：T33 项目 API（PR [#96](https://github.com/xingjianxu/knoted/pull/96)）已在基线，`api/openapi.yaml` 与 `packages/api-client/src/generated/schema.d.ts` 含 `listProjects/createProject/getProject/updateProject/deleteProject/archiveProject/unarchiveProject/restoreProject`；T20 路由外壳（PR [#52](https://github.com/xingjianxu/knoted/pull/52)）提供 `_authenticated` 父布局与 `NavItem`。
@@ -71,3 +71,14 @@
 - `safeReturnTo`（`lib/router.tsx`）白名单仍只含 `/`、`/settings/security`、`/notes*`；`/projects` 深链在 401 后回落到 `/`。该文件不在本卡允许范围，未修改，列为后续接线事项而非本卡缺陷。
 - 关联资料只支持选择已有标签、添加/移除标签与关联，不提供在项目页新建标签（笔记页负责标签创建）；如需，另开任务评估。
 - 未做性能、Vitest 大 chunk 拆包、Rust/DB/OpenAPI 或 ADR 变更。
+
+## 独立审查与修复 I1
+
+独立审查（Spec PASS / Quality CHANGES REQUESTED，0 Critical / 1 Important / 7 Minor）在只读副本 `f4633f6` 上实际复跑：`t38.test.tsx` 6/6、全量 13 文件 / 205 tests、typecheck/lint/build 均 exit 0，并核对 `has_tasks` 判定与 CAS 字段。
+
+- **Important I1：409 后未刷新 `loaded.version`，重试必然重复 409。** 保存、归档、取消归档、删除四个入口都只用缓存版本，失败后只显示文案而不刷新详情，提示“核对后重试”却无法成功。现加 `refreshAfterConflict`：收到 409 时失效 `projects.detail(projectId)` 与 `tasks.all()`；本地草稿按设计保留（详情草稿只在挂载时初始化一次），下次提交使用刷新后的 `expected_version`。
+  - 有效 RED：`i1-red-conflict-retry.log` exit 1，`expected 7 to be 8`（重试仍用陈旧版本被拒）；GREEN：`i1-focused2.log` exit 0，6/6。
+- 同时处理的 Minor：删除确认文案不再暗示“已归档事项会保留”（服务端只要仍有未删除事项即拒绝删除，且归档中的项目本身已禁用删除）；删除错误改用独立 `deleteError` 并在对话框关闭时清除，不再与归档错误混用或重复展示；`unfinished.error` 仅在已触发未完成事项读取时渲染；移除从未接线的 `assertCanWrite` 属性（T38 没有 401 停写机制，`readOnly` 才是实际守卫）；`ProjectAssociations` 补充与 `NoteAssociations` 的交叉说明；打开中的项目按钮加 `aria-current`。
+- 新增覆盖：归档后断言 `保存修改` 与 `移除标签` 禁用，取消归档后恢复可用（对应此前未断言的部分）。
+- 修复后全部门禁：`i1-test.log`（13 文件 / 205 tests）、`i1-typecheck.log`、`i1-lint.log`、`i1-build.log` 均 exit 0。
+- 明确保留的 Minor：`ProjectAssociations` 的标签/关联增删与分页循环未单独建 jsdom 用例（与已测的 T32 笔记侧同源实现；真实 HTTPS 验收覆盖标签展示与关联增删）；与 `NoteAssociations` 的近似重复仍存在，待单独任务评估抽取。两项均记录为后续项，不影响本卡验收。

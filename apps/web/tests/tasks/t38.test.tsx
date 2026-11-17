@@ -320,6 +320,9 @@ describe("T38 project page", () => {
     bundle.queryClient.setQueryData(queryKeys.tasks.list({ project_id: projectA }), { items: [], next_cursor: null });
     fireEvent.click(await screen.findByRole("button", { name: "归档项目" }));
     expect(await screen.findByRole("button", { name: "取消归档" })).toBeInTheDocument();
+    // 归档后只读：编辑与关联入口禁用。
+    expect(screen.getByRole("button", { name: "保存修改" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "移除标签 甲标签" })).toBeDisabled();
     await waitFor(() => {
       expect(bundle.queryClient.getQueryState(queryKeys.tasks.list({ project_id: projectA }))?.isInvalidated).toBe(true);
     });
@@ -328,10 +331,12 @@ describe("T38 project page", () => {
     fireEvent.click(screen.getByRole("button", { name: "取消归档" }));
     expect(await screen.findByRole("button", { name: "归档项目" })).toBeInTheDocument();
     expect(screen.queryByText("已归档")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存修改" })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "移除标签 甲标签" })).toBeEnabled());
     await waitFor(() => expect(screen.getByRole("button", { name: "打开项目 项目甲改名" })).toBeInTheDocument());
   });
 
-  it("保存冲突时保留输入并提示当前版本", async () => {
+  it("保存冲突时保留输入、提示当前版本，并允许用刷新后的版本重试", async () => {
     const { bundle, projects } = harness();
     renderPage(bundle);
 
@@ -342,6 +347,13 @@ describe("T38 project page", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("7");
+    expect(screen.getByLabelText("项目名称")).toHaveValue("冲突后保留的标题");
+
+    // 重试必须用刷新后的版本，而不是拿着陈旧版本反复撞 409。
+    fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(projects[0]!.version).toBe(8);
+    expect(projects[0]!.title).toBe("冲突后保留的标题");
     expect(screen.getByLabelText("项目名称")).toHaveValue("冲突后保留的标题");
   });
 

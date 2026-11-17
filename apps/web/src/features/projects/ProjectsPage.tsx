@@ -162,7 +162,11 @@ export function ProjectsPage({ bundle, projectId, onSelectProject }: ProjectsPag
               key={project.id}
               description={project.description ?? undefined}
               actions={
-                <Button aria-label={`打开项目 ${project.title}`} onClick={() => onSelectProject(project.id)}>
+                <Button
+                  aria-label={`打开项目 ${project.title}`}
+                  aria-current={project.id === projectId ? "true" : undefined}
+                  onClick={() => onSelectProject(project.id)}
+                >
                   打开
                 </Button>
               }
@@ -204,6 +208,7 @@ function ProjectDetail({
   const [saveError, setSaveError] = useState("");
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState("");
+  const [deleteError, setDeleteError] = useState("");
   const [busy, setBusy] = useState(false);
   const [showUnfinished, setShowUnfinished] = useState(false);
 
@@ -223,6 +228,20 @@ function ProjectDetail({
       queryClient.invalidateQueries({ queryKey: queryKeys.projects.all() }),
       queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all() }),
     ]);
+
+  /**
+   * A 409 means this page holds a stale base version. Refresh the server copy
+   * so the next attempt sends the current `expected_version`; the local draft
+   * is kept on purpose so nothing the user typed is lost.
+   */
+  async function refreshAfterConflict(cause: unknown) {
+    if (cause instanceof ApiRequestError && cause.status === 409) {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.projects.detail(projectId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all() }),
+      ]);
+    }
+  }
 
   async function save() {
     if (!loaded || !draft || saving) return;
@@ -245,6 +264,7 @@ function ProjectDetail({
       await invalidate();
     } catch (cause) {
       setSaveError(conflictMessage(cause, "保存失败：项目已在别处修改，草稿已保留，请核对后重试"));
+      await refreshAfterConflict(cause);
     } finally {
       setSaving(false);
     }
@@ -266,6 +286,7 @@ function ProjectDetail({
       if (cause instanceof ApiRequestError && cause.status === 409) {
         setShowUnfinished(true);
       }
+      await refreshAfterConflict(cause);
     } finally {
       setBusy(false);
     }
@@ -283,6 +304,7 @@ function ProjectDetail({
       await invalidate();
     } catch (cause) {
       setActionError(conflictMessage(cause, "取消归档失败：项目状态已变化，请刷新后重试"));
+      await refreshAfterConflict(cause);
     } finally {
       setBusy(false);
     }
@@ -309,7 +331,7 @@ function ProjectDetail({
       {archived && <Alert tone="info">已归档项目为只读；取消归档后才能编辑、关联或删除。</Alert>}
       {actionError && <Alert tone="error">{actionError}</Alert>}
       {showUnfinished && unfinished.isFetching && <Spinner label="正在读取未完成事项" />}
-      {unfinished.error && (
+      {showUnfinished && unfinished.error && (
         <Alert tone="error">
           {unfinished.error instanceof Error ? unfinished.error.message : "无法读取未完成事项"}
         </Alert>
@@ -365,18 +387,21 @@ function ProjectDetail({
           )}
           <ConfirmDialog
             title="删除项目？"
-            description="删除后项目进入回收站，30 天内可恢复。项目中已归档的事项会保留，笔记和资料不会被删除。"
+            description="删除后项目进入回收站，30 天内可恢复。删除要求项目下已无事项；笔记和资料不会被删除。"
             confirmText="确认删除项目"
             cancelText="取消"
             danger
-            children={actionError ? <Alert tone="error">{actionError}</Alert> : undefined}
+            children={deleteError ? <Alert tone="error">{deleteError}</Alert> : undefined}
+            onOpenChange={(open) => {
+              if (!open) setDeleteError("");
+            }}
             trigger={
               <Button danger disabled={archived || busy}>
                 删除项目
               </Button>
             }
             onConfirm={async () => {
-              setActionError("");
+              setDeleteError("");
               try {
                 await bundle.api.raw.DELETE("/projects/{projectId}", {
                   params: { path: { projectId }, query: { expected_version: loaded.version } },
@@ -384,7 +409,8 @@ function ProjectDetail({
                 await invalidate();
                 onDeleted();
               } catch (cause) {
-                setActionError(conflictMessage(cause, "删除失败：项目下仍有事项，或项目已在别处修改；请先移出或删除事项后重试"));
+                setDeleteError(conflictMessage(cause, "删除失败：项目下仍有事项，或项目已在别处修改；请先移出或删除事项后重试"));
+                await refreshAfterConflict(cause);
                 throw cause;
               }
             }}

@@ -11,24 +11,19 @@ export interface ProjectAssociationsProps {
   api: ApiClient;
   /** Archived projects are read-only until unarchived. */
   readOnly?: boolean;
-  /** Fresh workspace policy; readOnly alone cannot stop an awaited continuation. */
-  assertCanWrite?: () => void;
 }
 
 /**
  * Business composition over the shared tag/link endpoints for project sources.
  * Notes keep their own composition because their copy and lifecycle differ.
+ * Extraction into one shared associations module is a follow-up outside T38's
+ * file scope; keep behavior changes in both places until then.
  */
 export function ProjectAssociations(props: ProjectAssociationsProps) {
   return <ProjectAssociationsContent key={props.projectId} {...props} />;
 }
 
-function ProjectAssociationsContent({
-  projectId,
-  api,
-  readOnly = false,
-  assertCanWrite = () => {},
-}: ProjectAssociationsProps) {
+function ProjectAssociationsContent({ projectId, api, readOnly = false }: ProjectAssociationsProps) {
   const queryClient = useQueryClient();
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [targetType, setTargetType] = useState<EntityType>("note");
@@ -108,7 +103,6 @@ function ProjectAssociationsContent({
   }
 
   async function assign(tagId: string) {
-    assertCanWrite();
     await api.raw.PUT("/entities/{entityType}/{entityId}/tags/{tagId}", {
       params: { path: { entityType: "project", entityId: projectId, tagId } },
     });
@@ -176,7 +170,6 @@ function ProjectAssociationsContent({
                 disabled={disabled}
                 aria-label={`移除标签 ${tag.name}`}
                 onClick={() => void mutate(async () => {
-                  assertCanWrite();
                   await api.raw.DELETE("/entities/{entityType}/{entityId}/tags/{tagId}", {
                     params: { path: { entityType: "project", entityId: projectId, tagId: tag.id } },
                   });
@@ -213,7 +206,6 @@ function ProjectAssociationsContent({
             if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetId.trim())) {
               throw new Error("请输入有效的目标 ID");
             }
-            assertCanWrite();
             await api.raw.POST("/links", {
               body: {
                 source_type: "project",
@@ -259,7 +251,6 @@ function ProjectAssociationsContent({
                 disabled={disabled}
                 aria-label={`移除关联 ${link.target_id}`}
                 onClick={() => void mutate(async () => {
-                  assertCanWrite();
                   await api.raw.DELETE("/links/{linkId}", {
                     params: { path: { linkId: link.id }, query: { expected_version: link.version } },
                   });
