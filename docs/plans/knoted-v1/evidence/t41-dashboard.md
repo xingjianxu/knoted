@@ -52,3 +52,9 @@ Web `run build` 的 `tsc --noEmit` 已由 typecheck 的同一命令实际通过�
 受影响命令 `cargo test --locked -p knoted-core -p knoted-api --test t41` 实测 6 passed、exit 0（`i1-green.log`）。重新执行 `cargo fmt --check`、`cargo test --workspace --locked`（261 passed、1 ignored、0 failed）与 `cargo clippy --locked --all-targets -- -D warnings` 全部 exit 0；对应 `i1-fmt.log`、`i1-rust-test.log`、`i1-clippy.log`，见实施报告的 I1 附录。Web 未改动，无需重复其已通过门禁。
 
 首次 RED 的断言 panic 遇到既有 TestDb 同步 Drop 等待未完成回滚连接，schema 清理阻塞。仅终止本任务测试进程 `640179`、`640443`，新回归先 `await db.drop()` 再断言以取得干净失败证据。仅清理自身残留 `knoted_test_c42c5be30a1e`、`knoted_test_50bd8686bcc8`，读回 0；完整证据在 `/data/knoted-dev/tasks/t41/evidence/i1-cleanup-schemas.txt`。公共 TestDb 未修改，其他数据库/schema/进程未触碰。
+
+## 主 Agent I2 导航接线修复（round 2）
+
+真实 `createAppRouter` 路由测试从已实现的 `/settings/security` 页面点击侧栏概览：原实现仍将概览标为禁用待开放，点击后 pathname 保持 `/settings/security`，预期 `/`，有效 RED 1 failed、18 skipped、exit 1（`i2-red.log`）。最小修复在现有 authenticated Shell 注册已启用概览按钮，导航 `/`，仅根路径标记 active；从未来占位列表移除概览，不更改文件/搜索/问答。同步更新 T20 旧占位断言并给既有路由 harness 补充真实 DashboardSummary fixture。
+
+回归使用现有应用 Router/AuthGate/Query/默认 index/DashboardPage，验证点击抵达根路由、概览标题与空态、实际 dashboard GET，以及离开根路径时概览不 active、抵达后 `aria-current=page`。T20/T41 targeted 26 passed、exit 0（`i2-green.log`）。Web 全量 `test` 242 passed、`typecheck`/`lint`/外部 outDir `vite build` 均 exit 0，对应日志 `i2-web-test.log`、`i2-typecheck.log`、`i2-lint.log`、`i2-build.log`，命令见实施报告 I2 附录；Rust 未变，不重复已通过的后端门禁。

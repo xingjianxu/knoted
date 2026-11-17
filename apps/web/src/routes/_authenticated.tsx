@@ -71,10 +71,11 @@ function Shell() {
         }
       >
         <NavGroup label="工作空间">
+          <NavItem active={pathname === "/"} onClick={() => void navigate({ to: "/" })}>概览</NavItem>
           <NavItem active={/^\/notes(?:\/|$)/.test(pathname)} onClick={() => void navigate({ to: "/notes" })}>笔记</NavItem>
           <NavItem active={/^\/projects(?:\/|$)/.test(pathname)} onClick={() => void navigate({ to: "/projects" })}>项目</NavItem>
           <NavItem active={/^\/tasks(?:\/|$)/.test(pathname)} onClick={() => void navigate({ to: "/tasks" })}>事项</NavItem>
-          {["概览", "文件", "搜索", "问答"].map(
+          {["文件", "搜索", "问答"].map(
             (label) => (
               <NavItem key={label} disabled title="尚未实现">
                 {label}（待开放）
