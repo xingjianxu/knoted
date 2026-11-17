@@ -75,8 +75,28 @@ pub async fn enqueue(
     if exists {
         return Ok(());
     }
+    // Failed semantic work requires a manual retry, including exhausted IO
+    // retries. A new capture/scan is not a new parser budget. Legacy T46 jobs
+    // omitted these two fields; their fixed v1 identities must not silently
+    // change when a future parser/options revision changes the current values.
+    let failed: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM jobs WHERE kind=$1 AND state='failed' \
+         AND payload->>'source_id'=$2 AND payload->>'content_version'=$3 \
+         AND COALESCE(payload->>'parser_revision','rust-text-v1')=$4 \
+         AND COALESCE(payload->>'options_hash','6541278e7ee4c2460f494c6f29778d64d8fb1f81d5fe19a1ae7e4d914b60272f')=$5)",
+    )
+    .bind(EXTRACT_JOB_KIND)
+    .bind(source_id.to_string())
+    .bind(input.content_version.to_string())
+    .bind(text::PARSER_REVISION)
+    .bind(options_hash())
+    .fetch_one(&mut **tx)
+    .await?;
+    if failed {
+        return Ok(());
+    }
     let mut spec = jobs::JobSpec::new(EXTRACT_JOB_KIND);
-    // A newly captured observation can recover from a stale terminal attempt;
+    // A newly captured observation can recover from a cancelled stale attempt;
     // replay of the same receipt cannot create an unbounded retry loop.
     spec.idempotency_key = Some(format!(
         "{}:{}:{}:{}:{}:{}",
@@ -88,6 +108,8 @@ pub async fn enqueue(
         options_hash()
     ));
     spec.payload = json!(input);
+    spec.payload["parser_revision"] = json!(text::PARSER_REVISION);
+    spec.payload["options_hash"] = json!(options_hash());
     jobs::enqueue(tx, spec).await?;
     Ok(())
 }

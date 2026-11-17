@@ -25,3 +25,13 @@
 本证据不声明 PR 合入、主线验收或 dev 运行完成。
 
 最终门禁输出：`/data/knoted-dev/tasks/t46/logs/gates2.log`；Rust 完整输出 `final2-cargo-test.log`，Web 完整输出 `final2-web-test.log`。Rust 另有 1 个既有文档测试 ignored，不计为通过；Web 既有 scrollTo 提示与 build chunk 提示不影响退出码。
+
+## R1：普通补扫不能重开失败预算
+
+独立审查指出采集扫描 ID 进入幂等键，使相同来源/内容的已失败解析在普通补扫后重新排队。真实 UTF-8/NUL RED 均证实：强身份、SHA、version/content_version/observation_version 不变，captured_scan_id 变化后任务数 1→2。
+
+修复在采集入队事务按 source/content_version/parser/options 查询既有 `failed` 任务并保留终态，包括临时故障耗尽预算；不读取错误展示字符串。新任务 opaque payload 显式记录 parser_revision/options_hash，旧 T46 无字段任务映射到固定 Rust v1 身份。新内容或不同 parser/options 不受旧失败阻挡；Cancelled 旧观察仍可由新采集恢复。成功产物唯一性、发布 pointer 校验、任务重试 API 均未变更。
+
+新增真实 Runner 测试覆盖上述 UTF-8/NUL、staging 输入缺失导致的 TemporaryFailure/max_attempts=1 耗尽、新内容、不同 parser/options、旧 payload 兼容；保留已有 Cancelled→新观察成功场景。定点日志在 `/data/knoted-dev/tasks/t46/logs/round1-*.log`，最终门禁与提交见实施报告。
+
+R1 最终 Rust 门禁 `round1-gates.log`：fmt/test/clippy 均 exit 0；全 workspace 369 个顶层测试通过，另 1 个既有 IO child 通过、1 个既有 doc ignored。Web/API 字节未变，本轮不重复验证。仅 Failed 语义终态不重开；active 跨新观察的总预算与接管留 T47 设计，不声称本轮证明全局四次尝试上限。
