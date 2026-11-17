@@ -1,6 +1,6 @@
 # 架构现状
 
-截至 2026-11-17，T01—T25 已落地：Rust 2024 workspace（`crates/knoted-core` 配置/数据库/任务队列/认证内核/暂存与内部协议客户端、`crates/knoted-api` axum 服务与健康检查/认证/笔记路由、`crates/knoted-worker` 领取-心跳-提交骨架）、pnpm workspace（`apps/web` React 外壳、`packages/api-client` 生成客户端；T17 已集成 mtone）、`api/openapi.yaml` 与 `api/intelligence.openapi.yaml` 契约、`migrations/0001—0006`，以及 `services/intelligence/` 的 Python 执行服务（SQLite 账本、Docling+RapidOCR 解析、BGE-M3 dense 嵌入）。笔记文档校验、CRUD 与版本 API 已实现；笔记树移动/恢复、历史快照与Worker补存已实现；编辑器及项目/事项、文件扫描与检索、RAG 生成留待后续任务，仍按 [实施计划](../plans/knoted-v1/README.md) 逐卡推进；本页不构成 Accepted ADR。
+截至 2026-11-17，T01—T26 已落地：Rust 2024 workspace（`crates/knoted-core` 配置/数据库/任务队列/认证内核/暂存与内部协议客户端、`crates/knoted-api` axum 服务与健康检查/认证/笔记路由、`crates/knoted-worker` 领取-心跳-提交骨架）、pnpm workspace（`apps/web` React 外壳、`packages/api-client` 生成客户端；T17 已集成 mtone）、`api/openapi.yaml` 与 `api/intelligence.openapi.yaml` 契约、`migrations/0001—0007`，以及 `services/intelligence/` 的 Python 执行服务（SQLite 账本、Docling+RapidOCR 解析、BGE-M3 dense 嵌入）。笔记文档校验、CRUD 与版本 API 已实现；笔记树移动/恢复、历史快照与Worker补存、图片资产上传/鉴权读取及事务引用已实现；编辑器及项目/事项、文件扫描与检索、RAG 生成留待后续任务，仍按 [实施计划](../plans/knoted-v1/README.md) 逐卡推进；本页不构成 Accepted ADR。
 
 UI 目标已按 [ADR 0002](../decisions/0002-mtone-ui-ownership.md) 改为应用直接消费 npm `@bixlab/mtone`。**T17—T19 均已集成主线**（T17 PR #42/`e3e1db2`；T18 PR #46/`4425ab9`；T19 PR #48/`6de79a8`）：`apps/web` 当前精确消费 0.3.0 的公开 Provider/CSS（[升级记录](../plans/knoted-v1/evidence/mtone-0.3.0.md)；T17—T19 原始验收为 0.2.0），`packages/ui` cn 占位包已移除；基础表单、弹层/菜单/通知、树/游标列表/反馈通过消费端验收；生产仅新增通知 Provider 注册与应用游标 reducer。证据见 [T17](../plans/knoted-v1/evidence/t17.md)、[T18](../plans/knoted-v1/evidence/t18.md)、[T19](../plans/knoted-v1/evidence/t19.md)。业务组合/数据适配留在 apps/web；证实上游能力缺口时存档提示词、告知用户并在上游 mtone 提 Issue，见 [UI 指南](../development/ui-mtone.md)。
 
@@ -26,3 +26,5 @@ UI 目标已按 [ADR 0002](../decisions/0002-mtone-ui-ownership.md) 改为应用
 T23 的 `notes::service::{create,get,list,update,delete}` 消费 `AppContext` 与命名输入，复用 T22 文档校验；SQL 在 `notes::repository`，service 负责事务，HTTP 返回 T03 的 Note/NotePage、ETag 与统一错误。创建/软删除使用同一 notes 树事务锁维护父可见性与同级 position；未来 T24 结构写必须遵守相同锁顺序。内容更新以 ID/version/live CAS，实体注册、语义版本和 outbox 同事务。`note.changed` 当前只保留未发布事件，索引消费属后续卡；测试入口 `crates/knoted-api/tests/t23.rs`。详见 [T23证据](../plans/knoted-v1/evidence/t23.md)。
 
 HTTPS 管理归属已由 [ADR 0005](../decisions/0005-https-owned-by-caddy.md) 调整：宿主共享 Caddy 提供 15601、静态 SPA 和 API/health 代理；pcwrap 仅准备应用配置、迁移与 API，不再包含 knoted-https 或专用 reload。
+
+T24–T26 已完成页面树移动/恢复、历史快照/补存及图片资产引用。当前/回收站/快照图片引用在同一调用方事务维护，引用事务锁先于树和笔记行锁；未来T67回收须遵守同一锁顺序并读取zero_ref_at。资产以UUID路径私有发布，由ready登记与会话鉴权控制读取。实施、限制及运行证据见[T26](../plans/knoted-v1/evidence/t26-assets.md)。
