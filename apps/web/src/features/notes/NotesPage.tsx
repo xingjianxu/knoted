@@ -210,7 +210,7 @@ function NotePane({ initialNote, draftStore, bundle, notes, expired, working, on
     <NoteEditor key={`${initialNote.id}:${autosave.resetEpoch}`} document={autosave.initialDocument} readOnly={unavailable} onChange={document => { if (!pending.current && !expired) autosave.changeDraft({ document }); }}>
       <SlashMenu /><BlockMenu /><ImageBlockControls client={bundle.api} /><CodeBlockControls />
     </NoteEditor>
-    <NoteAssociations noteId={initialNote.id} api={bundle.api} readOnly={unavailable} />
+    <NoteAssociations noteId={initialNote.id} api={bundle.api} readOnly={unavailable} assertCanWrite={assertCanWrite} />
     {history && <HistoryPanel noteId={initialNote.id} bundle={bundle} disabled={unavailable} onRestore={snapshot => command(async () => {
       await autosave.restoreFromServer(async (noteId, baseVersion) => {
         const { data } = await bundle.api.raw.POST("/notes/{noteId}/snapshots/{snapshotId}/restore", { params: { path: { noteId, snapshotId: snapshot.snapshot_id } }, body: { expected_version: baseVersion } });

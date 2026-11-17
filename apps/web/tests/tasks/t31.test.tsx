@@ -365,3 +365,33 @@ it("confirmed title saves update tree labels without projecting an unsaved draft
   fireEvent.click(screen.getByRole("button", { name: "保存并记录历史" }));
   expect(await screen.findByRole("treeitem", { name: "树上的已确认标题" })).toBeInTheDocument();
 });
+
+it("association tag creation acknowledged after independent401 pauses assignment and retains the created ID for explicit retry", async () => {
+  const tagPost = deferred(); const createdTag = { id: id(98), name: "失效后保留标签", version: 1, created_at: "2026-11-17T00:00:00Z", updated_at: "2026-11-17T00:00:00Z" };
+  let created = false; let assigned = false; let expired = false;
+  intercept = (r, u) => {
+    if (r.method === "POST" && u.pathname === "/api/v1/tags") return tagPost.promise;
+    if (r.method === "PUT" && u.pathname.endsWith(`/tags/${id(98)}`)) { assigned = true; return new Response(null, { status: 204 }); }
+    if (r.method === "GET" && u.pathname.endsWith("/links") && expired) return failure(401);
+    if (r.method === "GET" && u.pathname === "/api/v1/tags") return json({ items: created ? [createdTag] : [], next_cursor: null });
+    if (r.method === "GET" && u.pathname.endsWith(`/entities/note/${id(1)}/tags`)) return json({ items: assigned ? [createdTag] : [], next_cursor: null });
+    return undefined;
+  };
+  const { bundle, router } = await mount(); const input = await title();
+  const create = await screen.findByRole("button", { name: "创建并添加标签" }); await waitFor(() => expect(create).toBeEnabled());
+  fireEvent.change(screen.getByRole("textbox", { name: "新标签名称" }), { target: { value: "失效后保留标签" } }); fireEvent.click(create);
+  await waitFor(() => expect(calls("POST", "/tags")).toHaveLength(1));
+  expired = true; await act(async () => { await bundle.api.raw.GET("/links", { params: { query: { source_type: "note", source_id: id(1) } } }).catch(() => {}); });
+  await screen.findByText("会话已失效，本地草稿已保留"); created = true;
+  await act(async () => tagPost.resolve(json(createdTag, 201)));
+  expect(calls("PUT", `/tags/${id(98)}`)).toHaveLength(0); expect(assigned).toBe(false);
+  expect(input).toHaveValue("笔记1"); expect(router.state.location.pathname).toBe(`/notes/${id(1)}`);
+  expect(screen.getByRole("button", { name: "添加已有标签" })).toBeDisabled();
+  expired = false; fireEvent.click(screen.getByRole("button", { name: "已重新登录，重试原版本" }));
+  await waitFor(() => expect(screen.queryByText("会话已失效，本地草稿已保留")).not.toBeInTheDocument());
+  const retryRead = screen.queryByRole("button", { name: "重试读取" }); if (retryRead) fireEvent.click(retryRead);
+  await waitFor(() => expect(screen.getByRole("button", { name: "添加已有标签" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "添加已有标签" }));
+  await screen.findByRole("button", { name: "移除标签 失效后保留标签" });
+  expect(calls("POST", "/tags")).toHaveLength(1); expect(calls("PUT", `/tags/${id(98)}`)).toHaveLength(1);
+});

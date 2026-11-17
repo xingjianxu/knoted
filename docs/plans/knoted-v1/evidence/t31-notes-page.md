@@ -50,3 +50,14 @@ T30 仅增加可选 `assertCanWrite(noteId)`，在实际 PATCH、history POST、
 - Vite 保留大 chunk 提示：共享编辑依赖约 629 kB、Notes lazy chunk 约 860 kB；构建成功，不在本卡扩展性能拆包任务。
 - jsdom 没有真实布局/系统 IME；既有编辑器回归与本卡 DOM 只读/实例断言不替代主 Agent 的真实浏览器消费证据。菜单和图片交互仍须在最终 HTTPS 页面验收。
 - mtone 精确发布版本为 0.3.0，核查并消费公开 Tree、Dialog、ConfirmDialog、Select、Button、Input 等能力；属于业务组合，无已证实通用能力缺口，未改上游或开重复需求。
+
+## 独立审查修复 I1：401 后阻止在途标签创建的续发关联
+
+独立审查确认，`readOnly` 只停新交互，不能中止已经启动的 async continuation：POST `/tags` 在途，另一 GET `/links` 收到 401 暂停 workspace 后，原 POST 成功仍会继续 assign PUT。修复沿用已有 writeAccess，把可选 `assertCanWrite` 传入 NoteAssociations，在每次实际 POST/PUT/DELETE 前 fresh 检查，尤其 POST 成功后的 assign。没有新增客户端、transport 或全局 guard。
+
+创建响应仍先保留 tag ID；续发被阻止时不丢 ID。真实挂载 Deferred 回归验证：独立 401 横幅后再确认 POST201，PUT 为零、当前笔记保留；明确重新登录后“添加已有标签”使用原 ID，仅发一次 PUT，POST 创建总数仍为一次。原 T32 不传 guard 的消费行为保持兼容。
+
+- RED：`i1-red.log`，exit 1，实际 PUT1 / 期望0；1 failed /31 skipped。
+- GREEN：`i1-focused-final.log`，exit 0，T31 32 条 + T32 2 条，共 34/34。
+- 完整门禁：`i1-lint.log`、`i1-typecheck-final.log`、`i1-test.log`、`i1-build.log` 全部 exit 0；12 文件/190 测试，构建 3257 modules、997ms，保留已披露 chunk 提示。命令与统一任务 TMPDIR/XDG_CACHE_HOME 前缀同上；focused 命令为 `pnpm --dir apps/web exec vitest run tests/tasks/t31.test.tsx tests/tasks/t32.test.tsx`。
+- 首次类型检查发现回归调用缺少 GET `/links` 必需查询参数，已补真实 source_type/source_id；未把类型错误当行为 RED。所有旧验证和独立审查输出保留。
