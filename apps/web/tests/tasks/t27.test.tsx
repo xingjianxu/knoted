@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useBlockNoteEditor } from "@blocknote/react";
 import { BlockNoteEditor } from "@blocknote/core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { components } from "@knoted/api-client";
@@ -7,6 +8,7 @@ import { NoteEditor } from "../../src/features/notes/editor/note-editor";
 import { fromEditorBlocks, toEditorBlocks } from "../../src/features/notes/editor/document-adapter";
 import { noteEditorSchema } from "../../src/features/notes/editor/schema";
 import { UiProvider } from "../../src/lib/ui-provider";
+import { pasteHtml, pastePlainText } from "../fixtures/editor-clipboard";
 
 type NoteDocument = components["schemas"]["NoteDocument"];
 const document: NoteDocument = { blocks: [
@@ -39,6 +41,83 @@ afterAll(() => {
 });
 
 describe("T27 BlockNote editor", () => {
+  it("rejects a repeated-fragment paste atomically, then retains subsequent typing and valid encoded links", async () => {
+    let editor!: ReturnType<typeof useBlockNoteEditor>;
+    function Probe() { editor = useBlockNoteEditor(); return null; }
+    const onChange = vi.fn();
+    const initial: NoteDocument = { blocks: [{ id: "p", type: "paragraph", content: [{ type: "text", text: "原文" }] }] };
+    const view = render(<UiProvider><NoteEditor document={initial} onChange={onChange}><Probe /></NoteEditor></UiProvider>);
+    const editable = view.container.querySelector<HTMLElement>('[contenteditable="true"]')!;
+    act(() => editor.setTextCursorPosition("p", "end"));
+    const selection = editor.prosemirrorState.selection;
+    pasteHtml(editable, '<p>不应部分插入<a href="https://example.com/#part#two">中文链接</a></p>', "不应部分插入中文链接");
+    expect(await screen.findByText(/未应用此次编辑/)).toHaveTextContent(/未应用.*原内容已保留/);
+    expect(editable).toHaveTextContent("原文");
+    expect(editable).not.toHaveTextContent("中文链接");
+    expect(editable).not.toHaveTextContent("不应部分插入");
+    expect(editor.prosemirrorState.selection.eq(selection)).toBe(true);
+    expect(onChange).not.toHaveBeenCalled();
+    act(() => editor.insertInlineContent("后续正文"));
+    expect(onChange.mock.lastCall?.[0]).toEqual({ blocks: [{ id: "p", type: "paragraph", content: [{ type: "text", text: "原文后续正文" }] }] });
+    expect(view.container.querySelector('[contenteditable="true"]')).toBe(editable);
+    expect(screen.queryByText(/未应用此次编辑/)).not.toBeInTheDocument();
+    pasteHtml(editable, '<p><a href="https://example.com/%E4%B8%AD#part%23two">有效链接</a></p>', "有效链接");
+    await waitFor(() => expect(JSON.stringify(onChange.mock.lastCall?.[0])).toContain("https://example.com/%E4%B8%AD#part%23two"));
+    expect(editable).toHaveTextContent("有效链接");
+    act(() => editor.undo());
+    expect(editable).not.toHaveTextContent("有效链接");
+    act(() => editor.redo());
+    expect(editable).toHaveTextContent("有效链接");
+    expect(JSON.stringify(onChange.mock.lastCall?.[0])).toContain("https://example.com/%E4%B8%AD#part%23two");
+  });
+
+  it("prevents a public link command from committing an unsafe URI without losing existing text", async () => {
+    let editor!: ReturnType<typeof useBlockNoteEditor>;
+    function Probe() { editor = useBlockNoteEditor(); return null; }
+    const onChange = vi.fn();
+    const view = render(<UiProvider><NoteEditor document={{ blocks: [{ id: "p", type: "paragraph", content: [{ type: "text", text: "保留正文" }] }] }} onChange={onChange}><Probe /></NoteEditor></UiProvider>);
+    act(() => editor.setTextCursorPosition("p", "end"));
+    act(() => editor.insertInlineContent([{ type: "link", href: "javascript:alert(1)", content: "危险链接" }]));
+    expect(await screen.findByText(/未应用此次编辑/)).toBeInTheDocument();
+    expect(view.container.querySelector('[contenteditable="true"]')).toHaveTextContent("保留正文");
+    expect(view.container.querySelector('[contenteditable="true"]')).not.toHaveTextContent("危险链接");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps rejection feedback on selection changes and clears it after a delete-only edit", async () => {
+    let editor!: ReturnType<typeof useBlockNoteEditor>;
+    function Probe() { editor = useBlockNoteEditor(); return null; }
+    const onChange = vi.fn();
+    render(<UiProvider><NoteEditor document={{ blocks: [{ id: "p", type: "paragraph", content: [{ type: "text", text: "保留正文" }] }, { id: "remove", type: "paragraph", content: [{ type: "text", text: "待删除" }] }] }} onChange={onChange}><Probe /></NoteEditor></UiProvider>);
+    act(() => editor.setTextCursorPosition("p", "end"));
+    act(() => editor.insertInlineContent([{ type: "link", href: "https://example.com/#part#two", content: "非法链接" }]));
+    expect(await screen.findByText(/未应用此次编辑/)).toBeInTheDocument();
+    act(() => editor.setTextCursorPosition("p", "start"));
+    expect(screen.getByText(/未应用此次编辑/)).toBeInTheDocument();
+    act(() => editor.removeBlocks(["remove"]));
+    expect(screen.queryByText(/未应用此次编辑/)).not.toBeInTheDocument();
+    expect(onChange.mock.lastCall?.[0]).toEqual({ blocks: [{ id: "p", type: "paragraph", content: [{ type: "text", text: "保留正文" }] }] });
+  });
+
+  it("rejects an auto-linked invalid plain URL and accepts an explicit plain link label instead", async () => {
+    const onChange = vi.fn();
+    const view = render(<UiProvider><NoteEditor document={{ blocks: [{ id: "p", type: "paragraph", content: [{ type: "text", text: "原文" }] }] }} onChange={onChange} /></UiProvider>);
+    const editable = view.container.querySelector<HTMLElement>('[contenteditable="true"]')!;
+    editable.focus();
+    const url = "https://example.com/#part#two";
+    pasteHtml(editable, `<p><a href="${url}">${url}</a></p>`, url);
+    expect(await screen.findByText(/未应用此次编辑/)).toBeInTheDocument();
+    pastePlainText(editable, url);
+    expect(editable).not.toHaveTextContent(url);
+    expect(screen.getByText(/未应用此次编辑/)).toHaveTextContent(/仅以纯文本粘贴链接名称文字/);
+    expect(onChange).not.toHaveBeenCalled();
+    pastePlainText(editable, "链接名称文字");
+    expect(editable).toHaveTextContent("链接名称文字");
+    expect(editable.querySelector("a")).toBeNull();
+    expect(screen.queryByText(/未应用此次编辑/)).not.toBeInTheDocument();
+    expect(JSON.stringify(onChange.mock.lastCall?.[0])).toContain("链接名称文字");
+    expect(JSON.stringify(onChange.mock.lastCall?.[0])).not.toContain('"type":"link"');
+  });
   it("t27_2: preserves all seven blocks, five marks, marked links, nesting, code whitespace and asset IDs through the real editor", () => {
     const editor = BlockNoteEditor.create({ schema: noteEditorSchema, initialContent: toEditorBlocks(document) });
     expect(fromEditorBlocks(editor.document)).toEqual(document);
