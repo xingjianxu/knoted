@@ -7,6 +7,7 @@ import App from "../../src/App";
 import { createAppRouter, safeReturnTo } from "../../src/lib/router";
 import { queryKeys } from "../../src/lib/query";
 import { UiProvider } from "../../src/lib/ui-provider";
+import { pasteHtml } from "../fixtures/editor-clipboard";
 
 type Note = components["schemas"]["Note"];
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -66,6 +67,31 @@ async function mount(path = `/notes/${id(1)}`, browser = false) {
 }
 const calls = (method: string, suffix: string) => requests.filter(r => r.method === method && new URL(r.url).pathname.endsWith(suffix));
 async function title() { return screen.findByRole("textbox", { name: "笔记标题" }); }
+
+it("clipboard rejection keeps real editor, draft copy and navigation flush consistent", async () => {
+  const { router } = await mount(); await title();
+  const pane = screen.getByRole("region", { name: "当前笔记" });
+  const editable = pane.querySelector<HTMLElement>('[contenteditable="true"]')!;
+  editable.focus();
+  pasteHtml(editable, '<p><a href="https://example.com/#part#two">中文链接</a></p>', "中文链接");
+  expect(await within(pane).findByText(/未应用此次编辑/)).toHaveTextContent(/未应用.*原内容已保留/);
+  expect(editable).toHaveTextContent("正文1"); expect(editable).not.toHaveTextContent("中文链接");
+  pasteHtml(editable, "<p>后续正文</p>", "后续正文");
+  await waitFor(() => expect(editable).toHaveTextContent("后续正文"));
+  expect(pane.querySelector('[contenteditable="true"]')).toBe(editable);
+  fireEvent.click(screen.getByRole("button", { name: "复制当前草稿" }));
+  expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("后续正文"));
+  expect(navigator.clipboard.writeText).not.toHaveBeenCalledWith(expect.stringContaining("中文链接"));
+  fireEvent.click(screen.getByRole("treeitem", { name: "笔记2" }));
+  await waitFor(() => expect(router.state.location.pathname).toBe(`/notes/${id(2)}`));
+  const written = await calls("PATCH", id(1))[0]!.json();
+  expect(JSON.stringify(written.document)).toContain("后续正文");
+  expect(JSON.stringify(written.document)).not.toContain("#part#two");
+  expect(calls("POST", `/notes/${id(1)}/snapshots`)).toHaveLength(1);
+  fireEvent.click(screen.getByRole("treeitem", { name: "笔记1" }));
+  await waitFor(() => expect(screen.getByRole("textbox", { name: "笔记标题" })).toHaveValue("笔记1"));
+  expect(screen.getByRole("region", { name: "当前笔记" })).toHaveTextContent("后续正文");
+});
 
 it("t31_tree_all_cursor_pages_and_real_branch reads 51+ notes before constructing the real Tree", async () => {
   notes = Array.from({ length: 50 }, (_, index) => note(index + 1)); const child = note(51, 1);
