@@ -31,7 +31,7 @@
 
 ## 服务约定
 
-编排有四个进程：`prepare`（校验固定产物、渲染 `knoted.toml`、准备目录、检查 API 端口）、`migrate`（一次性 `sqlx migrate run`）、`knoted-api`（127.0.0.1:15602）、`knoted-worker`（无监听端口）。API 与 Worker 均依赖 migrate 成功，重启任一进程不重跑迁移。T25 Worker 启动时立即补齐未快照的最新版本，此后每30秒检查持久化变更锚点，满五分钟保存历史；未修改不新增快照。每轮同时清理90天旧历史，保留当前版本快照。失败分类日志不含笔记正文，下一轮重试；schema 未就绪时拒绝启动，不自动迁移。HTTPS 15601 由宿主共享 `caddy.service` 提供（[ADR 0005](../../decisions/0005-https-owned-by-caddy.md)），静态网页与 /api、/health 同源；pcwrap 不再包含 HTTPS 进程或续期入口。`pnpm pc down` 保留 Caddy，API 不可用期间代理请求可能返回 502。
+编排有四个进程：`prepare`（校验固定产物、渲染 `knoted.toml`、准备目录、检查 API 端口）、`migrate`（一次性 `sqlx migrate run`）、`knoted-api`（127.0.0.1:15602）、`knoted-worker`（无监听端口）。API 与 Worker 均依赖 migrate 成功，重启任一进程不重跑迁移。T25 Worker 启动时立即补齐未快照的最新版本，此后每30秒检查持久化变更锚点，满五分钟保存历史；未修改不新增快照。每轮同时清理90天旧历史，保留当前版本快照。T37 增加独立事项回收循环：启动立即执行、每30秒重试/清理满30天的事项，先叶后父，保留稳定身份与失效关联，且不清笔记/项目；与历史维护独立，不让任一维护失败终止另一循环。启用自动物理清理前同样先停本实例写进程做一致备份，见 [T37证据](evidence/t37-lifecycle.md)。失败分类日志不含正文或数据库诊断，下一轮重试；schema 未就绪时拒绝启动，不自动迁移。HTTPS 15601 由宿主共享 `caddy.service` 提供（[ADR 0005](../../decisions/0005-https-owned-by-caddy.md)），静态网页与 /api、/health 同源；pcwrap 不再包含 HTTPS 进程或续期入口。`pnpm pc down` 保留 Caddy，API 不可用期间代理请求可能返回 502。
 
 共享 Caddy 的静态根为 `/data/knoted-dev/runtime/current/share/knoted/web`，应用更新仍校验固定产物、原子切换 current、重启 API 和 Worker；无需修改 host pin 或 reload Caddy。修改域名/端口则同时更新 host vhost 和应用 Passkey origin。原 `X-Knoted-Revision` 固定响应头不再注入；运行版本用 `readlink -f /data/knoted-dev/runtime/current`、`cat /data/knoted-dev/runtime/current/share/knoted/REVISION`、完整 `SHA256SUMS` 和 API/Worker 可执行路径核对。
 

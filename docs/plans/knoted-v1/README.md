@@ -1,6 +1,6 @@
 # Knoted v1 文档与实施任务入口
 
-> 产品实施采用实际可用的 executing-plans 或 subagent-driven-development。当前 T01—T26 已完成、审查并集成到主线（T17 为 PR #42 / `e3e1db2`；T18 为 PR #46 / `4425ab9`；T19 为 PR #48 / `6de79a8`；T22 为 PR #58 / `8d4a472`）；T27—T36 也已完成并通过主线与适用实例验收（T36 为 PR #110 / `f26af66`）；T37—T72 仍待领取。
+> 产品实施采用实际可用的 executing-plans 或 subagent-driven-development。当前 T01—T26 已完成、审查并集成到主线（T17 为 PR #42 / `e3e1db2`；T18 为 PR #46 / `4425ab9`；T19 为 PR #48 / `6de79a8`；T22 为 PR #58 / `8d4a472`）；T27—T37 也已完成并通过主线与适用实例验收（T36 为 PR #110 / `f26af66`；T37 为 PR #115 / `1b37e55`）；T38—T72 仍待领取。
 
 ## 阅读顺序
 
@@ -63,7 +63,7 @@
 | [T34](tasks/T34.md) | 事项与单层子任务 | T33 | completed |
 | [T35](tasks/T35.md) | 状态优先级与日期 | T34 | completed |
 | [T36](tasks/T36.md) | 跟进时间线与历史 | T35 | completed |
-| [T37](tasks/T37.md) | 事项归档和回收站 | T36, T08 | pending |
+| [T37](tasks/T37.md) | 事项归档和回收站 | T36, T08 | completed（PR [#115](https://github.com/xingjianxu/knoted/pull/115)，主线/dev `1b37e55`；[证据](evidence/t37-lifecycle.md)） |
 | [T38](tasks/T38.md) | 项目页面 | T33, T20 | pending |
 | [T39](tasks/T39.md) | 事项页面和编辑 | T35, T37, T38 | pending |
 | [T40](tasks/T40.md) | 看板和时间线 | T36, T39 | pending |

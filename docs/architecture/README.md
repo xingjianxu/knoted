@@ -1,12 +1,12 @@
 # 架构现状
 
-截至 2026-11-17，T01—T36 已落地：Rust 2024 workspace（`crates/knoted-core` 配置/数据库/任务队列/认证内核/暂存与内部协议客户端、`crates/knoted-api` axum 服务与健康检查/认证/笔记/标签关联/项目/事项路由、`crates/knoted-worker` 领取-心跳-提交骨架）、pnpm workspace（`apps/web` React 外壳与笔记编辑/树/历史页面、`packages/api-client` 生成客户端；T17 已集成 mtone）、`api/openapi.yaml` 与 `api/intelligence.openapi.yaml` 契约、`migrations/0001—0011`，以及 `services/intelligence/` 的 Python 执行服务（SQLite 账本、Docling+RapidOCR 解析、BGE-M3 dense 嵌入）。笔记文档校验、CRUD 与版本 API 已实现；笔记树移动/恢复、历史快照与Worker补存、图片资产上传/鉴权读取及事务引用已实现；BlockNote 编辑、自动保存与冲突保稿、笔记树/只读历史、标签关联、项目与事项 API、终态约束与上海时区日期计算、事项跟进备注与不可改写系统事件已实现；项目/事项页面、文件扫描与检索、RAG 生成留待后续任务，仍按 [实施计划](../plans/knoted-v1/README.md) 逐卡推进；本页不构成 Accepted ADR。
+截至 2026-11-17，T01—T37 已落地：Rust 2024 workspace（`crates/knoted-core` 配置/数据库/任务队列/认证内核/暂存与内部协议客户端、`crates/knoted-api` axum 服务与健康检查/认证/笔记/标签关联/项目/事项路由、`crates/knoted-worker` 领取-心跳-提交骨架）、pnpm workspace（`apps/web` React 外壳与笔记编辑/树/历史页面、`packages/api-client` 生成客户端；T17 已集成 mtone）、`api/openapi.yaml` 与 `api/intelligence.openapi.yaml` 契约、`migrations/0001—0011`，以及 `services/intelligence/` 的 Python 执行服务（SQLite 账本、Docling+RapidOCR 解析、BGE-M3 dense 嵌入）。笔记文档校验、CRUD 与版本 API 已实现；笔记树移动/恢复、历史快照与Worker补存、图片资产上传/鉴权读取及事务引用已实现；BlockNote 编辑、自动保存与冲突保稿、笔记树/只读历史、标签关联、项目与事项 API、终态约束与上海时区日期计算、事项跟进备注与不可改写系统事件、事项归档/恢复和 30 天安全回收已实现；项目/事项页面、文件扫描与检索、RAG 生成留待后续任务，仍按 [实施计划](../plans/knoted-v1/README.md) 逐卡推进；本页不构成 Accepted ADR。
 
 UI 目标已按 [ADR 0002](../decisions/0002-mtone-ui-ownership.md) 改为应用直接消费 npm `@bixlab/mtone`。**T17—T19 均已集成主线**（T17 PR #42/`e3e1db2`；T18 PR #46/`4425ab9`；T19 PR #48/`6de79a8`）：`apps/web` 当前精确消费 0.4.0 的公开 Provider/CSS（[升级记录](../plans/knoted-v1/evidence/mtone-0.4.0.md)；T17—T19 原始验收为 0.2.0），`packages/ui` cn 占位包已移除；基础表单、弹层/菜单/通知、树/游标列表/反馈通过消费端验收；生产仅新增通知 Provider 注册与应用游标 reducer。证据见 [T17](../plans/knoted-v1/evidence/t17.md)、[T18](../plans/knoted-v1/evidence/t18.md)、[T19](../plans/knoted-v1/evidence/t19.md)。业务组合/数据适配留在 apps/web；证实上游能力缺口时存档提示词、告知用户并在上游 mtone 提 Issue，见 [UI 指南](../development/ui-mtone.md)。
 
 | 边界 | 责任 |
 |---|---|
-| `crates/` | Rust workspace：core（配置/数据库/`jobs`/`auth`/`files::staging`/`intelligence` 客户端、`notes` 文档校验与事务服务、`links` 标签/关联、`projects` 项目生命周期、`tasks` 单层事项/终态/日期/跟进备注与系统事件）、api（axum 路由、`middleware` request_id/认证、`admin` CLI）、worker（runner 骨架） |
+| `crates/` | Rust workspace：core（配置/数据库/`jobs`/`auth`/`files::staging`/`intelligence` 客户端、`notes` 文档校验与事务服务、`links` 标签/关联、`projects` 项目生命周期、`tasks` 单层事项/终态/日期/跟进备注与系统事件/生命周期）、api（axum 路由、`middleware` request_id/认证、`admin` CLI）、worker（runner 骨架、历史补存和事项回收维护） |
 | `apps/`、`packages/` | React 前端直接消费 mtone，BlockNote 仅作笔记编辑核心，应用组合目录/草稿/历史/关联、OpenAPI 生成客户端；无本地通用 UI 包 |
 | `api/`、`migrations/` | 浏览器与内部契约、数据库迁移（`0001` registry、`0002` jobs/outbox、`0003` auth、`0004` job retry、`0005` notes、`0006` history、`0007` assets、`0008` tags/links、`0009` projects、`0010` tasks、`0011` activities） |
 | `services/intelligence/` | Python（uv 管理，Python 3.12）：受控执行服务、SQLite 执行账本、离线解析/嵌入适配；不接触业务数据库与源目录 |
@@ -32,5 +32,7 @@ T24–T26 已完成页面树移动/恢复、历史快照/补存及图片资产�
 T27—T31 的编辑器只在每次挂载时读取正文，应用以 `noteId:resetEpoch` 为 key；新挂载从保留会话的当前草稿初始化，普通自动保存与 Query 刷新不重建实例。草稿由 Notes 工作区拥有，Query 只保存服务器状态；后台更新只提示，显式加载/历史恢复才整体替换草稿和 CAS。移动与恢复使用完整请求屏障，导航先保存/补快照，退出先安全离开再撤会话；已初始化笔记遇401时保留可复制草稿并暂停后续写入。目录读完全部游标页后按真实父子关系组树；历史是真正只读的独立编辑器。
 
 T32 的分类型标签/关联表复用 registry 稳定身份，再以实际业务表核实可见性；归档可读、写受限，删除或文件失踪后保留目标 UUID。T33—T35 项目/事项关系写先取现有 `33001/projects OID` 事务锁稳定发现集合，再将项目与事项行按全局 UUID 顺序锁定；CAS、级联版本和 outbox 同事务。父事项只有一层子项；父换项目同步直属子，存活归档或历史错配子拒绝，已删除子仅迁关系/版本而不复活。父 done 要求全部存活子 done/cancelled，创建、重开与换父共同验证完整最终状态。DateValue 原样保存，使用 IANA Asia/Shanghai 解释本地边界并拒绝歧义/不存在时刻；日期型截止取下一本地日午夜，逾期计算注入时钟，不增加存储派生字段。实现与集成证据见 [T27—T35](../plans/knoted-v1/evidence/t27-t35-integration.md)。
+
+T37 的 `tasks::lifecycle` 复用关系锁、CAS 和 `task.changed` outbox；归档单项且不级联、仍可读，父/项目只读封闭正文、跟进、标签和 source-link 写入口。恢复保留当前父/项目并重验终态约束，父已删时先恢复父。Worker 启动及每 30 秒独立执行 task-only 清理：满 30 天叶子先删、尚存子行阻止父清理，时间线和 tag 绑定同事务清除，保留 registry/失效 links/shared tags/outbox；不引入迁移或虚构搜索投影。证据见 [T37](../plans/knoted-v1/evidence/t37-lifecycle.md)。
 
 编辑输入使用公开onBeforeChange的候选事务tr.doc，在块ID分配前检查实际链接标记，复用原URI校验；不依赖getChanges将临时节点转换为Block。无法保存的URI整次拒绝并反馈，原文/选区保留，后续有效编辑继续进入草稿。实现与真实剪贴板/正常建块验收见[T27恢复证据](../plans/knoted-v1/evidence/t27-clipboard-recovery.md)。
