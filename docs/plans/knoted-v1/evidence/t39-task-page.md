@@ -1,8 +1,8 @@
 # T39 事项页面和编辑实施证据
 
 - Issue：[#120](https://github.com/xingjianxu/knoted/issues/120)。用户直接委派，主 Agent 协调串行实施和独立审查。
-- 基线：`b496d89`；工作区 `/wrd/prj/knoted/.worktrees/knoted-t39`，分支 `feat/t39`。
-- 状态：本卡实施和本地验证完成，**待独立审查、主 Agent 集成与 dev 部署验收**；不声称已完成生命周期。
+- 基线：`b496d89`；实施工作区 `/wrd/prj/knoted/.worktrees/knoted-t39` 与分支 `feat/t39` 已于交付后安全清理。
+- 状态：done（PR [#123](https://github.com/xingjianxu/knoted/pull/123)，主线 `bbdef36`，dev `bbdef36`；主线验证、实例验收和任务工作区清理完成）。
 - Brief：`/wrd/prj/knoted/.worktrees/knoted-t39-t50-plan/.superpowers/sdd/2026-11-17-t39-t50/task-39-brief.md`。
 - 实施报告：`/data/knoted-dev/tasks/t39-t50/reports/t39-implementation.md`。
 
@@ -46,7 +46,9 @@ DateValue 原样保留 `{date,time,timezone:"Asia/Shanghai"}`。前端使用 Int
 
 测试场景除卡片三项外，还覆盖：独立/项目/子事项创建、清空日期及父关系、刷新失败继续保护冲突草稿、删除取消不发请求、归档/取消归档、删除成功关闭详情、父和项目归档只读、安全深链及纯日期/历史偏移/非法日期时间边界。网络通过内存 HTTP 边界替身，页面、mtone、RHF/Zod、查询和生成客户端均为真实实现；后端日期验证使用真实 HTTP 路由及隔离 PostgreSQL schema。
 
-## 限制与交接
+## 实施子 Agent 交接时的限制
+
+以下是集成前的历史记录，最终交付见“主 Agent 集成、实例与收尾”。
 
 - Web 测试出现与基线一致的 jsdom `Window.scrollTo` 未实现提示；构建提示已有大块资源及外部 outDir 不自动清空，不影响退出码。未修改依赖或掩盖警告。
 - 本地消费测试不等于真实浏览器/HTTPS dev 验收。dev 运行 SHA、部署和主线全门禁由主 Agent 完成并回写。
@@ -67,4 +69,17 @@ DateValue 原样保留 `{date,time,timezone:"Asia/Shanghai"}`。前端使用 Int
 | `pnpm --filter @knoted/web lint` | 0 | 无错误或警告 | `fix1-lint.log` |
 | `pnpm --filter @knoted/web build --outDir /data/knoted-dev/tasks/t39/build/web` | 0 | 通过，保留原有大块资源/outDir提示 | `fix1-build.log` |
 
-Rust 文件未再变化，本轮未重跑 Rust；上一轮实测结果保留。待主 Agent 限定复审与集成，未新增部署声明。
+Rust 文件未再变化，本轮未重跑 Rust；上一轮实测结果保留。该修复交接时待主 Agent 限定复审与集成；最终复审及部署结果见下节。
+
+## 主 Agent 集成、实例与收尾
+
+- PR [#123](https://github.com/xingjianxu/knoted/pull/123) 普通 merge，主线 `bbdef3674d7b5cae1afd75e6da03a223669e6390`；包含实施 `a8e1d74` 与 I1 修复 `38816e8`。Issue #120 由关闭关系自动关闭。
+- 独立初审发现 I1：Query 普通刷新更新版本而旧草稿仍在，可能静默覆盖远端字段；已用有效 RED 重现，绑定草稿/baseVersion，限定复审 I1 ADDR / Spec PASS / Quality APPROVE，无剩余重要问题。
+- 主 Agent 独立分支验证：Rust255 passed / 1既有ignored、Web最终223 passed；fmt/clippy/typecheck/lint/build全部exit0。I1只改Web，Rust源码差异检查为空。
+- 主线复跑实际结果（`/data/knoted-dev/tasks/t39/logs/main-*.log`）：cargo fmt --check、cargo test --workspace --locked（255 passed / 0 failed / 1 ignored）、cargo clippy --locked --all-targets -- -D warnings、Web typecheck/lint/test（14文件223 passed）/build全部exit0。
+- 固定产物 `/data/knoted-dev/runtime/bbdef3674d7b5cae1afd75e6da03a223669e6390` 从已提交主线archive构建，完整SHA256SUMS通过（`build-artifact.log`）。
+- 本卡无迁移，schema保持11。部署前停本实例API/Worker并确认旧PID退出，一致备份 `/data/knoted-dev/service/backups/20261117T150212Z-t39-`（pg_dump/assets/摘要和pg_restore --list均校验）；随后原子切current并pcwrap down/up。HTTPS ready200，API/Worker真实可执行路径指向固定SHA，共享PG/Caddy/Strata PID前后一致（`deploy.log`、`runtime-{before,after}.json`）。
+- 真实HTTPS Chromium，无route拦截：`live-browser.log` exit0，deep_link、invalid_date_front_and_backend、parent_project_inheritance、ordinary_refresh_cannot_bypass_cas、conflict_preserved_and_retry、independent_create、switch_no_leak均true，cleanup_ok=true、passkey_count_stable=true。先制造远端更新，再普通刷新列表，旧草稿保存实际409且远端说明保留；显式刷新后可成功重试。
+- 夹具仅通过API创建/软删项目和事项，临时会话已撤销；最终读回活跃项目0、活跃事项0、未撤销验收会话0、Passkey1（前后不变）。未运行硬件Passkey验证。
+- 任务工作区 `.worktrees/knoted-t39` 干净，分支为主线祖先后安全移除并 `git branch -d feat/t39`。仅本任务生成dist移到任务日志区，包缓存无需保留；未触碰他人 `feat-https-shared-caddy` 工作区。
+- dev运行 `bbdef36`；此后的纯证据文档PR不改变运行产物。
