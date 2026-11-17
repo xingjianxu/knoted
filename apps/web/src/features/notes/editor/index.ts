@@ -5,3 +5,5 @@ export { fromEditorBlocks, toEditorBlocks } from "./document-adapter";
 export type { NoteDocument } from "./document-adapter";
 export { noteEditorSchema } from "./schema";
 export type { NoteEditorInstance } from "./schema";
+
+export { SlashMenu, BlockMenu } from "./menus";
