@@ -30,7 +30,7 @@ pub fn is_overdue(task: &Task, now: DateTime<Utc>) -> Result<bool, DomainError> 
     }
 }
 
-fn date_boundary(d: &DateValue, due: bool) -> Result<DateTime<Utc>, DomainError> {
+pub(crate) fn date_boundary(d: &DateValue, due: bool) -> Result<DateTime<Utc>, DomainError> {
     let invalid = || DomainError::InvalidField("start/due");
     if d.timezone != "Asia/Shanghai"
         || d.date.len() != 10

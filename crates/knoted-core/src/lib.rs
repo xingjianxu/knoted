@@ -4,6 +4,7 @@ pub mod assets;
 pub mod auth;
 pub mod config;
 pub mod context;
+pub mod dashboard;
 pub mod db;
 pub mod files;
 pub mod intelligence;
