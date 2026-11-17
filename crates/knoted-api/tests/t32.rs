@@ -156,9 +156,13 @@ async fn t32_3_tag_crud_and_entity_association_are_idempotent_and_undoable() {
 
 impl Harness {
     async fn fixture(&self, kind: &str) -> Uuid {
-        if kind == "project" {
+        if kind == "project" || kind == "task" {
             let (s, _, p) = self
-                .send("POST", "/api/v1/projects", json!({"title":"fixture"}))
+                .send(
+                    "POST",
+                    &format!("/api/v1/{kind}s"),
+                    json!({"title":"fixture"}),
+                )
                 .await;
             assert_eq!(s, StatusCode::CREATED, "{p}");
             return p["id"].as_str().unwrap().parse().unwrap();
@@ -172,10 +176,6 @@ impl Harness {
             .await
             .unwrap();
         match kind {
-            "task" => {
-                sqlx::query("INSERT INTO tasks(id,status,created_at,updated_at) VALUES($1,'todo',now(),now())")
-                    .bind(id).execute(&mut *tx).await.unwrap();
-            }
             "file" => {
                 sqlx::query("CREATE TABLE IF NOT EXISTS file_sources(id uuid PRIMARY KEY REFERENCES entity_registry(id),status text NOT NULL DEFAULT 'present',relative_path text NOT NULL DEFAULT '資料/report.md')").execute(&mut *tx).await.unwrap();
                 sqlx::query("INSERT INTO file_sources(id) VALUES($1)")
