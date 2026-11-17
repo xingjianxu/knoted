@@ -1,5 +1,7 @@
 # T44 稳定副本与版本实施
 
+状态：done（实现 PR [#146](https://github.com/xingjianxu/knoted/pull/146)、修复 PR [#147](https://github.com/xingjianxu/knoted/pull/147)，最终主线/dev `9160def2a0f178243ba03d4c38f2b04dd0ace897`）。以下保留实施、初次验收和修复历史；最终集成见文末。
+
 Issue #129；实施基线 c7d3ef5fe8ec817731c680314b71246a1eee4487；全卡审查基线 348003a53307cd416207d5fd0e899204ceda34a0。
 独立 worktree `.worktrees/knoted-t44` / `feat/t44`。父 Agent 负责审查、集成和 dev 更新。
 
@@ -7,7 +9,7 @@ Issue #129；实施基线 c7d3ef5fe8ec817731c680314b71246a1eee4487；全卡审�
 - [x] RED/GREEN：稳定采集、流式限额、安全路径、取消、发布竞争及 Worker 运行链。
 - [x] 完整 Rust 格式、测试与 Clippy 门禁。
 - [x] 安全提交、报告交接（提交 SHA 见外部交接报告）。
-- [ ] 父 Agent 独立审查、集成与 dev 验收。
+- [x] 父 Agent 独立审查、集成与 dev 验收。
 
 实现决策：当前完整扫描授权采集；不完整扫描仅失效，不推断 missing/move。每块同步读取/写入后 await yield，不派生 blocking task；Future 丢弃同步关闭并清理未发布对象。闭合对象进入 DB commit 之前进入保留状态，避免取消或提交响应丢失时删除可能已被引用对象。
 
@@ -48,7 +50,7 @@ T46/T47 必须同时校验 present、content_fresh、当前 observation_version 
 
 `cargo test -p knoted-core --test t44 t44_no_handle_same`：真实 RED exit101（Changed），完整一致的无 handle 夹具在 `red-receipt-consistent.log`；GREEN 见 `green-receipt.log`（26通过，含 receipt 与早先回归）。最终另补不同 scan 的无 handle 来源与 staging symlink，不以重放绕过身份限制。没有新增公有确认字段或 attempt 表。
 
-## 最终验证与交接
+## 初次实施验证与交接（历史）
 
 状态：implementation-ready，待主 Agent 独立审查、合并及 dev 验收。未改依赖/锁/API/README，未迁移 dev、初始化实际根、push/PR/merge 或修改共享服务。
 
@@ -96,3 +98,33 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 | `cargo clippy --locked --all-targets -- -D warnings` | exit0，Finished dev profile in 6.30s | `round1-clippy.log` / `.exit` |
 
 `round1-target-counts.json` 保留逐target统计，IO子进程额外的1个result行不计入顶层324。修改仅 capture.rs、t44.rs 与本文；未重复未修改的 Web/API/pc。修复基线 `3c62902ec503709ad63d9e95319de915b3628af1`，限定复审基线仍可使用原 review head `e3ff6a1803bcab63a9cea7bc74d3542adf699c38`。提交SHA见追加交接报告；状态为待父 Agent 限定复审、followup PR 和安全 dev 重新验收，不宣称已完成生命周期。
+
+## 主 Agent 最终集成与实例验收
+
+- 契约 `c7d3ef5fe8ec817731c680314b71246a1eee4487`、实现 `e3ff6a1803bcab63a9cea7bc74d3542adf699c38` 经 PR [#146](https://github.com/xingjianxu/knoted/pull/146) 合并至 `3c62902ec503709ad63d9e95319de915b3628af1`。独立初审 Spec PASS / Quality APPROVE。运行验收进一步发现 P1：观察失效的 version2 被后续新 SHA/content_version2 沿用；真实断言 exit1，未以原先基础检查通过掩盖这个缺口。
+- 修复 `7b8eb78d346bedbdf3c06f24eb82ae8a1c5d97fb` 经限定复审 P1 ADDRESSED、Spec PASS / Quality APPROVE，无新问题，通过 PR [#147](https://github.com/xingjianxu/knoted/pull/147) 普通合入最终主线 `9160def2a0f178243ba03d4c38f2b04dd0ace897`，dev 运行同一 SHA。Issue #129 在验收发现缺口后重开，再由修复 PR 关闭。审查报告 `/data/knoted-dev/tasks/t39-t50/reviews/t44-{task,round1}-review.md`；父 Agent 发现记录 `t44-parent-finding.md`。
+- 主 Agent 独立完整 Rust 检查及最终主线复验均 exit0：324 顶层 passed / 0 failed / 1 既有 doc ignored，另有1次真实 IO 子进程 passed；fmt/clippy all-targets -D warnings exit0。最终卡命令31顶层（core29+worker2）另1次IO子进程，不能简单把原始日志中额外result行双计为325顶层。日志 `parent-fix1-*`、`main-fix1-*`；统计工具 `/data/knoted-dev/tasks/t39-t50/tools/count-rust.py` 按每个Cargo target末次result与子进程分开计算。
+- 初次实现的 API/Web 最终字节由父 Agent 在有依赖的协调 Worktree独立检查，实际 git diff --quiet 证明与实施 Worktree对应字节相同；初次主线再次完整检查：Web248、typecheck/lint/build、api:check（83 operations/22 examples/11 invalid rejected）、api:verify均exit0。P1仅三个文件变更，实际确认API/Web/pc/依赖锁字节与已验3c相同，故未重复不受影响套件；既有3条router scrollTo提示#143、大编辑器chunk提示如实保留。pc脚本未改，未把T43的pc24冒称本卡新执行。
+- 初次固定产物3c通过完整SHA256SUMS，停本实例API/Worker写进程后备份 `/data/knoted-dev/service/backups/20261117T183224Z-t44-`，应用新增0013至schema13。P1固定产物916同样完整校验通过，停写备份 `/data/knoted-dev/service/backups/20261117T185633Z-t44-` 后切换，schema仍13、没有改写已应用迁移。两次备份均验证摘要与pg_restore --list。最终日志 `build-artifact-fix1.log`、`deploy-fix1.log`、`runtime-after.json`；HTTPS ready200，实际API/Worker exe为916固定产物，PostgreSQL/Caddy/Strata MainPID未变。
+- 原始P1运行证据、四阶段快照、manifest及初次部署/浏览器日志保留在 `/data/knoted-dev/tasks/t44/evidence/pre-version-fix/`；`parent-semantic-version-red.log` 与 `.exit=1` 保留。没有物理删除原来源来伪造干净结果。
+- 最终使用全新专用 `agent-fixtures/t44/<UUID>/capture.txt` 重新验收，无HTTP mock、没有手工入队冒充实际dispatcher。闭合input通过安全FD流式重算SHA/size，不打印input对象地址。首次56B、稳定重扫不增版本；同一强身份文件改为77B后先观察失效 version2/content1，再发布 version3/content2，来源ID不变、SHA正确、捕获观察与当前观察一致；新版本断言最终 exit0。最后删除自己的样本，应用完整扫描置 missing/version4/content2，不伪装成物理删除记录。
+
+```json
+{"schema":13,"root_generation":20,"last_complete_generation":20,"root_paused":null,"idle":true,"id":"002d3d04-7da6-4f88-a476-f59adc16441b","version":1,"content_version":1,"sha256":"98046beed0fb40ea8098725de01e1961eadd3dd462b22fd21f74a40c6bc5a2ac","size":56,"status":"present","fresh":true,"observation_version":1,"captured_observation_version":1,"captured_matches":true,"strong_identity_recorded":true,"own_capture_successes":1,"own_capture_failures":0,"closed_input_verified":true,"observed_invalidated_before_republish":null,"invalidation_version":null,"phase":"captured","result":"passed"}
+```
+
+```json
+{"schema":13,"root_generation":21,"last_complete_generation":21,"root_paused":null,"idle":true,"id":"002d3d04-7da6-4f88-a476-f59adc16441b","version":1,"content_version":1,"sha256":"98046beed0fb40ea8098725de01e1961eadd3dd462b22fd21f74a40c6bc5a2ac","size":56,"status":"present","fresh":true,"observation_version":1,"captured_observation_version":1,"captured_matches":true,"strong_identity_recorded":true,"own_capture_successes":2,"own_capture_failures":0,"closed_input_verified":true,"observed_invalidated_before_republish":null,"invalidation_version":null,"phase":"unchanged","result":"passed"}
+```
+
+```json
+{"schema":13,"root_generation":22,"last_complete_generation":22,"root_paused":null,"idle":true,"id":"002d3d04-7da6-4f88-a476-f59adc16441b","version":3,"content_version":2,"sha256":"8c034acb63a7cf965ac9341104c06fbe7f3f75fbdf5734615caff1cf5b33fdff","size":77,"status":"present","fresh":true,"observation_version":2,"captured_observation_version":2,"captured_matches":true,"strong_identity_recorded":true,"own_capture_successes":3,"own_capture_failures":0,"closed_input_verified":true,"observed_invalidated_before_republish":true,"invalidation_version":2,"phase":"changed","result":"passed"}
+```
+
+```json
+{"schema":13,"root_generation":23,"last_complete_generation":23,"root_paused":null,"idle":true,"id":"002d3d04-7da6-4f88-a476-f59adc16441b","version":4,"content_version":2,"sha256":"8c034acb63a7cf965ac9341104c06fbe7f3f75fbdf5734615caff1cf5b33fdff","size":77,"status":"missing","fresh":false,"observation_version":2,"captured_observation_version":2,"captured_matches":true,"strong_identity_recorded":true,"own_capture_successes":3,"own_capture_failures":0,"closed_input_verified":null,"observed_invalidated_before_republish":null,"invalidation_version":null,"phase":"cleaned","result":"passed"}
+```
+
+- 真实HTTPS Chromium概览验收 exit0：`registered_file_count_matches_dashboard=true`、`passkey_count_stable=true`、`session_revoked=true`（`dashboard-browser-fixed.log`）。只证明已登记来源计数和当前阶段UI，未提前宣称文件浏览/解析已完成。
+- 最终清理回读：present_sources=0、missing_sources=2（初次及修复后专用样本历史）、本次验收未撤销会话0、Passkey1、staging `.part` 0。成功发布/可能被引用的闭合对象按应用语义保留，未手工删除缓存或身份；回收器属后续卡。自己的源样本已清理，批准根与已登记身份保留。
+- 2026-11-18 主 Agent 确认 `.worktrees/knoted-t44` tracked/untracked clean、feat/t44为最终master祖先后，安全删除任务Worktree及本地分支，保留协调与他人Worktree。
