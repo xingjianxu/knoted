@@ -7,3 +7,5 @@ export { noteEditorSchema } from "./schema";
 export type { NoteEditorInstance } from "./schema";
 
 export { SlashMenu, BlockMenu } from "./menus";
+export { ImageBlockControls, CodeBlockControls } from "./blocks";
+export type { ImageBlockControlsProps } from "./blocks";
