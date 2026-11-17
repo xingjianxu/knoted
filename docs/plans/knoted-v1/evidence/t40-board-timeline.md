@@ -2,9 +2,9 @@
 
 - 日期：2026-11-17；Issue：[#124](https://github.com/xingjianxu/knoted/issues/124)。
 - 基线：`bbdef3674d7b5cae1afd75e6da03a223669e6390`（T39 PR #123），Web 基线 223 项测试。
-- Worktree：`/wrd/prj/knoted/.worktrees/knoted-t40`；分支：`feat/t40`。
+- 实施 Worktree：`/wrd/prj/knoted/.worktrees/knoted-t40`；分支：`feat/t40`（均已安全清理）。
 - 范围：TaskBoard、ActivityTimeline、TasksPage 业务接线、T40 测试与本卡证据。依赖/锁、OpenAPI、后端、README 主状态均未改。
-- 当前阶段：本卡实施和前端门禁完成；独立审查、PR/主线集成、dev 更新与真实 HTTPS 浏览器验收交主 Agent，尚未完整交付。
+- 当前阶段：done（PR [#136](https://github.com/xingjianxu/knoted/pull/136)，主线 `aee7c2e`，dev `aee7c2e`；审查、实例验收和任务工作区清理完成）。
 
 ## UI 与业务行为
 
@@ -61,8 +61,24 @@ exit 0
 
 测试环境有既存 JSDOM `Window.scrollTo()` 未实现提示，测试全部通过；生产构建有既存 chunk 超过 500 kB 提示，不影响 build exit 0。没有因此放宽检查。Rust 文件未改，本实施 Agent 按委派不重复 Rust 门禁；主 Agent 在集成前独立执行完整门禁。
 
-## 交接与限制
+## 实施子 Agent 交接时的限制
+
+以下保留集成前的历史记录，最终交付见下节。
 
 - 实际接口：`PATCH /tasks/{taskId}`、`GET/POST /tasks/{taskId}/activities`、`PATCH/DELETE /tasks/{taskId}/activities/{activityId}`、`GET .../revisions`；均消费已生成的 DTO。
 - 未修改宿主/服务/数据库/生产；未 push、创建 PR、合并或清理分支/Worktree。
 - 浏览器原生 drag/drop、键盘、页面视觉和真实认证 HTTP 验收仍须主 Agent 在 dev 固定 SHA 验证；本证据不把 JSDOM 模拟拖放等同于浏览器验收。
+
+
+## 主 Agent 集成、实例与收尾
+
+- PR [#136](https://github.com/xingjianxu/knoted/pull/136) 普通 merge，主线 `aee7c2eb5f2ff40805b069d24d6a8b57665acf8d`，包含实施 `54a09d9`。Issue #124自动关闭。
+- fresh独立review_t40结论 Spec PASS / Quality APPROVE，无Critical/Important/Minor。
+- 主Agent独立Rust门禁 fmt/test/clippy全部exit0，255 passed / 1既有ignored；Rust源码与root `bfeb8ab`一致性由git diff --exit-code确认。独立Web typecheck/lint/test（15文件234 passed）/build全部exit0（`/data/knoted-dev/tasks/t40/logs/parent-*.log`）。
+- 主线受影响Web typecheck/lint/test234/build全部exit0（`main-*.log`）；Rust与上述已验证源码一致，无新增Rust改动，未无故重复完整Rust门禁。
+- 已提交主线archive构建固定产物 `/data/knoted-dev/runtime/aee7c2eb5f2ff40805b069d24d6a8b57665acf8d`，完整SHA256SUMS校验通过（`build-artifact.log`）。
+- 无迁移，schema保持11。停本实例API/Worker并确认旧PID退出后，一致备份 `/data/knoted-dev/service/backups/20261117T152841Z-t40-`（PG/assets/摘要及pg_restore目录校验），原子切current并pcwrap down/up；HTTPS ready200，真实API/Worker路径固定到该SHA，共享PG/Caddy/Strata PID前后一致（`deploy.log`、`runtime-{before,after}.json`）。
+- 真实HTTPS Chromium无路由拦截：`live-browser.log` exit0；native_drag_failure_rollback、native_drag_success、keyboard_status_and_focus、manual_create_system_readonly、manual_edit_and_revisions、activity_draft_cas_and_retry、deleted_marker_history_only、switch_no_leak、passkey_count_stable均true，cleanup_ok=true。包含真实父完成门槛409与原列回滚，Alt方向键不触发浏览器返回且焦点随卡片移动，普通刷新后的跟进草稿仍受CAS保护，删除正文仅在显式历史中展示。
+- 首次浏览器运行 `timeline-create` 阶段因测试选择器同时匹配输入textarea和已发布p而strict mode失败（`live-browser-first.log`）；边界证据确认POST成功和正文已显示，限定正文段落选择器后同脚本通过。未改产品代码或跳过验收。
+- 夹具仅通过API创建/软删事项和跟进，临时会话已撤销。最终读回活跃事项0、未撤销验收会话0、Passkey1（前后不变），未做硬件Passkey ceremony。
+- `.worktrees/knoted-t40`干净且feat/t40为主线祖先后安全移除，分支-d删除；任务缓存留在其授权/data目录，他人worktree保留。后续纯文档提交不改变dev运行SHA。
