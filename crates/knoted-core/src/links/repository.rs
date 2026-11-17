@@ -140,11 +140,20 @@ pub(super) async fn change_tag(
     } else {
         format!("DELETE FROM {table} WHERE entity_id=$1 AND tag_id=$2")
     };
-    sqlx::query(&sql)
+    let changed = sqlx::query(&sql)
         .bind(input.entity.id)
         .bind(input.tag_id)
+        .execute(&mut *c)
+        .await?
+        .rows_affected();
+    if changed > 0 && input.entity.entity_type == EntityType::File {
+        sqlx::query(
+            "UPDATE file_sources SET version=version+1,updated_at=clock_timestamp() WHERE id=$1",
+        )
+        .bind(input.entity.id)
         .execute(c)
         .await?;
+    }
     Ok(())
 }
 pub(super) async fn insert_link(
@@ -177,4 +186,61 @@ pub(super) async fn remove_link(c: &mut PgConnection, id: Uuid) -> Result<(), sq
         .execute(c)
         .await?;
     Ok(())
+}
+
+/// Caller holds tree/relation admission and both file rows. Preserve dangling
+/// endpoint rows: visibility filtering would silently discard user data.
+pub(crate) async fn transfer_file_metadata(
+    c: &mut PgConnection,
+    old: Uuid,
+    new: Uuid,
+) -> Result<(bool, bool), sqlx::Error> {
+    let added = sqlx::query("INSERT INTO file_tags(entity_id,tag_id) SELECT $2,tag_id FROM file_tags WHERE entity_id=$1 ON CONFLICT DO NOTHING")
+        .bind(old).bind(new).execute(&mut *c).await?.rows_affected();
+    let removed = sqlx::query("DELETE FROM file_tags WHERE entity_id=$1")
+        .bind(old)
+        .execute(&mut *c)
+        .await?
+        .rows_affected();
+    let edges: Vec<EntityLink> = sqlx::query_as(
+        "SELECT * FROM entity_links WHERE source_id=$1 OR target_id=$1 ORDER BY id FOR UPDATE",
+    )
+    .bind(old)
+    .fetch_all(&mut *c)
+    .await?;
+    let mut target_changed = added > 0;
+    let old_changed = removed > 0 || !edges.is_empty();
+    for edge in edges {
+        let source = if edge.source_id == old {
+            new
+        } else {
+            edge.source_id
+        };
+        let target = if edge.target_id == old {
+            new
+        } else {
+            edge.target_id
+        };
+        let collision: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM entity_links WHERE source_id=$1 AND target_id=$2)",
+        )
+        .bind(source)
+        .bind(target)
+        .fetch_one(&mut *c)
+        .await?;
+        if collision {
+            remove_link(c, edge.id).await?;
+        } else {
+            sqlx::query(
+                "UPDATE entity_links SET source_id=$2,target_id=$3,version=version+1 WHERE id=$1",
+            )
+            .bind(edge.id)
+            .bind(source)
+            .bind(target)
+            .execute(&mut *c)
+            .await?;
+            target_changed = true;
+        }
+    }
+    Ok((old_changed, target_changed))
 }

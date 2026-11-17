@@ -15,3 +15,5 @@ pub mod capture;
 pub mod notifications;
 pub mod safe_fs;
 pub mod scanner;
+
+pub mod identity;

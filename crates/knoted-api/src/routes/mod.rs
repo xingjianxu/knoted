@@ -4,6 +4,7 @@ pub mod activities;
 pub mod assets;
 pub mod auth;
 pub mod dashboard;
+pub mod files;
 pub mod health;
 pub mod links;
 pub mod notes;
@@ -34,6 +35,7 @@ pub fn router(ctx: AppContext, auth: AuthConfig) -> Router {
                 .merge(sessions::router(auth.clone(), ctx.clone()))
                 .merge(notes::router(auth.clone(), ctx.clone()))
                 .merge(links::router(auth.clone(), ctx.clone()))
+                .merge(files::router(auth.clone(), ctx.clone()))
                 .merge(projects::router(auth.clone(), ctx.clone()))
                 .merge(tasks::router(auth.clone(), ctx.clone()))
                 .merge(dashboard::router(auth.clone(), ctx.clone()))
