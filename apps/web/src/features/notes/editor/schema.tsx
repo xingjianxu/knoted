@@ -16,7 +16,7 @@ const image = createReactBlockSpec(
   {
     render: ({ block, contentRef }) => (
       <figure data-asset-id={block.props.assetId}>
-        <span contentEditable={false}>图片</span>
+        <img contentEditable={false} src={`/api/v1/assets/${encodeURIComponent(block.props.assetId)}/content`} alt="笔记图片" />
         <figcaption ref={contentRef} />
       </figure>
     ),
@@ -24,7 +24,7 @@ const image = createReactBlockSpec(
 )();
 const codeBlock = createReactBlockSpec(
   { type: "codeBlock", propSchema: { language: { default: "" } }, content: "inline" },
-  { render: ({ contentRef }) => <pre><code ref={contentRef} /></pre> },
+  { render: ({ block, contentRef }) => <pre data-language={block.props.language}><code ref={contentRef} /></pre> },
   // Reuse the published code keyboard extension (Enter, Tab, Shift-Enter,
   // triple-Enter exit), which is independent of plain vs styled content.
   defaultBlockSpecs.codeBlock.extensions,
