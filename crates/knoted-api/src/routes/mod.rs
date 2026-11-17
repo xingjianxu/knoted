@@ -10,6 +10,7 @@ pub mod notes;
 pub mod projects;
 pub mod sessions;
 pub mod tasks;
+pub mod trash;
 
 use axum::Router;
 use axum::http::StatusCode;
@@ -36,6 +37,7 @@ pub fn router(ctx: AppContext, auth: AuthConfig) -> Router {
                 .merge(projects::router(auth.clone(), ctx.clone()))
                 .merge(tasks::router(auth.clone(), ctx.clone()))
                 .merge(dashboard::router(auth.clone(), ctx.clone()))
+                .merge(trash::router(auth.clone(), ctx.clone()))
                 .merge(activities::router(auth.clone(), ctx.clone()))
                 .merge(assets::router(auth, ctx.clone())),
         )

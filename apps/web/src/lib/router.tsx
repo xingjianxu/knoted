@@ -5,7 +5,7 @@ import { routeTree } from "../routeTree.gen";
 /** Strict local destinations implemented by the authenticated routes. */
 export function safeReturnTo(value: unknown): string {
   return typeof value === "string" &&
-    (["/", "/settings/security", "/notes", "/tasks"].includes(value) || /^\/(?:notes|tasks)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value))
+    (["/", "/settings/security", "/notes", "/tasks", "/trash"].includes(value) || /^\/(?:notes|tasks)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value))
     ? value
     : "/";
 }
@@ -19,7 +19,7 @@ export function createAppRouter(
         const path = router.state.location.pathname;
         // Notes owns an initialized local draft beyond server cache eviction.
         // Its first-load 401 still redirects; mounted sessions expose explicit recovery.
-        if (path === "/" || path === "/settings/security") {
+        if (path === "/" || path === "/settings/security" || path === "/trash") {
           void bundle.queryClient.cancelQueries().then(() => {
             bundle.queryClient.clear();
             void router.navigate({

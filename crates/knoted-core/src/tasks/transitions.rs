@@ -16,11 +16,12 @@ fn terminal(status: TaskStatus) -> bool {
     matches!(status, TaskStatus::Done | TaskStatus::Cancelled)
 }
 
-/// Relation admission and the full globally ordered row lock set must already
-/// be held. Re-read each affected parent and its children, overlay the complete
+/// Commands must hold relation admission and the globally ordered row lock set.
+/// Snapshot readers may reuse this read-only predicate as an eligibility hint.
+/// Re-read each affected parent and its children, overlay the complete
 /// candidate (including detachment/deletion), and validate only that final set.
 /// The guard never mutates versions or implicitly reopens a parent.
-pub(super) async fn validate_final_state(
+pub(crate) async fn validate_final_state(
     c: &mut PgConnection,
     candidate: &Task,
     old: Option<&Task>,
