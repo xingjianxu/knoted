@@ -416,3 +416,40 @@ it("independent A/B flights capture their own note paths, drafts and CAS while A
   await act(async () => b.resolve(json(note("b", 8, "B local")))); await act(async () => a.resolve(json(note("a", 2, "A local"))));
   expect(result.current.draft).toEqual({ title: "B local", document: doc("B body") }); expect(result.current.baseVersion).toBe(8);
 });
+it.each([true, false].flatMap(committed => ["network", "503"].map(firstFailure => ({ committed, firstFailure }))))("I1: undo to confirmed still retries real CAS (committed=$committed, failure=$firstFailure)", async ({ committed, firstFailure }) => {
+  vi.useFakeTimers(); const first = deferred(); const retry = deferred();
+  const { result, requests, queryClient } = setup(() => requests.length === 1 ? first.promise : retry.promise);
+  act(() => result.current.changeDraft({ title: "temporary Y", document: doc("temporary Y") })); await tick();
+  act(() => result.current.changeDraft({ title: "initial", document: doc() }));
+  expect(result.current.dirty).toBe(false);
+  await act(async () => { if (firstFailure === "503") first.resolve(failure(503)); else first.reject(new Error("PATCH acknowledgement lost")); });
+  expect(result.current.status).toBe("error"); expect(result.current.baseVersion).toBe(1); expect(result.current.unresolvedWrite).toBe(true);
+  const failedWarning = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(failedWarning); expect(failedWarning.defaultPrevented).toBe(true);
+  act(() => queryClient.setQueryData(["notes", "detail", "a"], note("a", 9, "unrelated Query update")));
+  let retried!: Promise<void>; act(() => { retried = result.current.retrySave(); }); await tick(0);
+  expect(requests).toHaveLength(2);
+  expect(result.current.status).toBe("saving");
+  expect(await requests[1]!.json()).toEqual({ expected_version: 1, title: "initial", document: doc() });
+  await act(async () => {
+    if (committed) { retry.resolve(failure(409)); await expect(retried).rejects.toMatchObject({ status: 409 }); }
+    else { retry.resolve(json(note())); await retried; }
+  });
+  expect(result.current.draft).toEqual({ title: "initial", document: doc() }); expect(result.current.baseVersion).toBe(1);
+  expect(result.current.status).toBe(committed ? "conflict" : "saved");
+  expect(result.current.error).toEqual(committed ? expect.objectContaining({ status: 409 }) : null);
+  expect(result.current.unresolvedWrite).toBe(committed);
+  const finalWarning = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(finalWarning);
+  expect(finalWarning.defaultPrevented).toBe(committed);
+  await tick(10000); expect(requests).toHaveLength(2);
+});
+it("I1: beforeunload warns for reverted draft while PATCH is unresolved and after lost acknowledgement", async () => {
+  vi.useFakeTimers(); const first = deferred(); const { result, requests } = setup(() => first.promise);
+  act(() => result.current.changeDraft({ title: "temporary Y" })); await tick();
+  act(() => result.current.changeDraft({ title: "initial" })); expect(result.current.dirty).toBe(false);
+  const pendingWarning = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(pendingWarning);
+  expect(pendingWarning.defaultPrevented).toBe(true);
+  await act(async () => first.reject(new Error("acknowledgement lost")));
+  const errorWarning = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(errorWarning);
+  expect(errorWarning.defaultPrevented).toBe(true); expect(result.current.status).toBe("error");
+  await tick(10000); expect(requests).toHaveLength(1);
+});

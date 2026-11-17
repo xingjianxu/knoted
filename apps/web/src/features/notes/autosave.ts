@@ -14,6 +14,8 @@ export interface NoteEditingState {
   resetEpoch: number;
   baseVersion: number;
   dirty: boolean;
+  /** A PATCH is in flight or has not been acknowledged; equality with an older draft cannot confirm it. */
+  unresolvedWrite: boolean;
   status: SaveStatus;
   error: Error | null;
   historyError: Error | null;
@@ -69,7 +71,7 @@ export class NoteEditingSession {
     this.noteId = note.id;
     this.confirmed = clone({ title: note.title, document: note.document });
     this.state = { draft: clone(this.confirmed), initialDocument: clone(note.document), resetEpoch: 0,
-      baseVersion: note.content_version, dirty: false, status: "saved", error: null, historyError: null, serverUpdated: false };
+      baseVersion: note.content_version, dirty: false, unresolvedWrite: false, status: "saved", error: null, historyError: null, serverUpdated: false };
   }
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => {
@@ -88,14 +90,14 @@ export class NoteEditingSession {
   private clearTimer() { clearTimeout(this.timer); this.timer = undefined; }
   private schedule() {
     this.clearTimer();
-    if (!this.listeners.size || !this.state.dirty || this.state.error || this.flight || this.barrier || this.resetting || this.structural) return;
+    if (!this.listeners.size || (!this.state.dirty && !this.state.unresolvedWrite) || this.state.error || this.flight || this.barrier || this.resetting || this.structural) return;
     this.timer = setTimeout(() => { this.timer = undefined; void this.save().catch(() => {}); }, Math.max(0, this.lastEdit + 1000 - Date.now()));
   }
   changeDraft = (patch: Partial<NoteDraft>) => {
     const draft = { ...this.state.draft, ...clone(patch) };
     this.revision++; this.lastEdit = Date.now();
     const dirty = !equal(draft, this.confirmed);
-    this.update({ draft, dirty, status: this.state.error ? this.state.status : this.flight ? "saving" : dirty ? "dirty" : "saved" });
+    this.update({ draft, dirty, status: this.state.error ? this.state.status : this.flight ? "saving" : dirty || this.state.unresolvedWrite ? "dirty" : "saved" });
     this.schedule();
   };
   observeServer = (note: Note | undefined) => {
@@ -109,13 +111,13 @@ export class NoteEditingSession {
   private save(): Promise<void> {
     if (this.flight) return this.flight;
     if (this.state.error) return Promise.reject(this.state.error);
-    if (!this.state.dirty) return Promise.resolve();
+    if (!this.state.dirty && !this.state.unresolvedWrite) return Promise.resolve();
     const body = clone(this.state.draft);
     const epoch = this.state.resetEpoch;
     const expected_version = this.state.baseVersion;
     const revision = this.revision;
     const noteId = this.noteId;
-    this.clearTimer(); this.update({ status: "saving" });
+    this.clearTimer(); this.update({ status: "saving", unresolvedWrite: true });
     const task = (async () => {
       try {
         const { data } = await this.api.raw.PATCH("/notes/{noteId}", { params: { path: { noteId } }, body: { expected_version, ...body } });
@@ -123,7 +125,7 @@ export class NoteEditingSession {
         if (this.state.resetEpoch !== epoch) return;
         this.confirmed = body;
         const dirty = this.revision !== revision && !equal(this.state.draft, body);
-        this.update({ baseVersion: data.content_version, dirty, status: dirty ? "dirty" : "saved", error: null });
+        this.update({ baseVersion: data.content_version, dirty, unresolvedWrite: false, status: dirty ? "dirty" : "saved", error: null });
         await this.cache(data);
       } catch (error) {
         const failure = asError(error);
@@ -139,7 +141,7 @@ export class NoteEditingSession {
     if (this.loading) await this.loading;
     if (this.mutation) await this.mutation;
     if (this.state.status === "conflict") throw this.state.error;
-    this.update({ error: null, status: this.state.dirty ? "dirty" : "saved" });
+    this.update({ error: null, status: this.state.dirty || this.state.unresolvedWrite ? "dirty" : "saved" });
     await this.save();
   };
   /** Saves every pending local edit, then creates history. Normal navigation awaits this while mounted. */
@@ -156,7 +158,7 @@ export class NoteEditingSession {
       try {
         if (this.resetting) throw new Error("正在加载服务器内容");
         if (this.state.error) throw this.state.error;
-        while (this.flight || this.state.dirty) await this.save();
+        while (this.flight || this.state.dirty || this.state.unresolvedWrite) await this.save();
         const version = this.state.baseVersion;
         const revision = this.revision;
         const { data } = await this.api.raw.POST("/notes/{noteId}/snapshots", { params: { path: { noteId: this.noteId } } });
@@ -188,7 +190,7 @@ export class NoteEditingSession {
       if (note.id !== this.noteId) throw new Error("不能替换其他笔记的编辑会话");
       this.confirmed = clone({ title: note.title, document: note.document });
       this.update({ draft: clone(this.confirmed), initialDocument: clone(note.document), baseVersion: note.content_version,
-        resetEpoch: this.state.resetEpoch + 1, dirty: false, status: "saved", error: null, historyError: null, serverUpdated: false });
+        resetEpoch: this.state.resetEpoch + 1, dirty: false, unresolvedWrite: false, status: "saved", error: null, historyError: null, serverUpdated: false });
       await this.cache(note);
       return note;
     })();
@@ -275,7 +277,8 @@ export function useNoteAutosave({ initialNote, draftStore }: { initialNote: Note
   useEffect(() => { session.observeServer(initialNote); }, [initialNote, session]);
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (session.getSnapshot().dirty) { event.preventDefault(); event.returnValue = ""; }
+      const current = session.getSnapshot();
+      if (current.dirty || current.unresolvedWrite || current.error) { event.preventDefault(); event.returnValue = ""; }
     };
     const pagehide = () => { void session.flush().catch(() => {}); };
     window.addEventListener("beforeunload", beforeUnload);

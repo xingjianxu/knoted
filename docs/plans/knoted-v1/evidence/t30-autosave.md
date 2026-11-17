@@ -64,3 +64,16 @@ pnpm --dir apps/web run build
 ## 自审结论与限制
 
 自审完成并修复上述可复现竞态，以及 JSON 字段顺序误判（`red-json-order.log` → `focused-final.log`）；JSONB/传输对象顺序不应视为正文变化；父 Agent 的独立审查未由作者自审替代。新保存模块尚未由生产页面导入，build 验证类型与现有应用构建，完整页面消费与真实 HTTPS 导航验收由 T31 承接。内存草稿在认证编辑外壳存活期间保留，不承诺浏览器重开后恢复。
+
+## 独立审查修复 I1：撤销至旧确认稿后的未知写入结果
+
+独立审查确认：PATCH(Y) 在途时撤销回旧确认 X 会令 `dirty=false`；若响应丢失，原实现清错后跳过真实重试，错误报告 saved。现增加独立的 `unresolvedWrite`：PATCH 发出即置 true，失败保留；只有该请求成功确认或明确整体重载才清除。dirty 仍表示与旧确认稿的内容差异，不能单独当作“可安全离开”的依据。
+
+显式 retry 即便最新 X 等于旧确认稿，也必须以原 CAS 真实 PATCH；首写已提交则 409 保留 X/旧 base，未提交则服务器可确认无变化 X/v1。Query v9 与错误 currentVersion 不升级基础。`flush` 同样计入未确认写入；beforeunload 在 dirty、未确认写入或错误时同步提示。普通失败仍暂停自动重试。
+
+- 新增 Deferred 回归两条（已提交/未提交）及一条关闭提示，真实 createApiClient 请求验证最新 X 与 expected_version=1；清除未知状态后的合法 no-op 确认才允许 saved/不提示。
+- 有效 RED：`i1-red.log`，exit 1，3 failed /44 passed；两个重试均只有 1 请求，关闭提示断言失败。
+- GREEN：`i1-focused-final.log`，exit 0，47/47。
+- 受影响完整门禁：`i1-lint.log`、`i1-typecheck.log`、`i1-test.log`、`i1-build.log` 均 exit 0；11 文件/156 测试，构建 3134 modules、711ms，保留既有 chunk 提示。
+- 命令仍使用上面的统一 TMPDIR/XDG_CACHE_HOME 前缀及 `pnpm --dir apps/web` 的 focused/lint/typecheck/test/build；修前及父 Agent 的门禁日志均保留。
+- 父 Agent 补充 HTTP503 + undo 参数化覆盖：网络错误/503 × 已提交/未提交四个 Deferred 分支，加关闭提示共 5 个 I1 用例。最终 `i1-http-focused.log` 49/49；`i1-http-lint.log` / `i1-http-typecheck.log` / `i1-http-test.log` / `i1-http-build.log` 均 exit 0，完整 158/158，构建 795ms。之前的 RED/GREEN 与 47/156 日志全部保留。
