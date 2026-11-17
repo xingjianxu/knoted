@@ -32,3 +32,7 @@
 命令：`cargo fmt --check`、`cargo test --locked`、`cargo clippy --locked --all-targets -- -D warnings`；初轮 `09-fmt.log` / `10-full-test.log` / `11-clippy.log` 全部 exit 0，195 个 Rust 测试通过、1 个既有文档测试 ignored。自查补强全部 Project 生命周期事件断言后，最终三项门禁均 exit 0（195 passed、0 failed、1 个既有 ignored doc-test）；读回结果见交接报告及 `13-final-fmt.log` / `14-final-test.log` / `15-final-clippy.log` / `final-exit-codes.txt`。未改前端/OpenAPI，因此无需重复前端脚本或 API 生成。
 
 新迁移只在隔离测试 schema 应用。部署时先一致备份，按既有 pcwrap 固定产物流程迁移和验收；本地通过不是 dev 已部署或任务已完成的证明。
+
+## 主 Agent 集成验收
+
+PR [#96](https://github.com/xingjianxu/knoted/pull/96) → 主线 `0a043d3`。独立 Spec/Quality 审查 PASS，主线 Rust 195 passed / 0 failed / 1 既有 ignored，fmt/clippy exit0。实际输出 `/data/knoted-dev/tasks/t27-t35/evidence/t33-main-*.log`。固定产物0a043d3、迁移9及真实HTTPS项目CRUD/归档恢复验证通过。本卡 Issue 已关闭且 Projects Done；任务 worktree/已合并分支已安全清理，其他任务成果保留。前述“待执行”是当时实施阶段的历史记录，以本节实际验收为准。

@@ -88,3 +88,16 @@ T30 仅增加可选 `assertCanWrite(noteId)`，在实际 PATCH、history POST、
 - GREEN：`i3-green.log` exit0，单场景 1 passed /33 skipped；T20/T30/T31 `i3-focused-final.log` exit0，3 文件/101 测试（T31 34 条）。
 - 全部门禁：`i3-lint-final.log`、`i3-typecheck-final.log`、`i3-test-final.log`、`i3-build.log` 全部 exit0；12 文件/192 测试，构建 3257 modules、1.03s，保留已披露 chunk 提示。命令和 TMPDIR/XDG_CACHE_HOME 前缀沿用上表；focused 命令为 `pnpm --dir apps/web exec vitest run tests/tasks/t20.test.tsx tests/tasks/t30.test.tsx tests/tasks/t31.test.tsx`。
 - 主 Agent 负责新 PR、Rust/主线门禁及固定 SHA 的真实 HTTPS 定向复验。本修复没有远程、dev、后端、依赖或跨卡改动。
+
+## 主 Agent 集成验收
+
+PR [#104](https://github.com/xingjianxu/knoted/pull/104) → 主线 `40e9c3d`。独立 Spec/Quality 审查 PASS，主线 Rust 229 passed / 0 failed / 1 既有 ignored，fmt/clippy exit0；Web 192 passed，typecheck/lint/build exit0。实际输出 `/data/knoted-dev/tasks/t27-t35/evidence/t31-fix3-main-*.log`。PR102及修复PR103/104已合入，固定产物40e9c3d、迁移10；真实HTTPS页面完整流程通过。本卡 Issue 已关闭且 Projects Done；任务 worktree/已合并分支已安全清理，其他任务成果保留。前述“待执行”是当时实施阶段的历史记录，以本节实际验收为准。
+
+最终主 Agent 实际验收：PR #102 / #103 / #104 → 主线与运行 `40e9c3db70ee481337f6588472f6e60cf7bba872`；229 Rust / 192 Web、fmt/clippy/typecheck/lint/build 全部exit0。完整真实HTTPS主流程与大写链接失败重认证均通过，以下为浏览器实际输出（无API拦截）：
+
+```json
+{"result":"passed","phase":"expired-draft","revision":"40e9c3db70ee481337f6588472f6e60cf7bba872","checks":{"autosave_keeps_editor":true,"readonly_history":true,"history_restore_new_version":true,"own_move_fresh_CAS":true,"real_asset_upload":true,"real_code_controls":true,"real_tag_assignment":true,"return_note_latest_document":true,"parent_delete_guard":true,"real_delete_undo_root_fallback":true,"asset_reopen":true,"conflict_copy_preserves_original":true,"expired_draft_visible_copyable":true,"passkeys_unchanged":true},"cleanup_ok":true}
+{"result":"passed","phase":"failed-reauth-keeps-draft","revision":"40e9c3db70ee481337f6588472f6e60cf7bba872","cleanup_ok":true}
+```
+
+API/Worker实际 `/proc/exe` 与 current 均读回40e9c3d，迁移10，一致备份 `20261117T071447Z-t27-t35`。ownfixtures正常API软删、会话撤销、Passkey计数不变；三个已合并本地任务分支与任务工作区已安全清理，Issue89关闭且Projects Done。I1/I2/I3均经独立定向复审PASS，无未解决发现。

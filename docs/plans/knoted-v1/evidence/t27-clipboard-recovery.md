@@ -64,3 +64,33 @@ Ruling: 保持 BlockNote 默认 text/plain→Markdown/自动链接行为，不�
 | NotesPage native | 拒绝非法 paste 后实际键盘输入 + Enter 新段进入复制/保存/导航 flush/bodyless snapshot/A→B→A 保留；有效 URI 原样保存；零 pageerror | `green-notes-browser.log` |
 
 本节新增 2 个持久回归，当前累计比最初基线 192 增加 7 个至 199。覆盖新块 ID 最终有效且唯一，以及非法链接出现在尚无 ID 的第二新段时也不能绕过保护。没有改后端 URI 或弱化任何旧断言。父负责后续 Rust 门禁、PR/主线/实际 HTTPS 完整流程重验与清理；本工作区不执行远程或 dev 操作。完整追加报告与提交回执仍在 `/data/knoted-dev/tasks/t27-t35/final-fix-report.md`。
+
+## 主 Agent 最终真实 HTTPS 回执
+
+PR106/107→代码主线/运行`b801d80e90cb7446be536c7bbc6f9ec4884c43d5`；父Agent主线fmt/test/clippy及Web typecheck/lint/test/build全exit0，229Rust/199Web/1既有ignored。三个实际生产HTTPS测试（无API拦截）全部exit0：
+
+```json
+[
+  {
+    "case": "clipboard",
+    "revision": "b801d80e90cb7446be536c7bbc6f9ec4884c43d5",
+    "exit": 0,
+    "log": "/data/knoted-dev/tasks/t27-t35/evidence/final-clipboard-live.log"
+  },
+  {
+    "case": "notes",
+    "revision": "b801d80e90cb7446be536c7bbc6f9ec4884c43d5",
+    "exit": 0,
+    "log": "/data/knoted-dev/tasks/t27-t35/evidence/final-notes-live.log"
+  },
+  {
+    "case": "uppercase",
+    "revision": "b801d80e90cb7446be536c7bbc6f9ec4884c43d5",
+    "exit": 0,
+    "log": "/data/knoted-dev/tasks/t27-t35/evidence/final-uppercase-live.log"
+  }
+]
+{"result":"passed","phase":"undo-redo","revision":"b801d80e90cb7446be536c7bbc6f9ec4884c43d5","clipboard":"native","checks":{"invalid_paste_rejected_with_feedback":true,"subsequent_typing_saved":true,"raw_invalid_plain_URL_explicitly_rejected":true,"plain_label_recovery_saved":true,"copy_contains_visible_content":true,"navigation_and_reopen_preserve_content":true,"valid_encoded_link_saved":true,"undo_redo_editor_stable":true,"no_pageerrors":true,"passkeys_unchanged":true},"cleanup_ok":true}
+```
+
+完整Notes输出`final-notes-live.log`包含page_errors=[]，uppercase输出`final-uppercase-live.log`为passed；所有ownfixture清理true，Passkey计数不变。current和API/Worker实际可执行路径均读回同SHA，迁移10，一致备份20261117T083355Z-t27-t35。修复worktree及两条已合并本地分支已安全清理，Issue84关闭/Projects Done。原生OS中文IME人工测试不在本回执内。
