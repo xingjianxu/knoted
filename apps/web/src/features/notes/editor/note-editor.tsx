@@ -1,5 +1,6 @@
 import { BlockNoteViewRaw, useCreateBlockNote } from "@blocknote/react";
-import { useState, type ReactNode } from "react";
+import { Alert } from "@bixlab/mtone";
+import { useEffect, useState, type ReactNode } from "react";
 
 import "@blocknote/core/style.css";
 import { fromEditorBlocks, toEditorBlocks, type NoteDocument } from "./document-adapter";
@@ -18,13 +19,29 @@ export function NoteEditor({ document, onChange, children, readOnly = false }: N
   // Deliberately independent of props: parent save/query rerenders must never
   // replace the ProseMirror view, selection or an active IME composition.
   const [initialDocument] = useState(() => document);
+  const [inputError, setInputError] = useState("");
   const editor = useCreateBlockNote({
     schema: noteEditorSchema,
     disableExtensions: ["attribution"],
     initialContent: initialDocument.blocks.length ? toEditorBlocks(initialDocument) : undefined,
   }, []);
+  useEffect(() => editor.onBeforeChange(({ getChanges }) => {
+    // getChanges exposes the proposed blocks, while editor.document still holds
+    // the old state. Validate before commit so every visible edit can reach the
+    // retained draft. Reject the entire transaction, never strip pasted runs.
+    const changes = getChanges();
+    if (!changes.length) return;
+    try {
+      fromEditorBlocks(changes.filter(change => change.type !== "delete").map(change => change.block), initialDocument);
+      setInputError("");
+    } catch {
+      setInputError("未应用此次编辑：内容含有无法保存的链接或格式，原内容已保留。请修正链接后重试；也可仅以纯文本粘贴链接名称文字。");
+      return false;
+    }
+  }), [editor, initialDocument]);
   return (
     <section aria-label="笔记编辑器">
+      {inputError && <Alert tone="warning">{inputError}</Alert>}
       {!readOnly && <FormattingToolbar editor={editor} />}
       <BlockNoteViewRaw
         editor={editor}
