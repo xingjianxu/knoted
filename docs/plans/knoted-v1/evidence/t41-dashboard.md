@@ -2,7 +2,7 @@
 
 - Issue：[#126](https://github.com/xingjianxu/knoted/issues/126)。依据 [T41](../tasks/T41.md)、[ADR 0002](../../../decisions/0002-mtone-ui-ownership.md)、[ADR 0006](../../../decisions/0006-file-pipeline-and-aggregate-contracts.md)。
 - 实施工作区：主仓库 `.worktrees/knoted-t41`，分支 `feat/t41`。worker 基线 `5df8aa8a259ebe2ede73f48966ff9e11963580b9`，含主 Agent 已串行补齐的 DashboardSummary 契约；整卡审查基线 `4d08f4b093aa0d7db4d2250d611499dea2bddbb0`。
-- 状态：实施与本地验证，待主 Agent 独立审查、PR 集成、主线验证、dev HTTPS 验收与清理；不声称已完成生命周期。
+- 状态：done（PR [#139](https://github.com/xingjianxu/knoted/pull/139)，主线 `f2423b4`，dev `f2423b4`；主线/实例验收和任务工作区清理完成）。
 
 ## 行为
 
@@ -37,9 +37,11 @@
 | `pnpm --filter @knoted/web exec vite build --outDir /data/knoted-dev/tasks/t41/build/web` | 构建通过 | `build.log` |
 | `pnpm api:check` | 83 operations，18 examples，9 invalid rejected | `api-check.log` |
 
-Web `run build` 的 `tsc --noEmit` 已由 typecheck 的同一命令实际通过，随后执行上表带外部 outDir 的 Vite 构建，避免输出写入任务 Worktree。测试出现既有 jsdom `scrollTo` 提示、构建出现 chunk 大小提示，均 exit 0。独立审查、集成及部署待主 Agent 执行。无迁移、依赖或锁文件变更；API/生成客户端由主 Agent 预先补齐，本实施未改动。
+Web `run build` 的 `tsc --noEmit` 已由 typecheck 的同一命令实际通过，随后执行上表带外部 outDir 的 Vite 构建，避免输出写入任务 Worktree。测试出现既有 jsdom `scrollTo` 提示、构建出现 chunk 大小提示，均 exit 0。实施阶段交接时独立审查、集成及部署待主 Agent执行；最终结果见收尾段。无迁移、依赖或锁文件变更；API/生成客户端由主 Agent 预先补齐，本实施未改动。
 
-## 限制
+## 实施子 Agent 交接时的限制
+
+以下保留集成前记录；最终部署和验收已在“主 Agent 集成、实例与收尾”完成。
 
 概览读取当前未归档事项以复用领域日期语义，未增加全文/向量索引或外部通知。到期标签表达本次读取时刻的状态；重新进入首页会刷新。dev 部署与原生 HTTPS 的最终业务验收尚未执行。
 
@@ -58,3 +60,17 @@ Web `run build` 的 `tsc --noEmit` 已由 typecheck 的同一命令实际通过�
 真实 `createAppRouter` 路由测试从已实现的 `/settings/security` 页面点击侧栏概览：原实现仍将概览标为禁用待开放，点击后 pathname 保持 `/settings/security`，预期 `/`，有效 RED 1 failed、18 skipped、exit 1（`i2-red.log`）。最小修复在现有 authenticated Shell 注册已启用概览按钮，导航 `/`，仅根路径标记 active；从未来占位列表移除概览，不更改文件/搜索/问答。同步更新 T20 旧占位断言并给既有路由 harness 补充真实 DashboardSummary fixture。
 
 回归使用现有应用 Router/AuthGate/Query/默认 index/DashboardPage，验证点击抵达根路由、概览标题与空态、实际 dashboard GET，以及离开根路径时概览不 active、抵达后 `aria-current=page`。T20/T41 targeted 26 passed、exit 0（`i2-green.log`）。Web 全量 `test` 242 passed、`typecheck`/`lint`/外部 outDir `vite build` 均 exit 0，对应日志 `i2-web-test.log`、`i2-typecheck.log`、`i2-lint.log`、`i2-build.log`，命令见实施报告 I2 附录；Rust 未变，不重复已通过的后端门禁。
+
+
+## 主 Agent 集成、实例与收尾
+
+- PR [#139](https://github.com/xingjianxu/knoted/pull/139) 普通merge，主线 `f2423b4e2cba882b93797fec7039d6c42cbf3f28`，包含契约5df8aa8、实现8ad3942、I1日期c35f0ef、I2导航6809dfb；Issue126自动关闭。
+- fresh独立review_t41整体审查及两轮限定复审均PASS/APPROVE；I1/I2为主Agent额外验证发现，均真实RED→GREEN，无剩余重要问题。
+- 主Agent独立最终Rust261 passed/1既有ignored、fmt/clippy；Web242/typecheck/lint/build；api:check83 operations/18 examples/9 invalid rejected、api:verify均exit0。主线再次运行相同完整Rust/Web/契约门禁全部exit0（`/data/knoted-dev/tasks/t41/logs/{parent-fix1-*,parent-fix2-*,main-*}.log`）。
+- 固定主线archive产物 `/data/knoted-dev/runtime/f2423b4e2cba882b93797fec7039d6c42cbf3f28` 完整SHA256SUMS校验通过（build-artifact.log）。无迁移，schema11。
+- 停本实例API/Worker并确认旧PID退出后，一致备份 `/data/knoted-dev/service/backups/20261117T161350Z-t41-`（PG/assets/摘要及pg_restore目录校验通过），原子切current并pcwrap down/up。HTTPS ready200、API/Worker实际可执行文件固定SHA，共享PG/Caddy/Strata PID不变（deploy.log、runtime-{before,after}.json）。
+- 真实HTTPS Chromium无路由拦截：live-browser.log exit0，auth_default_home_empty_and_disabled_index、valid_historical_precise_creation、shanghai_due_historical_fix_terminal_future_excluded、enabled_overview_nav_refetch、completed_removes_overdue_after_reentry、recent_note_navigation、due_task_navigation、fixture_cleanup_readback、only_same_origin_no_external_notifications、passkey_count_stable全部true，cleanup_ok=true。合法1919-04-13 03:00事项实际创建201且概览200，完成后通过侧栏离开/返回不再列逾期；匿名401、默认首页/空态、笔记和事项真实路由均验证。
+- 仅API创建/软删本任务笔记及事项，临时会话撤销；最终活跃笔记0、事项0、未撤销验收会话0、Passkey1且前后不变，无硬件Passkey ceremony。
+- `.worktrees/knoted-t41`干净、feat/t41为主线祖先后安全移除并-d删除；他人worktree未改。dev继续固定f2423b4，后续证据文档不需部署。
+- 公共TestDb panic/回滚清理阻塞已查重建[Issue138](https://github.com/xingjianxu/knoted/issues/138)，本卡未修改公共helper；只精确清理本任务两个_test遗留schema并读回0，未碰dev/其他任务。
+- 当前首页文件计数/未启用提示是T41阶段策略；T43/T44接入文件后由其更新，不提前实现文件或索引阶段。
