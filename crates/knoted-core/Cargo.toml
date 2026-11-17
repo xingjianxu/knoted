@@ -24,6 +24,8 @@ tokio.workspace = true
 uuid.workspace = true
 webauthn-rs.workspace = true
 chrono-tz.workspace = true
+rustix.workspace = true
+libc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
