@@ -1,6 +1,6 @@
 # T38：项目页面
 
-- 状态：implemented（本地 TDD、门禁与独立审查修复已完成并提交；主线门禁、PR 集成与真实 HTTPS 验收由主 Agent 在本文件后续小节回填）。
+- 状态：completed（PR [#118](https://github.com/xingjianxu/knoted/pull/118) 普通 merge 至主线 `25b223094d2076bdf8855460a4289af451643a53`；主线门禁、固定产物部署与真实 HTTPS 浏览器验收均通过）。
 - Issue：[#117](https://github.com/xingjianxu/knoted/issues/117)。基线 `83d0e30ebc3ba3a3b4f18ae8fac22a7b01e566b1`（T37 PR #115 已合入）；工作区 `.worktrees/knoted-t38`，分支 `feat/t38`。
 - 执行依据：[T38](../tasks/T38.md)、[需求](../requirements.md)（R06/R10/R11）、[数据/API](../data-and-api.md)、[ADR 0002](../../../decisions/0002-mtone-ui-ownership.md)、[UI 指南](../../development/ui-mtone.md)、[Worktree 指南](../../development/git-worktree.md)。
 - 直接依赖实际核对：T33 项目 API（PR [#96](https://github.com/xingjianxu/knoted/pull/96)）已在基线，`api/openapi.yaml` 与 `packages/api-client/src/generated/schema.d.ts` 含 `listProjects/createProject/getProject/updateProject/deleteProject/archiveProject/unarchiveProject/restoreProject`；T20 路由外壳（PR [#52](https://github.com/xingjianxu/knoted/pull/52)）提供 `_authenticated` 父布局与 `NavItem`。
@@ -82,3 +82,20 @@
 - 新增覆盖：归档后断言 `保存修改` 与 `移除标签` 禁用，取消归档后恢复可用（对应此前未断言的部分）。
 - 修复后全部门禁：`i1-test.log`（13 文件 / 205 tests）、`i1-typecheck.log`、`i1-lint.log`、`i1-build.log` 均 exit 0。
 - 明确保留的 Minor：`ProjectAssociations` 的标签/关联增删与分页循环未单独建 jsdom 用例（与已测的 T32 笔记侧同源实现；真实 HTTPS 验收覆盖标签展示与关联增删）；与 `NoteAssociations` 的近似重复仍存在，待单独任务评估抽取。两项均记录为后续项，不影响本卡验收。
+
+## 主 Agent 集成与实例验收
+
+- 集成：PR [#118](https://github.com/xingjianxu/knoted/pull/118) 普通 merge → 主线 `25b223094d2076bdf8855460a4289af451643a53`（提交 `997e114`、`f4633f6`、`e4e41af` 均为其父链）；Issue #117 由 PR 关闭关系自动关闭。
+- 主线验证（主检出，日志 `main-*.log`）：frozen `pnpm install` exit 0；`pnpm exec vitest run` exit 0（13 文件 / 205 tests）；`pnpm typecheck`、`pnpm lint`、`pnpm build` 均 exit 0；`cargo fmt --check` exit 0；`cargo test --workspace --locked` exit 0（255 passed / 0 failed / 1 既有 ignored）；`cargo clippy --locked --all-targets -- -D warnings` exit 0。Rust 未改动，跑全量门禁是为了确认主线整体仍绿。
+- 固定产物：`/data/knoted-dev/runtime/25b223094d2076bdf8855460a4289af451643a53`，由该主线 SHA 的已提交源码 archive 构建 API/Worker/Web/migrations，`SHA256SUMS` 全量校验通过（`build-artifact.log`）。
+- 部署前状态：运行 `1b37e55`，迁移 11，存活项目 0 / 事项 0。本卡无新迁移，schema 保持 11。
+- 一致备份：`/data/knoted-dev/service/backups/20261117T141717Z-t38-`。`deploy.py` 先停 API/Worker 并确认原 PID 退出，再 `pg_dump --format=custom` + assets 拷贝 + 摘要清单，`sha256sum --check` 与 `pg_restore --list` 通过（`logs/deploy.log`）。
+- 启用：原子切换 `current`，`pnpm pc down`/`up -D` 重载编排；HTTPS `/` 与 `/health/ready` 均 200；API/Worker `/proc/<pid>/exe` 实际指向固定产物；共享 PostgreSQL/Caddy/Strata `MainPID` 前后一致（`logs/runtime-{before,after}.json`）。
+- 真实 HTTPS 浏览器验收（Chromium，无路由拦截；`logs/live-browser-final.log`）：`{"result":"passed","checks":{list_and_detail,edit_with_cas,archive_blocked_shows_unfinished,archive_success_readonly,unarchive,switch_no_leak,association_link,delete_confirm_scope,deep_link,passkey_count_stable:true},"cleanup_ok":true}`。覆盖：列表与详情、改标题走 CAS（PATCH 只带 `expected_version` 与变更字段）、未完成事项存在时归档 409 并列出真实事项、完成事项后归档成功且页面转只读、取消归档恢复、切换到另一项目不残留标签/关联/草稿、通过页面添加并移除资料关联、删除确认文案含“笔记…不会被删除”且删除后详情关闭、深链直接打开 `/projects/{id}`。
+- 首次运行在 `setup` 阶段失败：任务 `TMPDIR=/data/knoted-dev/tasks/t38/tmp` 尚不存在，Playwright `mkdtemp` 报 ENOENT；单独复现确认同因（`browserType.launch: ENOENT … mkdtemp`），创建该目录后同一脚本与最终运行均通过。这不是产品缺陷，日志保留。
+- 夹具回收：冒烟只通过 API 创建/软删项目、事项、笔记、标签并撤销临时会话，未执行硬件 Passkey ceremony；读回存活项目/事项/笔记/标签均为 0，未撤销冒烟会话 0，Passkey 数不变（`logs/final-fixture-readback.log`）。
+
+## 收尾
+
+- 收尾文档（本文件与任务卡、计划 README 状态）通过 `docs/t38-close` 分支的独立 PR 合入主线；任务工作区 `.worktrees/knoted-t38` 与已合并分支 `feat/t38` 在确认提交为主线祖先、工作区干净后安全移除。
+- 保留的后续项（不阻断本卡完成）：`safeReturnTo` 未纳入 `/projects*`；`ProjectAssociations` 与 `NoteAssociations` 的近似重复及项目侧标签/关联增删的独立用例。
