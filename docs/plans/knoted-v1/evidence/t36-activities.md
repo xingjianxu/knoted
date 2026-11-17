@@ -2,6 +2,8 @@
 
 任务卡：[T36](../tasks/T36.md)。本页记录实现范围、判定与真实运行结果；未通过的项不写“通过”。
 
+当前：PR [#110](https://github.com/xingjianxu/knoted/pull/110) 已普通 merge 至主线 `f26af66`，主线门禁与测试实例 HTTPS 验收通过，任务工作区/分支已清理。
+
 ## 范围与文件
 
 | 文件 | 变化 |
@@ -68,6 +70,20 @@ TDD 记录：先在空实现上运行 `cargo test --locked --test t36`，4 个�
 - **DB 级不可改写强度**：数据库约束覆盖“系统事件不能带删除标记”，编辑/删除的 `author_kind='manual'` 条件在 service 的 UPDATE 里；仓库既有迁移不使用触发器，本卡不引入例外。
 - **未写 `entity_registry`**：跟进记录目前不是可打标签/关联的实体；若 T57 的独立片段沿用 registry 外键约定，需在 T57 补枚举值与回填迁移，不在本卡自造。
 - **未写 outbox**：投影协议属 T53/T57。对下游的前置提醒：T53/T57 落地时必须排除 `deleted_at` 非空的标记行，并对已有数据做一次全表回填/对账，而不是假设历史事件已经存在。
+
+## 主线与实例
+
+| 项目 | 结果 |
+|---|---|
+| 主线 SHA | `f26af666c78eb3e302276a22cf9458255ab13faf`（PR #110 普通 merge） |
+| 主线门禁 | `cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --workspace --locked` 均 exit0；236 passed / 0 failed / 1 既有 ignored（日志 `/data/knoted-dev/tasks/t36/logs/main-*.log`） |
+| 固定产物 | `/data/knoted-dev/runtime/f26af66…faf`（`tools/dev/build-artifact.sh` exit0，`SHA256SUMS` 校验通过，含 `migrations/0011`） |
+| 一致备份 | `/data/knoted-dev/service/backups/20261117T112156Z-t36`（停 API/Worker 后 `pg_dump` + assets，`SHA256SUMS` 自检通过） |
+| 迁移 | 实例 `_sqlx_migrations` 升至 11（`t36 activities`），由编排 `migrate` 进程应用 |
+| 运行核对 | `current` → 固定产物；API/Worker `/proc/<pid>/exe` 均指向该产物的 `bin/`（`logs/t36-runtime-readback.txt`） |
+| HTTPS 验收 | `live-smoke.py` exit0：真实 `https://wlab.132140.xyz:15601` 完成备注创建/编辑/删除标记与历史、系统事件 409、并发与游标分页、匿名 401/CSRF 403；临时会话撤销、Passkey 计数不变、fixture 软删（日志 `logs/t36-live-smoke.log`） |
+
+首次 `deploy.py` 因 `pnpm pc down` 在任务目录缺少工作区而失败（API/Worker 已由备份脚本停止、`current` 已切换）；修正为 `pnpm --dir /wrd/prj/knoted pc` 后跳过重复备份完成 `down`/`up`，备份仍是停写后的一致快照。首轮冒烟未通过的两处是脚本自身口径（`passkeys` 表名应为 `passkey_credentials`、分页期望集漏掉删除标记），均按真实 schema/行为修正后通过，不属产品缺陷。
 
 ## 已知限制
 

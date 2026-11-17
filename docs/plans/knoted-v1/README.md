@@ -1,6 +1,6 @@
 # Knoted v1 文档与实施任务入口
 
-> 产品实施采用实际可用的 executing-plans 或 subagent-driven-development。当前 T01—T26 已完成、审查并集成到主线（T17 为 PR #42 / `e3e1db2`；T18 为 PR #46 / `4425ab9`；T19 为 PR #48 / `6de79a8`；T22 为 PR #58 / `8d4a472`）；T27—T35 也已完成并通过主线与适用实例验收；T36—T72 仍待领取。
+> 产品实施采用实际可用的 executing-plans 或 subagent-driven-development。当前 T01—T26 已完成、审查并集成到主线（T17 为 PR #42 / `e3e1db2`；T18 为 PR #46 / `4425ab9`；T19 为 PR #48 / `6de79a8`；T22 为 PR #58 / `8d4a472`）；T27—T36 也已完成并通过主线与适用实例验收（T36 为 PR #110 / `f26af66`）；T37—T72 仍待领取。
 
 ## 阅读顺序
 
@@ -62,7 +62,7 @@
 | [T33](tasks/T33.md) | 项目API与归档 | T32 | completed |
 | [T34](tasks/T34.md) | 事项与单层子任务 | T33 | completed |
 | [T35](tasks/T35.md) | 状态优先级与日期 | T34 | completed |
-| [T36](tasks/T36.md) | 跟进时间线与历史 | T35 | pending |
+| [T36](tasks/T36.md) | 跟进时间线与历史 | T35 | completed |
 | [T37](tasks/T37.md) | 事项归档和回收站 | T36, T08 | pending |
 | [T38](tasks/T38.md) | 项目页面 | T33, T20 | pending |
 | [T39](tasks/T39.md) | 事项页面和编辑 | T35, T37, T38 | pending |
