@@ -1,13 +1,12 @@
-import tailwindcss from "@tailwindcss/vite";
-import react from "@vitejs/plugin-react";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { defineConfig } from "vitest/config";
+
+import { componentPlugins } from "./vite.components.ts";
 
 export default defineConfig({
   plugins: [
     tanstackRouter({ target: "react", autoCodeSplitting: true }),
-    react(),
-    tailwindcss(),
+    ...componentPlugins(),
   ],
   test: {
     environment: "jsdom",
