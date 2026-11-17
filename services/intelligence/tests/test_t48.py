@@ -480,3 +480,134 @@ def test_overlapping_hidden_column_ranges_keep_visibility(tmp_path):
     )
     result = parser().parse_office(path)
     assert [b.text for b in result.blocks] == ["A", "E"]
+
+
+@pytest.mark.parametrize("storage", ["inline", "shared"])
+@pytest.mark.parametrize("rich", [False, True])
+def test_xlsx_phonetic_runs_are_not_cell_body(tmp_path, storage, rich):
+    path = tmp_path / "phonetic.xlsx"
+    book = Workbook()
+    book.active["A1"] = "placeholder"
+    book.save(path)
+    text = "<r><rPr><b/></rPr><t>東</t></r><r><t>京</t></r>" if rich else "<t>東京</t>"
+    text += '<rPh sb="0" eb="2"><t>とうきょう</t></rPh><phoneticPr fontId="0"/>'
+    body = text.encode()
+    if storage == "inline":
+        rewrite(
+            path,
+            {
+                "xl/worksheets/sheet1.xml": lambda b: b.replace(
+                    b"<is><t>placeholder</t></is>", b"<is>" + body + b"</is>"
+                )
+            },
+        )
+    else:
+        rewrite(
+            path,
+            {
+                "xl/worksheets/sheet1.xml": lambda b: b.replace(
+                    b't="inlineStr"><is><t>placeholder</t></is>', b't="s"><v>0</v>'
+                ),
+                "xl/_rels/workbook.xml.rels": lambda b: b.replace(
+                    b"</Relationships>",
+                    b'<Relationship Id="shared" Type="http://schemas.'
+                    b'openxmlformats.org/officeDocument/2006/relationships/sharedStrings" '
+                    b'Target="sharedStrings.xml"/></Relationships>',
+                ),
+                "[Content_Types].xml": lambda b: b.replace(
+                    b"</Types>",
+                    b'<Override PartName="/xl/sharedStrings.xml" ContentType="application/'
+                    b'vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/></Types>',
+                ),
+            },
+            extra=[
+                (
+                    "xl/sharedStrings.xml",
+                    b'<sst xmlns="http://schemas.openxmlformats.org/'
+                    b'spreadsheetml/2006/main"><si>' + body + b"</si></sst>",
+                )
+            ],
+        )
+    result = parser().parse_office(path)
+    assert result.full_text == "東京"
+    assert json.loads(result.blocks[0].structure) == {"sheet": "Sheet", "cell": "A1"}
+
+
+@pytest.mark.parametrize(
+    "node,character",
+    [
+        ("<w:noBreakHyphen/>", "\u2011"),
+        ("<w:softHyphen/>", "\u00ad"),
+        ('<w:ptab w:alignment="center" w:relativeTo="margin" w:leader="none"/>', "\t"),
+    ],
+)
+def test_docx_inline_character_nodes_preserve_body(tmp_path, node, character):
+    path = docx(tmp_path)
+    rewrite(
+        path,
+        {
+            "word/document.xml": lambda b: b.replace(
+                b"<w:t>before</w:t>", b"<w:t>left</w:t>" + node.encode() + b"<w:t>right</w:t>"
+            )
+        },
+    )
+    assert parser().parse_office(path).full_text == "left" + character + "right"
+
+
+@pytest.mark.parametrize(
+    "node",
+    [
+        '<w:sym w:font="Wingdings" w:char="F04A"/>',
+        "<w:ruby><w:rt><w:r><w:t>reading</w:t></w:r></w:rt>"
+        "<w:rubyBase><w:r><w:t>body</w:t></w:r></w:rubyBase></w:ruby>",
+        "<w:pgNum/>",
+        "<w:contentPart/>",
+        "<w:unexpectedBody><w:t>unknown</w:t></w:unexpectedBody>",
+    ],
+)
+def test_docx_unmapped_inline_body_refuses_partial_success(tmp_path, node):
+    path = docx(tmp_path)
+    rewrite(
+        path,
+        {
+            "word/document.xml": lambda b: b.replace(
+                b"<w:t>before</w:t>", b"<w:t>before</w:t>" + node.encode()
+            )
+        },
+    )
+    with pytest.raises(ParseError, match="unsupported_format"):
+        parser().parse_office(path)
+
+
+def test_docx_ruby_at_paragraph_level_refuses_reading_pollution(tmp_path):
+    path = docx(tmp_path)
+    rewrite(
+        path,
+        {
+            "word/document.xml": lambda b: b.replace(
+                b"</w:r></w:p>",
+                b"</w:r><w:ruby><w:rt><w:r><w:t>reading</w:t></w:r></w:rt>"
+                b"<w:rubyBase><w:r><w:t>body</w:t></w:r></w:rubyBase></w:ruby></w:p>",
+                1,
+            )
+        },
+    )
+    with pytest.raises(ParseError, match="unsupported_format"):
+        parser().parse_office(path)
+
+
+def test_docx_hyperlink_and_markup_keep_body_in_order(tmp_path):
+    path = docx(tmp_path)
+    rewrite(
+        path,
+        {
+            "word/document.xml": lambda b: b.replace(
+                b"<w:r><w:t>before</w:t></w:r>",
+                b'<w:bookmarkStart w:id="1" w:name="here"/>'
+                b'<w:hyperlink w:anchor="here"><w:r><w:rPr><w:b/></w:rPr><w:t>linked</w:t>'
+                b"<w:tab/><w:t>text</w:t><w:br/><w:t>line</w:t></w:r></w:hyperlink>"
+                b'<w:bookmarkEnd w:id="1"/>',
+            )
+        },
+    )
+    assert parser().parse_office(path).full_text == "linked\ttext\nline"

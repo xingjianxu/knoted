@@ -58,7 +58,7 @@ SmartArt/其他 graphic frame、AlternateContent、宏/嵌入对象拒绝。
 | 输出 blocks | 100,000 | 限制结构产物的对象数 |
 
 `OfficeLimits` 常量通过 `options_revision()` 的 SHA256 绑定到
-`office-ooxml-body-v1-hidden-slides-included-cache-only` 策略身份。
+`office-ooxml-body-v2-hidden-slides-included-cache-only` 策略身份。
 实际完整 64 位摘要由运行产物记录；预算改变身份也改变。
 这些限额保守，可能拒绝有效大文档；后续调整须更换身份并重新验收。
 
@@ -100,3 +100,20 @@ formatted / exit 0；`scope-check` → git diff --check / exit 0。README 证据
 任务卡入口使用 `UV_PROJECT_ENVIRONMENT=<existing .venv> uv run --no-sync pytest
  tests/test_t48.py -q`，仅为禁止重装而增加 --no-sync。两者均显式指定任务内
 pytest cache/basetemp。未运行 Rust t48_（没有真实 B 链，不能用空测试代替）。
+
+
+## 阶段 A 审查修复轮 1
+
+I1：inline/shared string 改按正文 `t` / rich `r/t` 读取，排除 `rPh` 与
+phoneticPr；真实包 plain/rich × inline/shared 四例均先失败再通过。
+I2：DOCX 正文不再遍历任意后代，限定允许的段落/run 容器与无正文的属性/锚点。
+noBreakHyphen → U+2011，softHyphen → U+00AD，ptab → TAB；字体相关 sym、ruby、
+pgNum、contentPart 与未知正文表达明确 unsupported_format，保留普通超链接正文。
+输出策略身份升 v2，不让修复前后使用相同解析身份。预算与 B 边界不变。
+
+日志前缀 `r1-i1-red`：4 failed / exit 1；`r1-i1-green`：4 passed / exit 0。
+`r1-i2-red`：9 failed、1 passed / exit 1；`r1-i2-green`：10 passed / exit 0。
+`r1-final`：60 passed、1 warning / exit 0；`r1-ruff`：All checks passed / exit 0；
+`r1-format`：21 files already formatted / exit 0。原有 duplicate ZIP fixture 警告
+按 M1 deferred 保存，未消音。既有模型相关源/测试无改动，按主 Agent 指示不重跑
+完整模型 suite；早先 102 例运行与本轮 60 例是组合验证，不称为同一快照完整运行。

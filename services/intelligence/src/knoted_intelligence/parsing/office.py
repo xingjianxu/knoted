@@ -38,7 +38,7 @@ FORMATS = {
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml": "xlsx",
     "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml": "pptx",
 }
-POLICY_REVISION = "office-ooxml-body-v1-hidden-slides-included-cache-only"
+POLICY_REVISION = "office-ooxml-body-v2-hidden-slides-included-cache-only"
 
 
 @dataclass(frozen=True)
@@ -252,6 +252,71 @@ def _text(element: Element, namespace: str) -> str:
     )
 
 
+def _spreadsheet_text(element: Element) -> str:
+    """Read CT_Rst body text, excluding auxiliary phonetic runs and properties."""
+    pieces = []
+    for child in element:
+        if child.tag == S + "t":
+            pieces.append(child.text or "")
+        elif child.tag == S + "r":
+            for run_child in child:
+                if run_child.tag == S + "t":
+                    pieces.append(run_child.text or "")
+                elif run_child.tag != S + "rPr":
+                    _fail("unsupported_format")
+        elif child.tag not in {S + "rPh", S + "phoneticPr"}:
+            _fail("unsupported_format")
+    return "".join(pieces)
+
+
+def _word_text(element: Element) -> str:
+    """Collect supported paragraph/run content; unknown body expressions refuse.
+
+    Formatting and annotation anchors carry no body characters. Drawings/pictures
+    are excluded by the body-text policy, after the document-wide text-box checks.
+    Never flatten arbitrary descendants: ruby readings and font symbols need a
+    separate interpretation and must not become partial successful body text.
+    """
+    characters = {
+        W + "tab": "\t",
+        W + "ptab": "\t",
+        W + "br": "\n",
+        W + "cr": "\n",
+        W + "noBreakHyphen": "\u2011",
+        W + "softHyphen": "\u00ad",
+    }
+    containers = {W + name for name in ("r", "hyperlink", "dir", "bdo")}
+    non_body = {
+        W + name
+        for name in (
+            "pPr",
+            "rPr",
+            "bookmarkStart",
+            "bookmarkEnd",
+            "proofErr",
+            "permStart",
+            "permEnd",
+            "commentRangeStart",
+            "commentRangeEnd",
+            "commentReference",
+            "lastRenderedPageBreak",
+            "drawing",
+            "pict",
+        )
+    }
+    pieces = []
+    for child in element:
+        if child.tag == W + "t":
+            pieces.append(child.text or "")
+        elif child.tag in characters:
+            pieces.append(characters[child.tag])
+        elif child.tag in containers:
+            pieces.append(_word_text(child))
+        elif child.tag not in non_body:
+            _fail("unsupported_format")
+    return "".join(pieces)
+
+
 def _docx(package: _Package, out: _Output):
     root = package.get(package.main, W + "document")
     unsupported = {
@@ -285,7 +350,7 @@ def _docx(package: _Package, out: _Output):
             (n for n in container if n.tag not in {W + "tcPr", W + "sectPr"}), 1
         ):
             if node.tag == W + "p":
-                out.add(_text(node, W), {"path": f"{prefix}/paragraph:{index}"})
+                out.add(_word_text(node), {"path": f"{prefix}/paragraph:{index}"})
             elif node.tag == W + "tbl":
                 table = f"{prefix}/table:{index}"
                 for row_index, row in enumerate(node.findall(W + "tr"), 1):
@@ -299,7 +364,7 @@ def _docx(package: _Package, out: _Output):
                             _fail()
                         if merge is None or merge.get(W + "val") == "restart":
                             walk(cell, f"{table}/row:{row_index}/cell:{column}")
-                        elif _text(cell, W).strip():
+                        elif any(_word_text(p).strip() for p in cell.iter(W + "p")):
                             _fail()  # invalid continuation must not silently lose text
                         column += width
             elif node.tag not in {W + "sectPr", W + "tcPr"}:
@@ -331,7 +396,7 @@ def _xlsx(package: _Package, out: _Output):
     strings = []
     for kind, target in package.rels.get(package.main, {}).values():
         if kind.endswith("/sharedStrings"):
-            strings = [_text(si, S) for si in package.get(target, S + "sst")]
+            strings = [_spreadsheet_text(si) for si in package.get(target, S + "sst")]
     sheets = root.find(S + "sheets")
     if sheets is None:
         _fail()
@@ -409,7 +474,7 @@ def _xlsx(package: _Package, out: _Output):
                     inline = cell.find(S + "is")
                     if inline is None:
                         _fail()
-                    text = _text(inline, S)
+                    text = _spreadsheet_text(inline)
                 elif cell_type not in {"n", "b", "e", "str", "d"}:
                     _fail("unsupported_format")
                 location = {"sheet": title, "cell": address}
