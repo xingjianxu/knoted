@@ -197,6 +197,10 @@ async fn t36_1_system_events_are_appended_and_immutable() {
         .await;
     assert_eq!(s, StatusCode::CONFLICT, "{err}");
     assert_eq!(err["code"], "version_conflict");
+    assert!(
+        err.get("current_version").is_none(),
+        "an immutable event has no competing version: {err}"
+    );
     assert_eq!(h.delete_activity(&t, &event, 1).await, StatusCode::CONFLICT);
 
     let (_, page) = h.list(&t, "").await;
@@ -301,15 +305,22 @@ async fn t36_2_manual_notes_keep_history_across_edit_and_delete() {
         h.delete_activity(&t, &note, 2).await,
         StatusCode::NO_CONTENT
     );
+    // The marker stays observable: the timeline can show that a follow-up was
+    // removed, while the content lives only in history.
     let (_, page) = h.list(&t, "").await;
-    assert_eq!(page["items"].as_array().unwrap().len(), 0, "{page}");
+    let items = page["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{page}");
+    assert_eq!(items[0]["id"], note["id"]);
+    assert_eq!(items[0]["version"], 3);
+    assert_eq!(items[0]["body"], "", "a marker carries no content: {page}");
+    assert_eq!(items[0]["deleted_at"], "2026-11-17T00:10:00Z", "{page}");
     let row: (String, Option<chrono::DateTime<chrono::Utc>>, i64) =
         sqlx::query_as("SELECT body,deleted_at,version FROM activities WHERE id=$1")
             .bind(uid(&note))
             .fetch_one(&h.db.pool)
             .await
             .unwrap();
-    assert_eq!(row.0, "第二次跟进");
+    assert_eq!(row.0, "", "the row is emptied, the body moved to history");
     assert!(row.1.is_some(), "a delete only leaves a marker");
     assert_eq!(row.2, 3);
 
@@ -479,6 +490,39 @@ async fn t36_4_activity_pages_are_scoped_and_validated() {
     assert!(second["next_cursor"].is_null(), "{second}");
     assert_eq!(h.revisions(&b, &note, "").await.0, StatusCode::NOT_FOUND);
 
+    // A manual note is validated on create exactly as it is on edit.
+    let oversized = "y".repeat(10_001);
+    for (body, reason) in [
+        ("".to_owned(), "empty create"),
+        ("\u{0}".to_owned(), "nul create"),
+        (oversized, "oversized create"),
+    ] {
+        assert_eq!(
+            h.create(&a, &body).await.0,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{reason}"
+        );
+    }
+    assert_eq!(
+        h.create(&json!({"id":Uuid::new_v4().to_string()}), "无事项")
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+
+    // Revisions are scoped to their own activity, like the task page is scoped
+    // to its own activities.
+    let (_, extra) = h.create(&a, "丁").await;
+    h.edit(&a, &extra, 1, "丁改").await;
+    let (_, extra_revs) = h.revisions(&a, &extra, "").await;
+    assert_eq!(extra_revs["items"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        h.revisions(&a, &extra, &format!("?cursor={next}")).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    // A note of another task is not deletable through this task's path.
+    assert_eq!(h.delete_activity(&b, &note, 3).await, StatusCode::NOT_FOUND);
+
     // The paths sit behind the same session and CSRF guard as every other
     // follow-up write: an anonymous read is rejected and a cookie-only write is
     // refused, while a plain GET stays public to the session guard only.
@@ -530,7 +574,12 @@ async fn t36_5_writes_follow_task_and_project_guards() {
     let (s, page) = h.list(&t, "").await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(page["items"].as_array().unwrap().len(), 1, "{page}");
-    assert_eq!(h.create(&t, "归档后").await.0, StatusCode::CONFLICT);
+    let (s, refused) = h.create(&t, "归档后").await;
+    assert_eq!(s, StatusCode::CONFLICT, "{refused}");
+    assert!(
+        refused.get("current_version").is_none(),
+        "a state conflict never reports a foreign version: {refused}"
+    );
     assert_eq!(
         h.edit(&t, &note, 1, "归档后改").await.0,
         StatusCode::CONFLICT
@@ -539,7 +588,12 @@ async fn t36_5_writes_follow_task_and_project_guards() {
     let (_, page) = h.list(&t, "").await;
     assert_eq!(page["items"][0]["body"], "归档前");
     assert_eq!(page["items"][0]["version"], 1);
-    assert_eq!(h.revision_count(&note).await, 0);
+    let live: i64 = sqlx::query_scalar("SELECT count(*) FROM activities WHERE task_id=$1")
+        .bind(uid(&t))
+        .fetch_one(&h.db.pool)
+        .await
+        .unwrap();
+    assert_eq!(live, 1, "refused writes add no record");
 
     // A live task inside an archived or deleted project refuses new notes.
     let (s, _, p) = h
@@ -621,7 +675,9 @@ fn request(h: &Harness, method: &str, path: &str, body: Value) -> Request<Body> 
 
 // Two concurrent edits with the same expected version must produce one winner
 // and one 409 — never a second history row for the same version and never a 503
-// from the history uniqueness constraint.
+// from the history uniqueness constraint. The gate blocks both writers before
+// they admit the relation, so this characterises the lock order (relation
+// advisory lock, then task row) rather than the row CAS on its own.
 #[tokio::test]
 async fn t36_6_concurrent_edits_serialize_without_orphan_history() {
     let h = Harness::new().await;
@@ -675,4 +731,85 @@ async fn t36_6_concurrent_edits_serialize_without_orphan_history() {
     let body = page["items"][0]["body"].as_str().unwrap().to_owned();
     assert!(body == "甲改" || body == "乙改", "{body}");
     assert_eq!(page["items"][0]["version"], 2);
+}
+
+// A status change appends inside the task transaction; a rejected change must
+// leave neither the task nor the event behind, and non-status edits never append.
+#[tokio::test]
+async fn t36_7_only_committed_status_changes_append_system_events() {
+    let h = Harness::new().await;
+    let t = h.task(json!({"title":"原子性"})).await;
+    // An injected failure inside the same transaction must roll the task back
+    // with the event: the update never stands without its follow-up record.
+    sqlx::raw_sql(
+        "CREATE FUNCTION t36_fail_activity() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN RAISE EXCEPTION 't36 injected append failure'; END $$",
+    )
+    .execute(&h.db.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(
+        "CREATE TRIGGER t36_fail_activity BEFORE INSERT ON activities
+         FOR EACH ROW EXECUTE FUNCTION t36_fail_activity()",
+    )
+    .execute(&h.db.pool)
+    .await
+    .unwrap();
+    let (s, _, b) = h
+        .send(
+            "PATCH",
+            &format!("/api/v1/tasks/{}", uid(&t)),
+            json!({"expected_version":1,"status":"in_progress"}),
+        )
+        .await;
+    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "{b}");
+    sqlx::raw_sql("DROP TRIGGER t36_fail_activity ON activities")
+        .execute(&h.db.pool)
+        .await
+        .unwrap();
+    let row: (String, i64) = sqlx::query_as("SELECT status,version FROM tasks WHERE id=$1")
+        .bind(uid(&t))
+        .fetch_one(&h.db.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        row,
+        ("todo".to_owned(), 1),
+        "the task update rolled back too"
+    );
+    let events: i64 = sqlx::query_scalar("SELECT count(*) FROM activities WHERE task_id=$1")
+        .bind(uid(&t))
+        .fetch_one(&h.db.pool)
+        .await
+        .unwrap();
+    assert_eq!(events, 0);
+
+    // Title, description and priority edits are not status events.
+    for patch in [
+        json!({"expected_version":1,"title":"改名"}),
+        json!({"expected_version":2,"description":"说明"}),
+        json!({"expected_version":3,"priority":"high"}),
+    ] {
+        let (s, _, b) = h
+            .send("PATCH", &format!("/api/v1/tasks/{}", uid(&t)), patch)
+            .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+    }
+    let (_, page) = h.list(&t, "").await;
+    assert_eq!(
+        page["items"].as_array().unwrap().len(),
+        0,
+        "non-status edits append nothing: {page}"
+    );
+    let (s, _, _) = h
+        .send(
+            "PATCH",
+            &format!("/api/v1/tasks/{}", uid(&t)),
+            json!({"expected_version":4,"status":"done"}),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let (_, page) = h.list(&t, "").await;
+    assert_eq!(page["items"].as_array().unwrap().len(), 1, "{page}");
+    assert_eq!(page["items"][0]["body"], "status: todo -> done");
 }

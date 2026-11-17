@@ -175,8 +175,10 @@ async fn live_task(c: &mut PgConnection, id: Uuid) -> Result<(), DomainError> {
     if t.deleted_at.is_some() {
         return Err(DomainError::NotFound);
     }
+    // A state refusal carries no competing version: the caller's
+    // `expected_version` names the note, never the task or project.
     let conflict = DomainError::Conflict {
-        current_version: Some(t.version),
+        current_version: None,
     };
     if t.archived_at.is_some() {
         return Err(conflict);
@@ -263,8 +265,10 @@ pub async fn edit(ctx: &AppContext, input: EditActivity) -> Result<Activity, Dom
             .await?
             .ok_or(DomainError::NotFound)?;
         if old.author_kind == ActivityAuthorKind::System {
+            // Immutable, not stale: reporting the event's own version as
+            // `current_version` would look like a version conflict to a client.
             return Err(DomainError::Conflict {
-                current_version: Some(old.version),
+                current_version: None,
             });
         }
         if old.deleted_at.is_some() {
@@ -311,8 +315,10 @@ pub async fn delete(ctx: &AppContext, input: DeleteActivity) -> Result<(), Domai
             .await?
             .ok_or(DomainError::NotFound)?;
         if old.author_kind == ActivityAuthorKind::System {
+            // Immutable, not stale: reporting the event's own version as
+            // `current_version` would look like a version conflict to a client.
             return Err(DomainError::Conflict {
-                current_version: Some(old.version),
+                current_version: None,
             });
         }
         if old.deleted_at.is_some() {
@@ -324,7 +330,7 @@ pub async fn delete(ctx: &AppContext, input: DeleteActivity) -> Result<(), Domai
             });
         }
         sqlx::query_as::<_, Activity>(
-            "UPDATE activities SET deleted_at=$3,updated_at=$3,version=version+1
+            "UPDATE activities SET body='',deleted_at=$3,updated_at=$3,version=version+1
              WHERE id=$1 AND task_id=$2 AND version=$4 AND author_kind='manual'
              AND deleted_at IS NULL RETURNING *",
         )
@@ -344,7 +350,9 @@ pub async fn delete(ctx: &AppContext, input: DeleteActivity) -> Result<(), Domai
     finish(tx, r).await
 }
 
-/// Newest first; deleted notes are gone from the list but stay in history.
+/// Newest first, markers included. A deleted note comes back with `deleted_at`
+/// set and an empty body: the timeline can show the removal, and the former
+/// content is only reachable through the revisions endpoint.
 pub async fn list(ctx: &AppContext, input: ListActivities) -> Result<ActivityPage, DomainError> {
     let limit = limit(input.limit)?;
     let after = input
@@ -361,7 +369,7 @@ pub async fn list(ctx: &AppContext, input: ListActivities) -> Result<ActivityPag
         return Err(DomainError::NotFound);
     }
     let mut items = sqlx::query_as::<_, Activity>(
-        "SELECT * FROM activities WHERE task_id=$1 AND deleted_at IS NULL
+        "SELECT * FROM activities WHERE task_id=$1
          AND ($2::timestamptz IS NULL OR (created_at,id) < ($2,$3))
          ORDER BY created_at DESC,id DESC LIMIT $4",
     )
