@@ -340,7 +340,7 @@ async fn t44_dual_versions_idempotence_and_old_object_retention() {
     assert_eq!((before.1, before.2), (1, 1));
     assert_eq!(invalidated, (2, 1, false));
     if strong {
-        assert_eq!(after, (before.0, 2, 2, true));
+        assert_eq!(after, (before.0, 3, 2, true));
     } else {
         assert_ne!(after.0, before.0);
     }
@@ -718,4 +718,76 @@ async fn t44_receipt_cannot_follow_staged_symlink() {
     assert_ne!(old.object_id, new.object_id);
     assert_eq!(std::fs::read(target).unwrap(), b"aaa");
     assert!(std::fs::symlink_metadata(path).unwrap().is_symlink());
+}
+
+#[tokio::test]
+async fn t44_p1_new_stable_content_invalidates_transition_snapshot_cas() {
+    async fn snapshot(ctx: &AppContext) -> (uuid::Uuid, i64, i64, String, i64, bool) {
+        sqlx::query_as("SELECT id,version,content_version,sha256,size,content_fresh FROM file_sources WHERE status='present'")
+            .fetch_one(ctx.pool()).await.unwrap()
+    }
+    let (db, ctx, root, _staging, input) = fixture(3).await;
+    assert!(
+        input.metadata.identity.handle.is_some(),
+        "identity-preserving test requires the supported fixture filesystem"
+    );
+    capture_stable(&ctx, input.clone()).await.unwrap();
+    let original = snapshot(&ctx).await;
+    std::fs::write(root.path().join("a.txt"), "new stable content").unwrap();
+    let changed = rescan(&ctx, &root, &input).await;
+    let transition = snapshot(&ctx).await;
+    capture_stable(&ctx, changed.clone()).await.unwrap();
+    let published = snapshot(&ctx).await;
+    capture_stable(&ctx, changed).await.unwrap();
+    let replayed = snapshot(&ctx).await;
+    // An observed timestamp change with identical bytes must not invent a new
+    // content revision or an extra publication CAS increment.
+    std::fs::write(root.path().join("a.txt"), "new stable content").unwrap();
+    let same_content = rescan(&ctx, &root, &input).await;
+    let same_transition = snapshot(&ctx).await;
+    capture_stable(&ctx, same_content.clone()).await.unwrap();
+    let same_published = snapshot(&ctx).await;
+    // Seed a metadata-only edit; the HTTP metadata API belongs to a later card.
+    sqlx::query("UPDATE file_sources SET note='metadata-only edit',version=version+1 WHERE status='present'")
+        .execute(ctx.pool()).await.unwrap();
+    let metadata_edit = snapshot(&ctx).await;
+    capture_stable(&ctx, same_content).await.unwrap();
+    let metadata_replay = snapshot(&ctx).await;
+    db.drop().await;
+    assert_eq!(original.0, transition.0);
+    assert_eq!(transition.0, published.0);
+    assert!(transition.1 > original.1);
+    assert_eq!(
+        (&transition.2, &transition.3, &transition.4),
+        (&original.2, &original.3, &original.4)
+    );
+    assert!(!transition.5);
+    assert!(published.5);
+    assert_ne!(
+        (&published.3, published.4),
+        (&transition.3, transition.4),
+        "publication exposes different stable content"
+    );
+    assert!(published.2 > transition.2);
+    assert!(
+        published.1 > transition.1,
+        "a CAS value read alongside the old stable content must not authorize the new content snapshot"
+    );
+    assert_eq!(published, replayed, "receipt replay is read-only");
+    assert_eq!(
+        (&same_published.2, &same_published.3),
+        (&published.2, &published.3)
+    );
+    assert_eq!(
+        same_published.1, same_transition.1,
+        "unchanged bytes have no additional publication revision"
+    );
+    assert_eq!(
+        metadata_edit, metadata_replay,
+        "capture preserves a metadata-only edit"
+    );
+    assert_eq!(
+        (&metadata_replay.2, &metadata_replay.3),
+        (&same_published.2, &same_published.3)
+    );
 }
