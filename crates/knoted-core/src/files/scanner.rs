@@ -369,6 +369,25 @@ pub async fn reconcile_complete_scan(
         .bind(report.scan_id)
         .execute(&mut *tx)
         .await?;
+    if complete {
+        let paths: Vec<String> = sqlx::query_scalar(
+            "SELECT relative_path FROM file_observations WHERE scan_id=$1 ORDER BY relative_path",
+        )
+        .bind(report.scan_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        for path in paths {
+            let mut spec = crate::jobs::JobSpec::new(super::capture::CAPTURE_JOB_KIND);
+            spec.idempotency_key = Some(format!("{}:{}", report.scan_id, path));
+            spec.payload = serde_json::json!({"scan_id": report.scan_id,"relative_path":path});
+            crate::jobs::enqueue(&mut tx, spec)
+                .await
+                .map_err(|e| match e {
+                    crate::db::DbError::Sqlx(e) => DomainError::Database(e),
+                    _ => DomainError::InvalidConfig,
+                })?;
+        }
+    }
     lock_lease(&mut tx, &report.lease).await?;
     tx.commit().await?;
     Ok(complete)

@@ -11,6 +11,7 @@ pub mod staging;
 
 pub use staging::{ObjectId, Sha256Hex, StagedObject, StagingError, StagingStore};
 
+pub mod capture;
 pub mod notifications;
 pub mod safe_fs;
 pub mod scanner;
