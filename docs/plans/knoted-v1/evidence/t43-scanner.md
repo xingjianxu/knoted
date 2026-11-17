@@ -1,6 +1,6 @@
 # T43 目录扫描实施记录
 
-状态：implementation-ready，待父 Agent 独立审查、集成与 dev 验收；未运行 dev 迁移或部署。
+状态：done（PR [#144](https://github.com/xingjianxu/knoted/pull/144)，主线/dev `987ef077328f5a37092bf326f47703554a945607`）。以下保留实施/修复阶段历史，最终结果见文末。
 
 - Issue：[#128](https://github.com/xingjianxu/knoted/issues/128)。实施基线 `294dac5a957206540386acf7f916930254c3b898`；整体审查基线 `46515b3ca56154326f6d35ad81ba736638d9b2fb`。
 - 工作区：`/wrd/prj/knoted/.worktrees/knoted-t43`，分支 `feat/t43`。依赖由父 Agent 登记，本次没有修改依赖、锁、OpenAPI 或生成客户端。
@@ -13,7 +13,7 @@
 - [x] RED：根失联、中断、链接过滤；配置/概览；真实通知/独立时钟；Worker实际落库；staging正常及dangling别名；锁等待租约过期。
 - [x] GREEN：扫描与事务 reconciliation、运行链和通知。
 - [x] 完整本地门禁及实际证据，见下表与外部原始日志。
-- [ ] 父 Agent 审查、合入主线、dev 验收及工作区清理。
+- [x] 父 Agent 审查、合入主线、dev 验收及工作区清理。
 
 ## 运行链与持久化
 
@@ -63,7 +63,7 @@
 
 首轮 clippy 的3处样式诊断已修正；pc 首轮23/24（缺sqlx用例继承真实PATH）失败，最小隔离该负向用例PATH后24/24。Web输出3条既有 jsdom scrollTo 未实现提示，测试无失败。
 
-## 待集成/dev
+## 实施交接时待集成/dev（历史）
 
 父 Agent 停本实例写进程、备份后应用 schema12，构建固定 SHA 并切换。先观察批准根 absent 的 paused_reason=root_unavailable，再由父 Agent 仅初始化批准样本子目录。扫描读取样本后应有完整scan与observations，files计数仍为0，直到T44稳定采集登记真实source。不能把T43扫描成功当成采集、解析或索引已接通。
 
@@ -93,3 +93,33 @@ R3 的core用例在更晚目录的INSERT以真实PG advisory锁暂停，证明�
 | `cargo clippy --all-targets -- -D warnings` | exit0；`round1-clippy.log` |
 
 `cargo test --workspace` 最终 exit0：293通过、1既有doc忽略，`round1-cargo-test.log` / `.exit`；提交SHA在交接报告追加。本轮未修改或重跑Web/pc，也没有修改依赖锁/公开契约或执行dev/远程操作。R4既有jsdom提示按父Agent指令留独立ledger，本轮不处理。状态仍为待父Agent限定diff复审，不自行宣称Spec/Quality已通过。
+
+## 主 Agent 最终集成与实例验收
+
+- 准备提交 `294dac5a957206540386acf7f916930254c3b898`、实施 `04431da9e91189f32283395aad4c3614c324041c`、修复 `cff42a333f49414c4c3f1450114a3ac6a3c9e70d`。独立初审发现三项 Important，经真实失败回归修复；限定复审 R1/R2/R3 全部 ADDRESSED、Spec PASS / Quality APPROVE，无新重要问题。报告 `/data/knoted-dev/tasks/t39-t50/reviews/t43-{task,round1}-review.md`。
+- PR [#144](https://github.com/xingjianxu/knoted/pull/144) 普通合入主线 `987ef077328f5a37092bf326f47703554a945607`，dev 运行相同 SHA；Issue #128 由 PR 关闭。既有测试环境噪声 R4 单独登记 [#143](https://github.com/xingjianxu/knoted/issues/143)，未混入扫描实现。
+- 主 Agent 初次完整 Rust/Web/API/pc 检查均 exit0；修复后独立最终 Rust 293 passed / 1 ignored、fmt/clippy exit0（`parent-fix1-*`）。实际 diff 证明修复轮未改 Web/API/pc/依赖锁，沿用其已通过的 Web248/pc24 与静态证据。合并后主线再次完整验证：Rust293/1 ignored、Web248、pc24，fmt/clippy/typecheck/lint/build/api:check（83 operations/20 examples/10 invalid rejected）/api:verify/bash语法全部 exit0；日志 `/data/knoted-dev/tasks/t43/logs/main-*.log`。
+- 固定提交产物 `/data/knoted-dev/runtime/987ef077328f5a37092bf326f47703554a945607` 完整 SHA256SUMS 通过；停 API/Worker 写进程后备份 `/data/knoted-dev/service/backups/20261117T173815Z-t43-`，摘要与 pg_restore --list 校验通过。pcwrap prepare→migrate 应用新增0012，再启动该固定产物。旧二进制会拒绝schema12，不把切回current冒充数据库回滚。
+- `deploy.log`、`runtime-before.json`、`runtime-after.json` 记录 HTTPS ready200、实际 API/Worker exe 为同一固定 SHA，PostgreSQL/Caddy/Strata MainPID 未变。没有宿主配置、共享服务、生产或破坏性数据库操作。
+- 批准根初始不存在时，真实根状态暂停 `root_unavailable`、identity未登记、0个complete scan、0个source；这一新库运行样本没有已登记来源，不能用它替代隔离PG测试中“已有来源零missing”的证明。随后主 Agent 仅在批准根初始化 `agent-fixtures/t43/<专用UUID>`，应用始终只读。
+- 扫描实际只观察 visible.txt；隐藏/工具/临时文件、源外symlink和FIFO均未进入观察。等scanner真正空闲后修改样本，独立通知触发新代完整扫描（空闲代4→修改代5，文件size29→35）；删除自己的样本后代6完整重扫、观察为空。没有用手工入队或重启冒充通知。2秒/600秒规则另由真实通知及独立时钟测试覆盖，未声称实际等待10分钟或做性能测试。
+- 各运行阶段脚本 `/data/knoted-dev/tasks/t43/runtime-probe.py`，原始JSON `/data/knoted-dev/tasks/t43/evidence/runtime-{missing,observed,changed,cleaned}.json`，均 exit0：
+
+```json
+{"schema":12,"generation":2,"last_complete_generation":null,"registered":false,"paused_reason":"root_unavailable","complete_scans":0,"incomplete_scans":2,"sources":0,"observations":[],"phase":"missing","result":"passed"}
+```
+
+```json
+{"schema":12,"generation":3,"last_complete_generation":3,"registered":true,"paused_reason":null,"complete_scans":1,"incomplete_scans":2,"sources":0,"observations":[{"path":"agent-fixtures/t43/ed9920de-72b5-46f2-81e4-58d885047a10/visible.txt","size":29}],"phase":"observed","result":"passed"}
+```
+
+```json
+{"schema":12,"generation":5,"last_complete_generation":5,"registered":true,"paused_reason":null,"complete_scans":3,"incomplete_scans":2,"sources":0,"observations":[{"path":"agent-fixtures/t43/ed9920de-72b5-46f2-81e4-58d885047a10/visible.txt","size":35}],"phase":"changed","result":"passed"}
+```
+
+```json
+{"schema":12,"generation":6,"last_complete_generation":6,"registered":true,"paused_reason":null,"complete_scans":4,"incomplete_scans":2,"sources":0,"observations":[],"phase":"cleaned","result":"passed"}
+```
+
+- 真实 HTTPS Chromium 概览验收 exit0：`dashboard_and_stage_status=true`、`passkey_count_stable=true`、`session_revoked=true`，日志 `dashboard-browser.log`。文件计数仍0，因为首次稳定摘要登记尚属T44；不把扫描当成采集/解析/索引完成。
+- 专用source样本和外部sentinel已清理，批准根及已登记身份保留供T44；没有重命名/替换真实vault根。2026-11-18确认任务Worktree tracked/untracked clean、feat/t43为master祖先后，安全移除 `.worktrees/knoted-t43` 与本地 `feat/t43`；协调及他人Worktree保留。
