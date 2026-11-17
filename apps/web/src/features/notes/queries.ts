@@ -5,6 +5,9 @@ import type { QueryClientBundle } from "../../lib/query";
 import { queryKeys } from "../../lib/query";
 import type { Note } from "./autosave";
 
+// mtone also accepts numeric keys; note identities remain string UUIDs at every level.
+interface NoteTreeItem extends TreeItem { id: string; children?: NoteTreeItem[]; }
+
 export function notesTreeQuery(bundle: QueryClientBundle) {
   return queryOptions({
     queryKey: queryKeys.notes.list({ scope: "complete-tree" }), retry: false,
@@ -20,7 +23,7 @@ export function notesTreeQuery(bundle: QueryClientBundle) {
       } while (cursor !== null);
       const complete = [...notes.values()];
       const reachable = new Set<string>();
-      const visit = (items: TreeItem[]) => { for (const item of items) { reachable.add(item.id); visit(item.children ?? []); } };
+      const visit = (items: NoteTreeItem[]) => { for (const item of items) { reachable.add(item.id); visit(item.children ?? []); } };
       visit(noteTree(complete));
       if (reachable.size !== complete.length) throw new Error("目录不完整或父子关系已变化，请重试读取完整目录");
       return complete;
@@ -35,11 +38,11 @@ export function noteQuery(bundle: QueryClientBundle, noteId: string) {
     },
   });
 }
-export function noteTree(notes: Note[]): TreeItem[] {
+export function noteTree(notes: Note[]): NoteTreeItem[] {
   const groups = new Map<string | null, Note[]>();
   for (const note of notes) { const siblings = groups.get(note.parent_id) ?? []; siblings.push(note); groups.set(note.parent_id, siblings); }
   for (const siblings of groups.values()) siblings.sort((a, b) => a.position - b.position || a.id.localeCompare(b.id));
-  const visit = (parent: string | null, ancestors: Set<string>): TreeItem[] => (groups.get(parent) ?? []).filter(note => !ancestors.has(note.id)).map(note => ({ id: note.id, label: note.title, children: visit(note.id, new Set([...ancestors, note.id])) }));
+  const visit = (parent: string | null, ancestors: Set<string>): NoteTreeItem[] => (groups.get(parent) ?? []).filter(note => !ancestors.has(note.id)).map(note => ({ id: note.id, label: note.title, children: visit(note.id, new Set([...ancestors, note.id])) }));
   return visit(null, new Set());
 }
 export function descendants(notes: Note[], id: string): Set<string> {
