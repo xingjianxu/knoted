@@ -19,7 +19,7 @@ Issue #129；实施基线 c7d3ef5fe8ec817731c680314b71246a1eee4487；全卡审�
 
 扫描完成事务写既有 `jobs` 的 `file.capture`，payload 为 scan_id/relative_path；真实共享 Dispatcher 领取并处理，未启用/旧代/取消拒绝，超限为明确 PermanentFailure，其余变化/IO 可重试。无第二套 queue/attempt 表，无 parser、extraction、move/relink 或索引实现。
 
-发布锁 jobs/root/source，复核当前完整扫描、根 identity/generation/paused、完整观察及 observation_version、present；等待行锁后和提交前重查真实租约期限。首次 registry/source 同事务；强 incarnation 相符且路径未变才继承来源，不按 hash/inode 猜测跨路径移动。无 opaque handle 时不以同一扫描作替代证明，不能证明 incarnation 则保守新来源。已变观察由 T43 先增 version/observation_version 并失效，稳定摘要变化再增 content_version；重复相同观察不重复增语义版本。
+发布锁 jobs/root/source，复核当前完整扫描、根 identity/generation/paused、完整观察及 observation_version、present；等待行锁后和提交前重查真实租约期限。首次 registry/source 同事务；强 incarnation 相符且路径未变才继承来源，不按 hash/inode 猜测跨路径移动。无 opaque handle 时不以同一扫描作替代证明，不能证明 incarnation 则保守新来源。已变观察由 T43 先增 version/observation_version 并失效，稳定摘要变化在发布事务再次同时递增 version/content_version；重复相同观察不重复增语义版本（P1 修正见下文）。
 
 T46/T47 必须同时校验 present、content_fresh、当前 observation_version 与 captured_observation_version、完整 captured_observation 和内容版本。只能消费已关闭 input 对象；不能直接读原根，不能用相同摘要合并身份。已发布/曾被引用对象不因新采集盲删；commit 已开始但响应未知也保守保留，后续回收必须证明无 source/jobs 引用。本卡不承诺任意外部并发写的原子快照，也不实现该回收器。
 
@@ -75,3 +75,24 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 未修改 Web/pc/脚本，未在本卡重复运行这些不受影响工具链。API/生成客户端双版本预登记由父 Agent 串行完成，不归本提交验证声明。无性能测试；复制变更拒绝并最终收敛不等于任意外部并发写下的原子快照。
 
 完整报告：`/data/knoted-dev/tasks/t39-t50/reports/t44-implementation.md`；任务包 `task-44-report.md` 指向该报告。主 Agent 承担后续独立 Spec/Quality 审查、schema13备份迁移、固定SHA构建与实际根专属样本验收。
+
+## Round1 — T44-P1 内容发布的 CAS 版本
+
+父 Agent 真实 dev 验收发现：T43 观察失效后读取到 version2/旧 SHA/content_version1，T44 发布新 SHA/content_version2 仍保留 version2。源 DTO 的不同稳定内容快照不能共享同一 CAS/ETag 版本；ADR0006 要求源内容变化同步推进两版本。先前初版双版本测试只核对相对最初来源已增版，遗漏了“过渡快照→稳定发布”这一独立边界；本轮明确修正该断言，不以初版全部 GREEN 否认 P1。
+
+最小实现只在现有 UPSERT 的 changed-SHA 分支同步 `version += 1`，与 content_version 同事务。原观察失效递增仍保留；内容相同、receipt 重放不额外增版，metadata-only 编辑不改变内容版本。未改已应用迁移0013、契约/依赖或实际 dev。
+
+新增 `t44_p1_new_stable_content_invalidates_transition_snapshot_cas`：初始 capture→新观察失效→读取仍指向旧摘要/长度/内容版本的快照→稳定发布新内容→验证其 CAS 版本与过渡快照不同；并覆盖 receipt、同字节新观察以及 metadata-only 夹具重放。HTTP 文件元数据端点属后卡，本用例不宣称实际304或用户草稿丢失。
+
+`cargo test -p knoted-core --test t44 t44_p1_`：RED exit101，真实断言 “a CAS value read alongside the old stable content must not authorize the new content snapshot”；GREEN exit0，1通过。日志 `round1-p1-red.log/.exit` 与 `round1-p1-green.log/.exit`；后续完整门禁含扩充的 metadata-only 场景。
+
+本轮最终门禁（环境沿用上文共享 CARGO_TARGET_DIR 与本卡 TMPDIR）：
+
+| 精确命令 | 结果 | 日志及相邻退出码文件 |
+| --- | --- | --- |
+| `cargo test --workspace t44_` | exit0，core29+worker2=31顶层通过；额外IO子进程1次通过 | `round1-t44.log` / `.exit` |
+| `cargo test --workspace --locked` | exit0，324顶层通过、0失败、1既有doc忽略；额外IO子进程1次通过 | `round1-cargo-test.log` / `.exit` |
+| `cargo fmt --check` | exit0，无输出 | `round1-fmt.log` / `.exit` |
+| `cargo clippy --locked --all-targets -- -D warnings` | exit0，Finished dev profile in 6.30s | `round1-clippy.log` / `.exit` |
+
+`round1-target-counts.json` 保留逐target统计，IO子进程额外的1个result行不计入顶层324。修改仅 capture.rs、t44.rs 与本文；未重复未修改的 Web/API/pc。修复基线 `3c62902ec503709ad63d9e95319de915b3628af1`，限定复审基线仍可使用原 review head `e3ff6a1803bcab63a9cea7bc74d3542adf699c38`。提交SHA见追加交接报告；状态为待父 Agent 限定复审、followup PR 和安全 dev 重新验收，不宣称已完成生命周期。
