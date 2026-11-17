@@ -264,3 +264,13 @@ impl JobOutcome {
         }
     }
 }
+
+/// Read the dispatch envelope only while this attempt owns a live lease.
+/// Publication must still recheck inside its own domain transaction.
+pub async fn load_claimed(
+    pool: &sqlx::PgPool,
+    lease: &Lease,
+) -> Result<Option<Job>, crate::db::DbError> {
+    Ok(sqlx::query_as("SELECT * FROM jobs WHERE id=$1 AND lease_token=$2 AND lease_expires_at>clock_timestamp() AND state='running'")
+        .bind(lease.job_id).bind(lease.token).fetch_optional(pool).await?)
+}

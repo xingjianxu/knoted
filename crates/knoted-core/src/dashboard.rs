@@ -17,7 +17,7 @@ pub struct DashboardCounts {
     pub tasks_open: i64,
     pub tasks_due_today: i64,
     pub projects_active: i64,
-    /// File ingestion is unavailable until T43; there is no file_sources table.
+    /// Registered present sources; unhashed scan observations are not sources.
     pub files: i64,
 }
 #[derive(Default, Serialize)]
@@ -47,7 +47,7 @@ pub async fn summary(ctx: &AppContext, _: GetDashboard) -> Result<DashboardSumma
         .execute(&mut *tx)
         .await?;
     let recent_notes = repository::recent_notes(&mut tx).await?;
-    let (notes, projects_active, job_failures) = repository::counts(&mut tx).await?;
+    let (notes, projects_active, job_failures, files) = repository::counts(&mut tx).await?;
     let tasks = repository::tasks(&mut tx).await?;
     let mut tasks_by_status = DashboardTasksByStatus::default();
     let mut tasks_due_today = 0;
@@ -85,7 +85,7 @@ pub async fn summary(ctx: &AppContext, _: GetDashboard) -> Result<DashboardSumma
             projects_active,
             tasks_open: tasks_by_status.todo + tasks_by_status.in_progress,
             tasks_due_today,
-            files: 0,
+            files,
         },
         tasks_by_status,
         recent_tasks: tasks.into_iter().take(10).collect(),

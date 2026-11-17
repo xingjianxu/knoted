@@ -222,6 +222,9 @@ describe("prepare", () => {
     assert.match(toml, new RegExp(`origin = "https://knoted\\.example\\.test:${fixture.httpsPort}"`));
     assert.match(toml, /url = "postgres:\/\/dev@127\.0\.0\.1:5432\/dev"/);
     assert.doesNotMatch(toml, /@[A-Z_]+@/);
+    assert.ok(toml.includes('root = "/data/vaultsyncd-dev/dev-server/vaults/knoted-test"'));
+    assert.ok(toml.includes(`staging_root = "${fixture.instanceRoot}/staging"`));
+    assert.match(toml, /\[files\]\nenabled = true/);
 
     assert.equal(statSync(join(fixture.instanceRoot, "config/knoted.toml")).mode & 0o777, 0o600);
     assert.equal(statSync(join(fixture.instanceRoot, "state")).mode & 0o777, 0o700);
@@ -367,7 +370,14 @@ describe("migrate", () => {
   it("缺少 sqlx 时给出明确错误而不是静默跳过", async () => {
     const fixture = await fullFixture();
     run("bash", [serviceScript, "prepare"], { env: prepareEnv(fixture) });
-    const result = run("bash", [serviceScript, "migrate"], { env: prepareEnv(fixture) });
+    // A real host sqlx must not turn this missing-tool case into a database call.
+    const restricted = makeTempDir("no-sqlx-path");
+    for (const tool of ["bash", "dirname", "readlink", "cat", "find", "sort", "xargs", "sha256sum", "cmp"]) {
+      symlinkSync(resolveTool(tool), join(restricted, tool));
+    }
+    const result = run(resolveTool("bash"), [serviceScript, "migrate"], {
+      env: prepareEnv(fixture, { PATH: restricted, KNOTED_SYSTEM_PROFILE_BIN: emptyStaticPath }),
+    });
     assert.equal(result.status, 1);
     assert.match(result.stderr, /sqlx-cli/);
   });

@@ -227,10 +227,20 @@ impl<H: Handler> WorkerRunner<H> {
             tokio::select! {
                 outcome = &mut handler => return Ok(Attempt::Ready(outcome)),
                 _ = ticker.tick() => {
-                    match jobs::heartbeat_state(self.ctx.pool(), lease).await? {
-                        None => return Ok(Attempt::LeaseLost),
-                        Some(JobState::CancelRequested) => return Ok(Attempt::CancelRequested),
-                        Some(_) => {}
+                    // A publishing handler may hold the jobs row lock. Keep
+                    // driving it while heartbeat SQL waits for that same row;
+                    // otherwise neither future can release the other's wait.
+                    // No detached task: returning/dropping drive_handler also
+                    // drops the in-flight heartbeat and handler futures.
+                    tokio::select! {
+                        outcome = &mut handler => return Ok(Attempt::Ready(outcome)),
+                        state = jobs::heartbeat_state(self.ctx.pool(), lease) => {
+                            match state? {
+                                None => return Ok(Attempt::LeaseLost),
+                                Some(JobState::CancelRequested) => return Ok(Attempt::CancelRequested),
+                                Some(_) => {}
+                            }
+                        }
                     }
                 }
             }

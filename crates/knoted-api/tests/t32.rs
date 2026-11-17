@@ -177,8 +177,8 @@ impl Harness {
             .unwrap();
         match kind {
             "file" => {
-                sqlx::query("CREATE TABLE IF NOT EXISTS file_sources(id uuid PRIMARY KEY REFERENCES entity_registry(id),status text NOT NULL DEFAULT 'present',relative_path text NOT NULL DEFAULT '資料/report.md')").execute(&mut *tx).await.unwrap();
-                sqlx::query("INSERT INTO file_sources(id) VALUES($1)")
+                sqlx::query("INSERT INTO file_roots(id,configured_path) VALUES(gen_random_uuid(),'/isolated/t32') ON CONFLICT(singleton) DO NOTHING").execute(&mut *tx).await.unwrap();
+                sqlx::query("INSERT INTO file_sources(id,root_id,relative_path,device,inode,size,mtime_ns,ctime_ns,nlink,sha256,content_version,version,status,observation,last_seen_at) SELECT $1,id,'資料/report.md',1,1,0,0,0,1,'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',1,1,'present','{}',now() FROM file_roots")
                     .bind(id)
                     .execute(&mut *tx)
                     .await

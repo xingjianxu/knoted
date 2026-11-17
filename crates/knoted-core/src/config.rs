@@ -1,8 +1,8 @@
 //! Process configuration loaded from TOML.
 //!
-//! The configuration model is deliberately independent of Tokio, Axum, SQLx and
-//! logging runtimes: loading and validation only use `serde`, `toml` and
-//! `thiserror`. Secrets are redacted from every `Debug` representation.
+//! Loading is independent of process runtimes. File storage validation resolves
+//! existing ancestors to reject aliases into read-only sources. Secrets are
+//! redacted from every `Debug` representation.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -146,6 +146,103 @@ impl Default for AssetsConfig {
     }
 }
 
+/// Disabled unless explicitly configured. Sources remain read-only; staging
+/// must live outside the observed tree.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct FilesConfig {
+    pub enabled: bool,
+    pub root: Option<PathBuf>,
+    pub staging_root: Option<PathBuf>,
+    pub debounce_seconds: u64,
+    pub rescan_seconds: u64,
+    pub include_hidden: Vec<PathBuf>,
+    pub exclude: Vec<PathBuf>,
+}
+impl Default for FilesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            root: None,
+            staging_root: None,
+            debounce_seconds: 2,
+            rescan_seconds: 600,
+            include_hidden: vec![],
+            exclude: vec![],
+        }
+    }
+}
+impl FilesConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        let invalid = || {
+            ConfigError::Invalid { field: "files", message: "requires absolute separate root/staging paths, positive intervals and safe relative rules".into() }
+        };
+        if self.debounce_seconds == 0 || self.rescan_seconds == 0 {
+            return Err(invalid());
+        }
+        if !(crate::files::scanner::ScanRules {
+            include_hidden: self.include_hidden.clone(),
+            exclude: self.exclude.clone(),
+        })
+        .valid()
+        {
+            return Err(invalid());
+        }
+        for path in [&self.root, &self.staging_root].into_iter().flatten() {
+            if !path.is_absolute()
+                || path
+                    .components()
+                    .any(|p| matches!(p, std::path::Component::ParentDir))
+            {
+                return Err(invalid());
+            }
+        }
+        if self.enabled {
+            let (Some(root), Some(staging)) = (&self.root, &self.staging_root) else {
+                return Err(invalid());
+            };
+            let resolved_root = resolve_existing(root).map_err(|_| invalid())?;
+            let resolved_staging = resolve_existing(staging).map_err(|_| invalid())?;
+            if resolved_staging.starts_with(&resolved_root)
+                || resolved_root.starts_with(&resolved_staging)
+            {
+                return Err(invalid());
+            }
+        }
+        Ok(())
+    }
+}
+
+// Resolve existing ancestors too: the configured staging leaf may not exist
+// yet, while one of its ancestors is an alias into the read-only source tree.
+fn resolve_existing(path: &Path) -> std::io::Result<PathBuf> {
+    resolve_existing_at(path, 0)
+}
+fn resolve_existing_at(path: &Path, depth: usize) -> std::io::Result<PathBuf> {
+    if depth > 40 {
+        return Err(std::io::ErrorKind::InvalidInput.into());
+    }
+    match std::fs::canonicalize(path) {
+        Ok(path) => Ok(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if let Ok(target) = std::fs::read_link(path) {
+                let target = if target.is_absolute() {
+                    target
+                } else {
+                    path.parent()
+                        .ok_or(std::io::ErrorKind::InvalidInput)?
+                        .join(target)
+                };
+                return resolve_existing_at(&target, depth + 1);
+            }
+            let parent = path.parent().ok_or(std::io::ErrorKind::InvalidInput)?;
+            Ok(resolve_existing_at(parent, depth + 1)?
+                .join(path.file_name().ok_or(std::io::ErrorKind::InvalidInput)?))
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// Validated process configuration.
 #[derive(Clone, PartialEq, Eq)]
 pub struct AppConfig {
@@ -155,6 +252,7 @@ pub struct AppConfig {
     pub credentials: CredentialsConfig,
     pub auth: AuthConfig,
     pub assets: AssetsConfig,
+    pub files: FilesConfig,
     secrets: BTreeMap<String, String>,
 }
 
@@ -167,6 +265,7 @@ impl fmt::Debug for AppConfig {
             .field("credentials", &self.credentials)
             .field("auth", &self.auth)
             .field("assets", &self.assets)
+            .field("files", &self.files)
             .field("loaded_credentials", &self.secrets.len())
             .finish()
     }
@@ -246,6 +345,24 @@ impl AppConfig {
             validate_database(database)?;
         }
         validate_auth(&file.auth)?;
+        file.files.validate()?;
+        if file.files.enabled {
+            let source = resolve_existing(file.files.root.as_ref().expect("validated root"))
+                .map_err(|_| ConfigError::Invalid {
+                    field: "files.root",
+                    message: "cannot resolve existing ancestors".into(),
+                })?;
+            let assets = resolve_existing(&file.assets.root).map_err(|_| ConfigError::Invalid {
+                field: "assets.root",
+                message: "cannot resolve existing ancestors".into(),
+            })?;
+            if source.starts_with(&assets) || assets.starts_with(&source) {
+                return Err(ConfigError::Invalid {
+                    field: "files.root",
+                    message: "must be separate from private asset storage".into(),
+                });
+            }
+        }
         if !file.assets.root.is_absolute() {
             return Err(ConfigError::Invalid {
                 field: "assets.root",
@@ -269,6 +386,7 @@ impl AppConfig {
             credentials: file.credentials,
             auth: file.auth,
             assets: file.assets,
+            files: file.files,
             secrets,
         })
     }
@@ -316,6 +434,8 @@ struct ConfigFile {
     auth: AuthConfig,
     #[serde(default)]
     assets: AssetsConfig,
+    #[serde(default)]
+    files: FilesConfig,
 }
 
 #[derive(Deserialize)]

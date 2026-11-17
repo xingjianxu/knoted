@@ -180,7 +180,8 @@ command_prepare() {
     @DOMAIN@ "$domain" \
     @HTTPS_PORT@ "$https_port" \
     @LOG_LEVEL@ "$log_level" \
-    @ASSETS_ROOT@ "$instance_root/assets"
+    @ASSETS_ROOT@ "$instance_root/assets" \
+    @STAGING_ROOT@ "$instance_root/staging"
 
   check_ports
   log "prepare 完成：配置 $config_file；HTTPS 由宿主 Caddy 管理"

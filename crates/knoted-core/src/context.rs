@@ -80,6 +80,7 @@ pub struct AppContext {
     pool: PgPool,
     clock: Arc<dyn Clock>,
     asset_root: std::path::PathBuf,
+    files: crate::config::FilesConfig,
 }
 
 impl AppContext {
@@ -89,6 +90,7 @@ impl AppContext {
             pool,
             clock: Arc::new(SystemClock),
             asset_root: crate::config::AssetsConfig::default().root,
+            files: crate::config::FilesConfig::default(),
         }
     }
 
@@ -106,6 +108,14 @@ impl AppContext {
 
     pub fn asset_root(&self) -> &std::path::Path {
         &self.asset_root
+    }
+
+    pub fn with_files(mut self, config: crate::config::FilesConfig) -> Self {
+        self.files = config;
+        self
+    }
+    pub fn files(&self) -> &crate::config::FilesConfig {
+        &self.files
     }
 
     /// The PostgreSQL pool.
