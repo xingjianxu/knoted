@@ -1,5 +1,6 @@
 //! HTTP route assembly.
 
+pub mod assets;
 pub mod auth;
 pub mod health;
 pub mod notes;
@@ -25,7 +26,8 @@ pub fn router(ctx: AppContext, auth: AuthConfig) -> Router {
             "/api/v1",
             auth::router(auth.clone(), ctx.clone())
                 .merge(sessions::router(auth.clone(), ctx.clone()))
-                .merge(notes::router(auth, ctx.clone())),
+                .merge(notes::router(auth.clone(), ctx.clone()))
+                .merge(assets::router(auth, ctx.clone())),
         )
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)

@@ -56,7 +56,7 @@ pub async fn move_note(ctx: &AppContext, input: MoveNote) -> Result<Note, Domain
     if input.position < 0 {
         return Err(DomainError::InvalidField("position"));
     }
-    let mut tx = ctx.pool().begin().await?;
+    let mut tx = repo::begin_write(ctx).await?;
     let result = async {
         repo::lock_tree(&mut tx).await?;
         let mut note = repo::find(&mut tx, input.id, true)
@@ -94,7 +94,7 @@ pub async fn move_note(ctx: &AppContext, input: MoveNote) -> Result<Note, Domain
 
 pub async fn restore(ctx: &AppContext, input: RestoreNote) -> Result<Note, DomainError> {
     version(input.expected_version)?;
-    let mut tx = ctx.pool().begin().await?;
+    let mut tx = repo::begin_write(ctx).await?;
     let result = async {
         repo::lock_tree(&mut tx).await?;
         let mut note = repo::find_any(&mut tx, input.id)

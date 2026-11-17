@@ -5,6 +5,8 @@ edition.workspace = true
 
 [dependencies]
 base64.workspace = true
+image.workspace = true
+tempfile.workspace = true
 chrono.workspace = true
 rand.workspace = true
 reqwest.workspace = true

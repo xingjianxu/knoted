@@ -101,7 +101,7 @@ async fn run_server(args: Vec<String>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let ctx = AppContext::new(pool);
+    let ctx = AppContext::new(pool).with_asset_root(config.assets.root.clone());
 
     let listener = match tokio::net::TcpListener::bind(bind).await {
         Ok(listener) => listener,

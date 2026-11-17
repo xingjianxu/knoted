@@ -79,6 +79,7 @@ impl Clock for FixedClock {
 pub struct AppContext {
     pool: PgPool,
     clock: Arc<dyn Clock>,
+    asset_root: std::path::PathBuf,
 }
 
 impl AppContext {
@@ -87,6 +88,7 @@ impl AppContext {
         Self {
             pool,
             clock: Arc::new(SystemClock),
+            asset_root: crate::config::AssetsConfig::default().root,
         }
     }
 
@@ -94,6 +96,16 @@ impl AppContext {
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = clock;
         self
+    }
+
+    /// Injects private storage for an instance or isolated test.
+    pub fn with_asset_root(mut self, root: impl Into<std::path::PathBuf>) -> Self {
+        self.asset_root = root.into();
+        self
+    }
+
+    pub fn asset_root(&self) -> &std::path::Path {
+        &self.asset_root
     }
 
     /// The PostgreSQL pool.

@@ -66,6 +66,8 @@ pub enum DomainError {
     InvalidQuery,
     #[error(transparent)]
     Document(#[from] document::DomainError),
+    #[error(transparent)]
+    Asset(#[from] crate::assets::service::DomainError),
     #[error("note persistence unavailable")]
     Database(#[from] sqlx::Error),
 }
@@ -121,7 +123,7 @@ pub(super) fn check_version(note: &Note, expected: i64) -> Result<(), DomainErro
 pub async fn create(ctx: &AppContext, input: CreateNote) -> Result<Note, DomainError> {
     title(&input.title)?;
     let document = validate(ctx, input.document_json)?;
-    let mut tx = ctx.pool().begin().await?;
+    let mut tx = repo::begin_write(ctx).await?;
     let result = async {
         repo::lock_tree(&mut tx).await?;
         if let Some(parent) = input.parent_id
@@ -167,7 +169,7 @@ pub async fn update(ctx: &AppContext, input: UpdateNote) -> Result<Note, DomainE
         title(t)?;
     }
     let document = input.document_json.map(|d| validate(ctx, d)).transpose()?;
-    let mut tx = ctx.pool().begin().await?;
+    let mut tx = repo::begin_write(ctx).await?;
     let result = async {
         let mut note = repo::find(&mut tx, input.id, true)
             .await?
@@ -201,7 +203,7 @@ pub async fn update(ctx: &AppContext, input: UpdateNote) -> Result<Note, DomainE
 
 pub async fn delete(ctx: &AppContext, input: DeleteNote) -> Result<(), DomainError> {
     version(input.expected_version)?;
-    let mut tx = ctx.pool().begin().await?;
+    let mut tx = repo::begin_write(ctx).await?;
     let result = async {
         repo::lock_tree(&mut tx).await?;
         let note = repo::find(&mut tx, input.id, true)

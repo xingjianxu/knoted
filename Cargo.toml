@@ -13,6 +13,7 @@ thiserror = "2"
 
 serde_json = { version = "1", features = ["raw_value"] }
 tempfile = "3"
+image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
 sha2 = "0.10"
 url = "2"
 rand = "0.8"
@@ -36,6 +37,7 @@ axum = { version = "0.8", features = [
     "original-uri",
     "query",
     "form",
+    "multipart",
 ] }
 tower = { version = "0.5", features = ["util"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
