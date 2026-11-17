@@ -76,7 +76,8 @@ function Shell() {
           <NavItem active={/^\/projects(?:\/|$)/.test(pathname)} onClick={() => void navigate({ to: "/projects" })}>项目</NavItem>
           <NavItem active={/^\/tasks(?:\/|$)/.test(pathname)} onClick={() => void navigate({ to: "/tasks" })}>事项</NavItem>
           <NavItem active={pathname === "/trash"} onClick={() => void navigate({ to: "/trash" })}>回收站</NavItem>
-          {["文件", "搜索", "问答"].map(
+          <NavItem active={/^\/files(?:\/|$)/.test(pathname)} onClick={() => void navigate({ to: "/files" })}>文件</NavItem>
+          {["搜索", "问答"].map(
             (label) => (
               <NavItem key={label} disabled title="尚未实现">
                 {label}（待开放）
