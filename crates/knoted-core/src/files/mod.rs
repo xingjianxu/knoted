@@ -17,3 +17,7 @@ pub mod safe_fs;
 pub mod scanner;
 
 pub mod identity;
+
+pub mod text;
+
+pub mod extraction;

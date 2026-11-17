@@ -49,7 +49,7 @@ impl Handler for Dispatcher {
                     let input =
                         capture::load_observation(&self.ctx, scan_id, path.into(), lease.clone())
                             .await?;
-                    capture::capture_stable(&self.ctx, input).await
+                    Box::pin(capture::capture_stable(&self.ctx, input)).await
                 }
                 .await;
                 match result {
@@ -64,6 +64,9 @@ impl Handler for Dispatcher {
                         message: "capture changed or unavailable".into(),
                     },
                 }
+            }
+            knoted_core::files::extraction::EXTRACT_JOB_KIND => {
+                super::extract::execute(&self.ctx, lease, &job).await
             }
             _ => ExecutionOutcome::PermanentFailure {
                 message: "unsupported job kind".into(),
