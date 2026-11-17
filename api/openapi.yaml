@@ -1021,6 +1021,43 @@ paths:
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
   /links:
+    get:
+      tags: [Links]
+      summary: 列出来源的稳定身份关联（包括失效目标）
+      operationId: listLinks
+      parameters:
+        - name: source_type
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/EntityEndType"
+        - name: source_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EntityLinkPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
     post:
       tags:
         - Links
@@ -1048,6 +1085,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "409":
           $ref: "#/components/responses/Conflict"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
         "429":
@@ -1081,6 +1120,101 @@ paths:
           $ref: "#/components/responses/Conflict"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /entities/{entityType}/{entityId}/tags:
+    parameters:
+      - name: entityType
+        in: path
+        required: true
+        schema:
+          $ref: "#/components/schemas/EntityEndType"
+      - name: entityId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Tags]
+      summary: 列出实体标签
+      operationId: listEntityTags
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TagPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /entities/{entityType}/{entityId}/tags/{tagId}:
+    parameters:
+      - name: entityType
+        in: path
+        required: true
+        schema:
+          $ref: "#/components/schemas/EntityEndType"
+      - name: entityId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: "#/components/parameters/TagId"
+    put:
+      tags: [Tags]
+      summary: 添加实体标签（幂等）
+      operationId: assignEntityTag
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      responses:
+        "204":
+          description: 已更新
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    delete:
+      tags: [Tags]
+      summary: 移除实体标签（幂等）
+      operationId: removeEntityTag
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      responses:
+        "204":
+          description: 已更新
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
   /projects:
@@ -3388,6 +3522,17 @@ components:
         created_at:
           type: string
           format: date-time
+    EntityLinkPage:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/EntityLink"
+        next_cursor:
+          type: [string, "null"]
     EntityLinkCreate:
       type: object
       additionalProperties: false
