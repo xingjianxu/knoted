@@ -81,6 +81,8 @@ beforeEach(() => {
         loggedIn = false;
         return new Response(null, { status: 204 });
       }
+      if (path.endsWith("/dashboard"))
+        return json({counts:{notes:0,tasks_open:0,tasks_due_today:0,projects_active:0,files:0},tasks_by_status:{todo:0,in_progress:0,done:0,cancelled:0},recent_tasks:[],recent_notes:[],due_tasks:[],job_failures:0,indexing_enabled:false});
       if (path.endsWith("/auth/passkeys"))
         return json({ items: [], next_cursor: null });
       if (path.endsWith("/auth/sessions"))
@@ -205,14 +207,27 @@ describe("t20 auth routes", () => {
   it("disables unimplemented navigation entries while notes is open", async () => {
     loggedIn = true;
     await mount("/");
-    // T38 已把项目入口接入真实页面，其他入口仍待开放。
-    for (const name of ["概览", "文件", "搜索", "问答"])
+    // 已实现的概览/笔记/项目/事项可用，未来入口仍待开放。
+    for (const name of ["文件", "搜索", "问答"])
       expect(
         await screen.findByRole("button", { name: new RegExp(name) }),
       ).toBeDisabled();
     expect(screen.getByRole("button", { name: "笔记" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "项目" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "事项" })).toBeEnabled();
+  });
+  it("t41 从已实现页面点击概览返回真实默认首页", async () => {
+    loggedIn = true;
+    const { router } = await mount("/settings/security");
+    await screen.findByRole("heading", { name: "凭据与会话" });
+    expect(screen.getByRole("button", { name: /^概览/ })).not.toHaveAttribute("aria-current");
+    fireEvent.click(screen.getByRole("button", { name: /^概览/ }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    expect(await screen.findByRole("heading", { name: "工作概览" })).toBeInTheDocument();
+    expect(await screen.findByText("暂无最近笔记")).toBeInTheDocument();
+    expect(requests).toContain("GET /api/v1/dashboard");
+    expect(screen.getByRole("button", { name: "概览" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "概览" })).toHaveAttribute("aria-current", "page");
   });
   it("network errors show retry without claiming unauthenticated", async () => {
     vi.stubGlobal(

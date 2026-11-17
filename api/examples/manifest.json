@@ -99,6 +99,18 @@
       "schema": "ExecutionState",
       "file": "valid/execution-state-interrupted.json",
       "valid": true
+    },
+    {
+      "document": "openapi.yaml",
+      "schema": "DashboardSummary",
+      "file": "valid/dashboard-summary.json",
+      "valid": true
+    },
+    {
+      "document": "openapi.yaml",
+      "schema": "DashboardSummary",
+      "file": "invalid/dashboard-summary-missing-indexing.json",
+      "valid": false
     }
   ]
 }

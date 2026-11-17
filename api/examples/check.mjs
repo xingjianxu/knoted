@@ -214,6 +214,18 @@ const EXPECTED_VERSION_SCHEMAS = [
 const REQUIRED_EXAMPLES = [
   {
     document: "openapi.yaml",
+    schema: "DashboardSummary",
+    file: "valid/dashboard-summary.json",
+    valid: true,
+  },
+  {
+    document: "openapi.yaml",
+    schema: "DashboardSummary",
+    file: "invalid/dashboard-summary-missing-indexing.json",
+    valid: false,
+  },
+  {
+    document: "openapi.yaml",
     schema: "TaskStatus",
     file: "valid/task-status-in-progress.json",
     valid: true,
