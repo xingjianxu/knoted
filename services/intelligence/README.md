@@ -75,3 +75,35 @@ the staged input as UTF-8 text with one text per non-blank line. Both reject
 invalid output with a stable error code instead of publishing a partial result.
 Parse and embed share `KNOTED_INTELLIGENCE_GPU_SLOTS` (default 1), so the two
 model families are serialised on the one Python card.
+
+Office parsing is available as the **pure library** `parsing.office.parse_office`
+(T48 stage A); execution dispatch and Rust/Worker integration await T47/stage B.
+It reads transitional DOCX/XLSX/PPTX OOXML with bounded ZIP/XML admission and
+never launches Office, calculates formulas, loads external resources, or extracts
+embedded objects. It reuses `ParsedDocument`/`ParsedBlock`; its options revision
+binds the extraction policy and internal budgets.
+
+DOCX extracts body paragraphs/tables in original order (including merged and
+nested cells); unsupported revisions, fields, content controls and text boxes
+fail explicitly. XLSX extracts visible sheets/rows/columns using actual sparse
+cells, original names and A1 coordinates. Formulas use stored caches only, omit
+missing caches and retain error caches; external/structured-reference formulas
+are conservatively refused. Numeric/date values retain their OOXML stored text.
+PPTX extracts slide-owned text boxes/groups/tables in XML z-order, including
+hidden slides with their original 1-based ordinal. Charts/SmartArt and embedded
+objects are refused. Headers/footers, comments/notes, inherited master/layout
+text, images/OCR, formatting and presentation animations are outside this body
+text policy. DOCX/XLSX have no invented page numbers; all Office bbox values are
+null. A successful result means complete extraction within this declared subset,
+not a full Office rendering.
+
+Admission includes the existing 100 MiB input ceiling plus internal limits:
+4096 parts, 32 MiB per expanded part, 128 MiB total expansion, 200:1 compression,
+500,000 XML nodes, depth 64, 16 MiB XML/output text, 100,000 actual cells and
+100,000 blocks. These conservative implementation choices may reject valid
+large documents; refusals never return truncated results. `corrupt_input`,
+`unsupported_format`, `input_too_large`, `office_budget_exceeded` and
+`office_io_error` remain distinct safe parser codes. The execution supervisor,
+not the pure function, must enforce the existing 900-second deadline in stage B.
+See [T48 evidence](../../docs/plans/knoted-v1/evidence/t48-office.md) for exact
+boundaries, budget rationale and verification status.
