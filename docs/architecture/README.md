@@ -1,18 +1,18 @@
 # 架构现状
 
-截至 2026-11-17，T01—T37 已落地：Rust 2024 workspace（`crates/knoted-core` 配置/数据库/任务队列/认证内核/暂存与内部协议客户端、`crates/knoted-api` axum 服务与健康检查/认证/笔记/标签关联/项目/事项路由、`crates/knoted-worker` 领取-心跳-提交骨架）、pnpm workspace（`apps/web` React 外壳与笔记编辑/树/历史页面、`packages/api-client` 生成客户端；T17 已集成 mtone）、`api/openapi.yaml` 与 `api/intelligence.openapi.yaml` 契约、`migrations/0001—0011`，以及 `services/intelligence/` 的 Python 执行服务（SQLite 账本、Docling+RapidOCR 解析、BGE-M3 dense 嵌入）。笔记文档校验、CRUD 与版本 API 已实现；笔记树移动/恢复、历史快照与Worker补存、图片资产上传/鉴权读取及事务引用已实现；BlockNote 编辑、自动保存与冲突保稿、笔记树/只读历史、标签关联、项目与事项 API、终态约束与上海时区日期计算、事项跟进备注与不可改写系统事件、事项归档/恢复和 30 天安全回收已实现；项目/事项页面、文件扫描与检索、RAG 生成留待后续任务，仍按 [实施计划](../plans/knoted-v1/README.md) 逐卡推进；本页不构成 Accepted ADR。
+截至 2026-11-18，主线已包含 Rust 2024 workspace、pnpm workspace、浏览器/内部 OpenAPI 契约和 `migrations/0001—0015`。笔记、项目与事项领域及页面、看板/时间线、工作概览、统一回收站，以及只读文件扫描、稳定采集、保守身份识别/手动重关联、Rust 文本解析与成功提取发布已通过主线和 dev 验收。`services/intelligence/` 已有 SQLite 账本与 Docling+RapidOCR/BGE-M3 执行服务代码，当前 dev 固定运行链仍为 API/Worker；Python 计算服务尚未纳入。PDF/图片、Office 的独立准备在任务分支，完整执行/退出证明等待 [T47 补充 RFC](../rfcs/2026-11-18-t47-execution-exit-confirmation.md) 人工确认；文件浏览/预览、索引与 RAG 继续按 [任务状态](../plans/knoted-v1/README.md) 推进。索引尚未开放，本页不构成 Accepted ADR。
 
 UI 目标已按 [ADR 0002](../decisions/0002-mtone-ui-ownership.md) 改为应用直接消费 npm `@bixlab/mtone`。**T17—T19 均已集成主线**（T17 PR #42/`e3e1db2`；T18 PR #46/`4425ab9`；T19 PR #48/`6de79a8`）：`apps/web` 当前精确消费 0.4.0 的公开 Provider/CSS（[升级记录](../plans/knoted-v1/evidence/mtone-0.4.0.md)；T17—T19 原始验收为 0.2.0），`packages/ui` cn 占位包已移除；基础表单、弹层/菜单/通知、树/游标列表/反馈通过消费端验收；生产仅新增通知 Provider 注册与应用游标 reducer。证据见 [T17](../plans/knoted-v1/evidence/t17.md)、[T18](../plans/knoted-v1/evidence/t18.md)、[T19](../plans/knoted-v1/evidence/t19.md)。业务组合/数据适配留在 apps/web；证实上游能力缺口时存档提示词、告知用户并在上游 mtone 提 Issue，见 [UI 指南](../development/ui-mtone.md)。
 
 | 边界 | 责任 |
 |---|---|
-| `crates/` | Rust workspace：core（配置/数据库/`jobs`/`auth`/`files::staging`/`intelligence` 客户端、`notes` 文档校验与事务服务、`links` 标签/关联、`projects` 项目生命周期、`tasks` 单层事项/终态/日期/跟进备注与系统事件/生命周期）、api（axum 路由、`middleware` request_id/认证、`admin` CLI）、worker（runner 骨架、历史补存和事项回收维护） |
-| `apps/`、`packages/` | React 前端直接消费 mtone，BlockNote 仅作笔记编辑核心，应用组合目录/草稿/历史/关联、OpenAPI 生成客户端；无本地通用 UI 包 |
-| `api/`、`migrations/` | 浏览器与内部契约、数据库迁移（`0001` registry、`0002` jobs/outbox、`0003` auth、`0004` job retry、`0005` notes、`0006` history、`0007` assets、`0008` tags/links、`0009` projects、`0010` tasks、`0011` activities） |
+| `crates/` | Rust workspace：core（配置/数据库/`jobs`/`auth`/`intelligence` 客户端、`notes`、`links`、`projects`、`tasks`、`dashboard`/`trash` 领域服务及 `files` 的 FD 安全读取/扫描/采集/身份/文本/提取发布）、api（axum 业务路由、认证与 request_id、`admin` CLI）、worker（单 Dispatcher/租约 runner、历史补存、事项回收、文件扫描和文本提取） |
+| `apps/`、`packages/` | React 前端直接消费 mtone，BlockNote 仅作笔记编辑核心，应用组合目录/草稿/历史/关联、项目事项/看板时间线/概览回收站、OpenAPI 生成客户端；无本地通用 UI 包 |
+| `api/`、`migrations/` | 浏览器与内部契约、数据库迁移（`0001` registry、`0002` jobs/outbox、`0003` auth、`0004` job retry、`0005` notes、`0006` history、`0007` assets、`0008` tags/links、`0009` projects、`0010` tasks、`0011` activities、`0012` 文件根/扫描/观察/来源、`0013` 闭合采集、`0014` 移动资格、`0015` 成功提取） |
 | `services/intelligence/` | Python（uv 管理，Python 3.12）：受控执行服务、SQLite 执行账本、离线解析/嵌入适配；不接触业务数据库与源目录 |
 | `nix/` | Knoted 侧 provider 契约模块与包/模块（ADR 0003：**只给将来的生产实例**用，测试实例不再由 NixOS 运行；见 `docs/plans/knoted-v1/evidence/t12-deployment.md`） |
 | `pcwrap.config.json`、`process-compose.yaml`、`tools/dev/pc/` | 测试实例的运行编排（ADR 0003）：控制端口 15600、应用配置模板、固定产物校验、API 端口检查与迁移；HTTPS 由宿主共享 Caddy 管理（ADR 0005） |
-| `tests/pc/` | 编排配置、模板渲染、证书校验、端口占用与迁移失败的场景测试（`pnpm test:pc`） |
+| `tests/pc/` | 编排配置、模板渲染、固定产物校验、端口占用与迁移失败的场景测试（`pnpm test:pc`） |
 | `Cargo.toml`、`package.json` | 构建元数据与锁定依赖；技术栈迁移需单独评估 |
 | `AGENTS.md` / `.agents/skills/` | 开发规则及项目管理流程，不加入运行时依赖 |
 | `docs/decisions/` / `docs/rfcs/` | 已讨论的决策及重要方案 |
@@ -36,3 +36,10 @@ T32 的分类型标签/关联表复用 registry 稳定身份，再以实际业�
 T37 的 `tasks::lifecycle` 复用关系锁、CAS 和 `task.changed` outbox；归档单项且不级联、仍可读，父/项目只读封闭正文、跟进、标签和 source-link 写入口。恢复保留当前父/项目并重验终态约束，父已删时先恢复父。Worker 启动及每 30 秒独立执行 task-only 清理：满 30 天叶子先删、尚存子行阻止父清理，时间线和 tag 绑定同事务清除，保留 registry/失效 links/shared tags/outbox；不引入迁移或虚构搜索投影。证据见 [T37](../plans/knoted-v1/evidence/t37-lifecycle.md)。
 
 编辑输入使用公开onBeforeChange的候选事务tr.doc，在块ID分配前检查实际链接标记，复用原URI校验；不依赖getChanges将临时节点转换为Block。无法保存的URI整次拒绝并反馈，原文/选区保留，后续有效编辑继续进入草稿。实现与真实剪贴板/正常建块验收见[T27恢复证据](../plans/knoted-v1/evidence/t27-clipboard-recovery.md)。
+
+
+T38—T42 已交付项目/事项页面、看板与跟进时间线、默认概览和统一回收站。概览消费注入时钟与上海日期规则，回收站读取历史快照；CAS/状态门槛失败保留草稿，成功响应更新查询缓存。实现与真实 HTTPS 证据分别见 [T39](../plans/knoted-v1/evidence/t39-task-page.md)、[T40](../plans/knoted-v1/evidence/t40-board-timeline.md)、[T41](../plans/knoted-v1/evidence/t41-dashboard.md)、[T42](../plans/knoted-v1/evidence/t42-trash.md)。
+
+T43—T45 的 `files` 通过根身份与扫描代次管理只读来源；`safe_fs` 逐段 FD/NOFOLLOW，通知与周期扫描由单 Worker Dispatcher 消费。扫描中断或根不确定时暂停，不批量宣告失踪；只有稳定且完整校验的闭合对象才能更新来源。`FileSource.version` 用于元数据 CAS/ETag，`content_version` 仅随正文摘要变化；同摘要不证明身份，移动需要强证明，否则保守建立新来源，手动 relink 原子迁移元数据/关系并保留历史身份。契约见 [ADR 0006](../decisions/0006-file-pipeline-and-aggregate-contracts.md)，运行与边界见 [T43](../plans/knoted-v1/evidence/t43-scanner.md)、[T44](../plans/knoted-v1/evidence/t44-capture.md)、[T45](../plans/knoted-v1/evidence/t45-identity.md)。
+
+T46 的 `files::text/extraction` 读取已校验闭合输入，严格 UTF-8/UTF-16 BOM，保留原文与结构位置，拒绝非法编码/NUL。实际 `file.extract` 任务仅对明确文本白名单开放；成功在租约、当前根/来源/观察栅栏下写入 `file_extractions` 与 outbox，唯一身份为来源/内容版本/解析器/选项，元数据修改不重算。确定失败的同语义工作不因新扫描重新获得预算；取消的旧观察仍可由新捕获补排。Rust 文本记录 execution_id 为 NULL，未伪造 Python 执行 ID。测试入口为 core/worker 的 `t46_` 与 Web 概览回归，实际命令/主线/dev/清理见 [T46](../plans/knoted-v1/evidence/t46-text.md)。当前 outbox 尚无全文/向量发布消费者，不将解析成功等同检索可用。
