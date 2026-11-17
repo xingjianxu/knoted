@@ -459,3 +459,41 @@ it("returning A→B→A seeds a new real editor from the saved draft, retaining 
     expect.objectContaining({ id: "paragraph-return", type: "paragraph", content: [{ type: "text", text: "保留的第二段" }] }),
   ]));
 });
+
+it("uppercase UUID retains the initialized draft after401 and a failed reauthentication, then retries the original CAS", async () => {
+  const canonical = "abcdefab-cdef-4abc-8def-abcdefabcdef";
+  const upper = canonical.toUpperCase(); expect(upper).not.toBe(canonical);
+  const path = `/notes/${upper}`; expect(safeReturnTo(path)).toBe(path);
+  notes[0] = { ...note(1), id: canonical, title: "大写路径笔记", document: doc("认证失败仍保留的正文") };
+  let expired = false;
+  intercept = (r, u) => {
+    if (r.method === "GET" && u.pathname.toLowerCase() === `/api/v1/notes/${canonical}`) return expired ? failure(401) : json(notes[0]);
+    if (expired && u.pathname.endsWith("/auth/session")) return json({ code: "SESSION_EXPIRED", message: "重新认证仍然失效" }, 401);
+    if (expired && (r.method === "PATCH" && u.pathname.endsWith(canonical) || r.method === "GET" && u.pathname === "/api/v1/notes")) return failure(401);
+    return undefined;
+  };
+  const { bundle, router } = await mount(path); const input = await title();
+  const editor = screen.getByRole("region", { name: "当前笔记" }).querySelector('[contenteditable="true"]');
+  expired = true; fireEvent.change(input, { target: { value: "大写路径失效后保留草稿" } });
+  await waitFor(() => expect(calls("PATCH", canonical)).toHaveLength(1), { timeout: 2500 });
+  await screen.findByText("会话已失效，本地草稿已保留");
+  await waitFor(() => expect(bundle.queryClient.getQueryData(queryKeys.auth.session())).toBeUndefined());
+  expect(screen.getByRole("textbox", { name: "笔记标题" })).toHaveValue("大写路径失效后保留草稿");
+  fireEvent.click(screen.getByRole("button", { name: "已重新登录，重试原版本" }));
+  await waitFor(() => expect(calls("GET", "/auth/session")).toHaveLength(2));
+  await screen.findByText("重新认证仍然失效");
+  expect(screen.getByRole("textbox", { name: "笔记标题" })).toHaveValue("大写路径失效后保留草稿");
+  expect(screen.getByText("认证失败仍保留的正文")).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "当前笔记" }).querySelector('[contenteditable="false"]')).toBe(editor);
+  expect(screen.getByText(/当前基础版本 1/)).toBeInTheDocument(); expect(router.state.location.pathname).toBe(path);
+  expect(calls("PATCH", canonical)).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "复制当前草稿" }));
+  expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("大写路径失效后保留草稿"));
+  expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("认证失败仍保留的正文"));
+  expired = false; fireEvent.click(screen.getByRole("button", { name: "已重新登录，重试原版本" }));
+  await waitFor(() => expect(calls("PATCH", canonical)).toHaveLength(2));
+  expect(await calls("PATCH", canonical)[1]!.json()).toEqual({ expected_version: 1, title: "大写路径失效后保留草稿", document: doc("认证失败仍保留的正文") });
+  await waitFor(() => expect(screen.getByRole("textbox", { name: "笔记标题" })).toBeEnabled());
+  expect(screen.getByRole("textbox", { name: "笔记标题" })).toHaveValue("大写路径失效后保留草稿");
+  expect(router.state.location.pathname).toBe(path);
+});
