@@ -1,6 +1,6 @@
 //! Task HTTP DTO presence semantics; core owns validation and transactions.
 use crate::{
-    error::ApiErrorBody,
+    error::{ApiErrorBody, FieldError},
     middleware::{
         RequestId,
         auth::{require_csrf, require_session},
@@ -141,6 +141,12 @@ fn error(id: RequestId, e: DomainError) -> Response {
     } = e
     {
         b = b.with_current_version(v);
+    }
+    if let DomainError::InvalidField(field) = e {
+        b = b.with_field_errors(vec![FieldError {
+            field: field.into(),
+            message: "invalid task field".into(),
+        }]);
     }
     b.into_response(status)
 }

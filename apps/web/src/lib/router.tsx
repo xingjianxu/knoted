@@ -5,7 +5,7 @@ import { routeTree } from "../routeTree.gen";
 /** Strict local destinations implemented by the authenticated routes. */
 export function safeReturnTo(value: unknown): string {
   return typeof value === "string" &&
-    (["/", "/settings/security", "/notes"].includes(value) || /^\/notes\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value))
+    (["/", "/settings/security", "/notes", "/tasks"].includes(value) || /^\/(?:notes|tasks)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value))
     ? value
     : "/";
 }

@@ -206,12 +206,13 @@ describe("t20 auth routes", () => {
     loggedIn = true;
     await mount("/");
     // T38 已把项目入口接入真实页面，其他入口仍待开放。
-    for (const name of ["概览", "事项", "文件", "搜索", "问答"])
+    for (const name of ["概览", "文件", "搜索", "问答"])
       expect(
         await screen.findByRole("button", { name: new RegExp(name) }),
       ).toBeDisabled();
     expect(screen.getByRole("button", { name: "笔记" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "项目" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "事项" })).toBeEnabled();
   });
   it("network errors show retry without claiming unauthenticated", async () => {
     vi.stubGlobal(

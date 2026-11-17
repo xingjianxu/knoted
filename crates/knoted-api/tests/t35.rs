@@ -362,10 +362,10 @@ async fn t35_real_iana_invalid_local_time_http() {
             let before = h.snapshot().await;
             let mut body = json!({"title":"invalid local time"});
             body[field] = date(d, json!(time));
-            assert_eq!(
-                h.send("POST", "/api/v1/tasks", body).await.0,
-                StatusCode::UNPROCESSABLE_ENTITY
-            );
+            let (status, _, error) = h.send("POST", "/api/v1/tasks", body).await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+            assert_eq!(error["code"], "validation_failed");
+            assert_eq!(error["field_errors"][0]["field"], "start/due");
             assert_eq!(h.snapshot().await, before);
         }
     }
