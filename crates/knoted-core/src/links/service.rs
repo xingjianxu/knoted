@@ -10,7 +10,7 @@ pub enum DomainError {
     #[error("entity or tag not found")]
     NotFound,
     #[error("version or state conflict")]
-    Conflict,
+    Conflict { current_version: Option<i64> },
     #[error("invalid field")]
     InvalidField,
     #[error("invalid pagination")]
@@ -175,7 +175,9 @@ fn write_error(e: sqlx::Error) -> DomainError {
     if e.as_database_error()
         .is_some_and(|e| e.is_unique_violation())
     {
-        DomainError::Conflict
+        DomainError::Conflict {
+            current_version: None,
+        }
     } else {
         e.into()
     }
@@ -194,7 +196,9 @@ pub async fn update_tag(ctx: &AppContext, input: UpdateTag) -> Result<Tag, Domai
             .await?
             .ok_or(DomainError::NotFound)?;
         if old.version != input.expected_version {
-            return Err(DomainError::Conflict);
+            return Err(DomainError::Conflict {
+                current_version: Some(old.version),
+            });
         }
         let row = repository::rename_tag(&mut tx, input.id, name, ctx.now())
             .await
@@ -211,7 +215,9 @@ pub async fn delete_tag(ctx: &AppContext, input: DeleteTag) -> Result<(), Domain
             .await?
             .ok_or(DomainError::NotFound)?;
         if tag.version != input.expected_version {
-            return Err(DomainError::Conflict);
+            return Err(DomainError::Conflict {
+                current_version: Some(tag.version),
+            });
         }
         repository::delete_tag(&mut tx, input.id, ctx.now()).await?;
         Ok(())
@@ -262,7 +268,13 @@ async fn change_tag(
 pub async fn create_link(ctx: &AppContext, input: CreateLink) -> Result<EntityLink, DomainError> {
     let mut tx = ctx.pool().begin().await?;
     let result = async {
-        // Lock endpoints in UUID order, including reciprocal concurrent operations.
+        if input.source_type == EntityType::Note || input.target_type == EntityType::Note {
+            // Structural note writers lock the tree before any note/ancestor rows.
+            // This operation never touches asset references, so it needs no asset
+            // lock and never acquires one after the tree lock.
+            crate::notes::repository::lock_tree(&mut tx).await?;
+        }
+        // UUID order also serializes reciprocal links for other entity types.
         let source = Entity {
             entity_type: input.source_type,
             id: input.source_id,
@@ -330,7 +342,9 @@ pub async fn remove_link(ctx: &AppContext, input: RemoveLink) -> Result<(), Doma
             .await?
             .ok_or(DomainError::NotFound)?;
         if row.version != input.expected_version {
-            return Err(DomainError::Conflict);
+            return Err(DomainError::Conflict {
+                current_version: Some(row.version),
+            });
         }
         repository::remove_link(&mut tx, input.id).await?;
         Ok(())

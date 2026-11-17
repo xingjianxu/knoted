@@ -77,13 +77,13 @@ fn bad(id: RequestId) -> Response {
         .into_response(StatusCode::BAD_REQUEST)
 }
 fn error(id: RequestId, e: DomainError) -> Response {
-    let (status, code, message) = match e {
+    let (status, code, message) = match &e {
         DomainError::NotFound => (
             StatusCode::NOT_FOUND,
             "not_found",
             "entity or tag not found",
         ),
-        DomainError::Conflict => (
+        DomainError::Conflict { .. } => (
             StatusCode::CONFLICT,
             "version_conflict",
             "version or state conflict",
@@ -100,7 +100,14 @@ fn error(id: RequestId, e: DomainError) -> Response {
             "association persistence unavailable",
         ),
     };
-    ApiErrorBody::new(code, message, id.get()).into_response(status)
+    let mut body = ApiErrorBody::new(code, message, id.get());
+    if let DomainError::Conflict {
+        current_version: Some(version),
+    } = e
+    {
+        body = body.with_current_version(version);
+    }
+    body.into_response(status)
 }
 fn tag_response(t: Tag, status: StatusCode) -> Response {
     (

@@ -42,7 +42,9 @@ pub(super) async fn visible(
     .await?;
     match archived {
         None => Err(DomainError::NotFound),
-        Some(true) if write => Err(DomainError::Conflict),
+        Some(true) if write => Err(DomainError::Conflict {
+            current_version: None,
+        }),
         Some(_) => Ok(()),
     }
 }

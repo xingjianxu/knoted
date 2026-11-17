@@ -494,3 +494,158 @@ async fn t32_links_require_auth_csrf_and_cas_and_paginate_without_rebinding() {
         assert_eq!(r.status(), expected);
     }
 }
+
+#[tokio::test]
+async fn t32_cas_conflicts_include_current_version_for_each_versioned_operation() {
+    let h = Harness::new().await;
+    let tag = h
+        .send("POST", "/api/v1/tags", json!({"name":"CAS"}))
+        .await
+        .2;
+    let tag_path = format!("/api/v1/tags/{}", tag["id"].as_str().unwrap());
+    assert_eq!(
+        h.send(
+            "PATCH",
+            &tag_path,
+            json!({"name":"updated","expected_version":1})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    for (method, path, body) in [
+        (
+            "PATCH",
+            tag_path.clone(),
+            json!({"name":"stale","expected_version":1}),
+        ),
+        (
+            "DELETE",
+            format!("{tag_path}?expected_version=1"),
+            Value::Null,
+        ),
+    ] {
+        let (status, _, error) = h.send(method, &path, body).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(error["code"], "version_conflict");
+        assert_eq!(
+            error["current_version"], 2,
+            "{method} must return the current tag version: {error}"
+        );
+    }
+    let a = h.create("source", None).await;
+    let b = h.create("target", None).await;
+    let link = h.send("POST", "/api/v1/links", json!({"source_type":"note","source_id":a["id"],"target_type":"note","target_id":b["id"]})).await.2;
+    let (status, _, error) = h
+        .send(
+            "DELETE",
+            &format!(
+                "/api/v1/links/{}?expected_version=9",
+                link["id"].as_str().unwrap()
+            ),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(error["code"], "version_conflict");
+    assert_eq!(error["current_version"], 1, "{error}");
+}
+
+// The gate holds A until link(A -> B) has queued before move(B -> A).
+// Before the fix, the move holds B and queues on A; releasing the gate makes
+// link hold A while waiting on B, producing a real PostgreSQL deadlock.
+// With the shared tree protocol, move waits on link's tree lock before B.
+#[tokio::test]
+async fn t32_note_link_and_tree_move_share_lock_order_without_deadlock() {
+    use sqlx::Connection;
+    let h = Harness::new().await;
+    let mut notes = [h.create("a", None).await, h.create("b", None).await];
+    notes.sort_by_key(|n| Uuid::parse_str(n["id"].as_str().unwrap()).unwrap());
+    let a = notes[0]["id"].as_str().unwrap();
+    let b = notes[1]["id"].as_str().unwrap();
+    let mut gate = sqlx::PgConnection::connect(&knoted_core::db::testing::test_database_url())
+        .await
+        .unwrap();
+    sqlx::query(&format!("SET search_path TO {}, public", h.db.schema()))
+        .execute(&mut gate)
+        .await
+        .unwrap();
+    let gate_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut gate)
+        .await
+        .unwrap();
+    let mut gate_tx = gate.begin().await.unwrap();
+    sqlx::query("SELECT id FROM notes WHERE id=$1 FOR UPDATE")
+        .bind(Uuid::parse_str(a).unwrap())
+        .execute(&mut *gate_tx)
+        .await
+        .unwrap();
+    let request = |path: &str, body: Value| {
+        Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("cookie", &h.cookie)
+            .header("origin", AuthConfig::default().origin)
+            .header("x-csrf-token", &h.csrf)
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap()
+    };
+    let link = tokio::spawn(h.app.clone().oneshot(request(
+        "/api/v1/links",
+        json!({"source_type":"note","source_id":a,"target_type":"note","target_id":b}),
+    )));
+    let link_pid = blocked_backend(&mut gate_tx, &[gate_pid], None).await;
+    if link_pid.is_none() {
+        gate_tx.rollback().await.unwrap();
+        let _ = link.await;
+        panic!("link did not reach the controlled note-row gate");
+    }
+    let link_pid = link_pid.unwrap();
+    let moved = tokio::spawn(h.app.clone().oneshot(request(
+        &format!("/api/v1/notes/{b}/move"),
+        json!({"parent_id":a,"position":0,"expected_version":1}),
+    )));
+    let move_pid = blocked_backend(&mut gate_tx, &[gate_pid, link_pid], Some(link_pid)).await;
+    gate_tx.commit().await.unwrap();
+    let (link_response, move_response) =
+        tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            (link.await.unwrap().unwrap(), moved.await.unwrap().unwrap())
+        })
+        .await
+        .expect("both requests must finish after releasing the gate");
+    assert!(
+        move_pid.is_some(),
+        "move must enter the controlled lock queue before the gate opens"
+    );
+    let link_status = link_response.status();
+    let move_status = move_response.status();
+    assert_eq!(
+        link_status,
+        StatusCode::CREATED,
+        "link returned {link_status}; move returned {move_status}"
+    );
+    assert_eq!(move_status, StatusCode::OK);
+    let moved = h
+        .send("GET", &format!("/api/v1/notes/{b}"), Value::Null)
+        .await
+        .2;
+    assert_eq!(moved["parent_id"], a);
+}
+
+async fn blocked_backend(
+    c: &mut sqlx::PgConnection,
+    blockers: &[i32],
+    excluded: Option<i32>,
+) -> Option<i32> {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            // Refresh the pg_stat_activity snapshot inside the gate transaction.
+            sqlx::query("SELECT pg_stat_clear_snapshot()").execute(&mut *c).await.unwrap();
+            let pid: Option<i32> = sqlx::query_scalar("SELECT pid FROM pg_stat_activity WHERE pid<>pg_backend_pid() AND pid IS DISTINCT FROM $2 AND pg_blocking_pids(pid) && $1::integer[] ORDER BY pid LIMIT 1")
+                .bind(blockers).bind(excluded).fetch_optional(&mut *c).await.unwrap();
+            if let Some(pid) = pid { return pid; }
+            tokio::task::yield_now().await;
+        }
+    }).await.ok()
+}
