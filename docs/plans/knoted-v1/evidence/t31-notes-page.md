@@ -61,3 +61,17 @@ T30 仅增加可选 `assertCanWrite(noteId)`，在实际 PATCH、history POST、
 - GREEN：`i1-focused-final.log`，exit 0，T31 32 条 + T32 2 条，共 34/34。
 - 完整门禁：`i1-lint.log`、`i1-typecheck-final.log`、`i1-test.log`、`i1-build.log` 全部 exit 0；12 文件/190 测试，构建 3257 modules、997ms，保留已披露 chunk 提示。命令与统一任务 TMPDIR/XDG_CACHE_HOME 前缀同上；focused 命令为 `pnpm --dir apps/web exec vitest run tests/tasks/t31.test.tsx tests/tasks/t32.test.tsx`。
 - 首次类型检查发现回归调用缺少 GET `/links` 必需查询参数，已补真实 source_type/source_id；未把类型错误当行为 RED。所有旧验证和独立审查输出保留。
+
+## 真实 HTTPS 修复 I2：返回笔记时从当前草稿初始化新编辑器
+
+修复基线为 PR #102 合入的 `6f31e3fbf76e8afbbd1be425554d8a546cdf48cd`，使用保留任务 Worktree 的新分支 `fix/t31-return-draft`。主 Agent 在真实 HTTPS 中发现：A 保存图片/代码后切 B 再回 A，T30 的 title/base/draft 是新值，但新挂载的编辑器从冻结 `initialDocument` 装回旧正文，下一次编辑会以新 CAS 覆盖已有内容。
+
+**预检示例勘误：** NotesPage 给 initial-only NoteEditor 的 `document` 应传当前 `autosave.draft.document`。`initialDocument` 是首次/显式 reset 时的冻结输入，不足以作为 A→B→A 新 mount 的正文来源。已有 NoteEditor 自身用 useState 保留首次输入，因此普通 prop 更新仍不会替换编辑器；key 继续仅为 noteId:resetEpoch，显式历史 reset 仍整体重建。不更改 T30 状态或增加 Query→draft 同步。
+
+新增真实 Router/Query/ApiClient/NoteEditor/Upload/CodeSelect 回归：A 代码 Rust→JavaScript，上传图片，真实 1000ms debounce 保存；同 DOM/DOM 选区跨自动保存和确认 Query 重绘保留；A→B→A 新 DOM 必须含已上传图片及 JavaScript。再次改为 Python 后的 PATCH 使用 version2，三个块（代码、图片、另一段正文）完整保留。既有历史 restore 回归同时验证明确 reset 会装载新 title/document/base 并重建 DOM。
+
+- 有效 RED：`i2-red-behavior.log`，exit1，返回 A 后没有 img，DOM code language 仍为 Rust；1 failed /32 skipped。
+- 初次选择器匹配到保存与上传两个 status，记录为 `i2-red.log`，不算产品 RED。
+- GREEN：单场景 `i2-green.log` exit0；最终 T27/T30/T31 `i2-focused-final2.log` exit0，3 文件/103 测试（T31 33 条）。
+- 全部门禁：`i2-lint-final2.log`、`i2-typecheck-final2.log`、`i2-test-final2.log`、`i2-build.log` 全部 exit0；12 文件/191 测试，构建 3257 modules、801ms，保留已披露 chunk 提示。命令及任务 TMPDIR/XDG_CACHE_HOME 前缀沿用上表，focused 命令为 `pnpm --dir apps/web exec vitest run tests/tasks/t27.test.tsx tests/tasks/t30.test.tsx tests/tasks/t31.test.tsx`。
+- 此修复未执行 dev 写入、远程操作或跨卡改动；主 Agent 负责新 PR、主线门禁及真实 HTTPS 复验。父浏览器 harness 的 alertdialog selector 修正独立处理，不计作产品修复。

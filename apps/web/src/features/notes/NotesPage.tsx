@@ -207,7 +207,9 @@ function NotePane({ initialNote, draftStore, bundle, notes, expired, working, on
       <Button disabled={unavailable || notes.length === 0} onClick={() => { setParent(ROOT); setMoveOpen(true); }}>移动笔记</Button>
       <Button disabled={unavailable} onClick={() => setDeleteOpen(true)}>删除笔记</Button>
     </div>
-    <NoteEditor key={`${initialNote.id}:${autosave.resetEpoch}`} document={autosave.initialDocument} readOnly={unavailable} onChange={document => { if (!pending.current && !expired) autosave.changeDraft({ document }); }}>
+    {/* A revisited session mounts from its latest draft. Existing editors ignore
+        ordinary document prop changes; only noteId:resetEpoch replaces them. */}
+    <NoteEditor key={`${initialNote.id}:${autosave.resetEpoch}`} document={autosave.draft.document} readOnly={unavailable} onChange={document => { if (!pending.current && !expired) autosave.changeDraft({ document }); }}>
       <SlashMenu /><BlockMenu /><ImageBlockControls client={bundle.api} /><CodeBlockControls />
     </NoteEditor>
     <NoteAssociations noteId={initialNote.id} api={bundle.api} readOnly={unavailable} assertCanWrite={assertCanWrite} />
