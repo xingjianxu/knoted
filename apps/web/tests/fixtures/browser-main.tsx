@@ -8,10 +8,14 @@ import { UiProvider } from "../../src/lib/ui-provider";
 import { T17Form } from "./t17-form";
 import { T18Overlays } from "./t18-overlays";
 import { T19TreeList } from "./t19-tree-list";
+import { T27Editor } from "./t27-editor";
 
 const task = new URLSearchParams(window.location.search).get("task");
 
 function renderTask() {
+  if (task === "t27") {
+    return <StrictMode><UiProvider><T27Editor /></UiProvider></StrictMode>;
+  }
   if (task === "t18") {
     return (
       <StrictMode>
