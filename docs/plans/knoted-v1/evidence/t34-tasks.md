@@ -42,3 +42,7 @@ T33更新后父Agent实际dev只读确认tasks表0行（含软删），无假标
 | cargo clippy --locked --all-targets -- -D warnings | exit0 |
 
 完整输出为`/data/knoted-dev/tasks/t34/logs/fix1-{red,green-regression,focused-t34,focused-t32,focused-t33,gate-fmt,gate-test,gate-clippy}.log`，逐命令退出码记录在`fix1-focused-status.json`和`fix1-gate-status.json`。本轮只改事项守卫、相应测试、本证据及任务卡；无迁移/契约/依赖/前端变更。作者已自查，主Agent定向复审、主线验证、dev升级/烟测仍待执行；本轮未做远程写入或部署。
+
+## 主 Agent 集成验收
+
+PR [#98](https://github.com/xingjianxu/knoted/pull/98) → 主线 `aa58c1a`。独立 Spec/Quality 审查 PASS，主线 Rust 215 passed / 0 failed / 1 既有 ignored，fmt/clippy exit0。实际输出 `/data/knoted-dev/tasks/t27-t35/evidence/t34-main-*.log`。固定产物aa58c1a、迁移10及真实HTTPS事项CRUD/层级/移动/日期验证通过。本卡 Issue 已关闭且 Projects Done；任务 worktree/已合并分支已安全清理，其他任务成果保留。前述“待执行”是当时实施阶段的历史记录，以本节实际验收为准。

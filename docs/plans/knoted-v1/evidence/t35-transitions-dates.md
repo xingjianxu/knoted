@@ -72,3 +72,7 @@ test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
 全量总计按所有真实 `test result` 行汇总为 229 passed。依赖锁仅增加 chrono-tz/phf/phf_shared/siphasher 四包，未升级已有 chrono 0.4.45；结构比较记录 `dependency-review.json`。作者已自查，未发现待修问题；独立审查由主 Agent 执行，不用作者自查冒称独立审查。
 
 没有前端或 OpenAPI 变更，未重复执行无关前端/生成客户端检查。未 push/PR/merge/deploy，保留本任务分支和 Worktree，供主 Agent 完成主线验证、真实 dev 验收及清理。实施报告：`/data/knoted-dev/tasks/t35/t35-report.md`。
+
+## 主 Agent 集成验收
+
+PR [#100](https://github.com/xingjianxu/knoted/pull/100) → 主线 `e42c1d8`。独立 Spec/Quality 审查 PASS，主线 Rust 229 passed / 0 failed / 1 既有 ignored，fmt/clippy exit0；Web 109 passed，typecheck/lint/build exit0。实际输出 `/data/knoted-dev/tasks/t27-t35/evidence/t35-main-*.log`。固定产物e42c1d8、迁移10，真实HTTPS终态/创建重开换父守卫及1991历史日期gap/fold422验证通过。本卡 Issue 已关闭且 Projects Done；任务 worktree/已合并分支已安全清理，其他任务成果保留。前述“待执行”是当时实施阶段的历史记录，以本节实际验收为准。

@@ -14,7 +14,7 @@
 | `draft` / `changeDraft(patch)` | 当前内存草稿；编辑器仅传 `{ document }`、标题仅传 `{ title }`。局部更新同步合并，传入 DTO 深复制。 |
 | `baseVersion` / `status` / `dirty` / `error` | 逐笔记固定 CAS 基础、保存状态与错误。正常输入停止 1000ms 保存；同笔记只有一个 PATCH，在途新编辑合并为最新稿，旧确认不清新稿。409 和网络/HTTP 失败暂停自动保存；显式 `retrySave()` 不采纳错误里的 currentVersion，409 仍需冲突处理。 |
 | `serverUpdated` | 后台 Query 更新只提示；即使 clean 也不自动改草稿、基础版本或编辑器输入。Query 仅接收确认的服务器 Note，已有更高版本缓存不回退。 |
-| `initialDocument` / `resetEpoch` | `<NoteEditor key={noteId + ':' + resetEpoch} document={initialDocument} ... />`。key 不含版本/状态；保存和 Query 更新不重建编辑器。 |
+| `draft.document` / `resetEpoch` | `<NoteEditor key={noteId + ':' + resetEpoch} document={draft.document} ... />`。NoteEditor 只消费每次挂载的初始值；普通 rerender 忽略新 props，key 不含版本/状态。返回笔记的新挂载从保留会话最新 draft 初始化，不能复用较早的 initialDocument seed。 |
 | `flush(): Promise<Snapshot>` | 绑定原笔记会话，取消 debounce、串行排空保存，再无 body POST snapshots；同时调用共用 barrier。失败拒绝，正常应用导航必须 mounted 时 await 成功；保存已成功而历史失败时重试仅 POST snapshots。快照版本不等于自身确认基础或期间再编辑时拒绝，绝不声称 dirty 离开成功。 |
 | `loadServer(): Promise<Note>` | 暂停自动写、等待已有写/结构操作，再以真实 GET/no-store 加载。加载期间有新编辑则拒绝；成功整体替换草稿/确认值/base 并递增 resetEpoch。 |
 | `restoreFromServer(command): Promise<Note>` | T31 历史恢复必须用此覆盖整个恢复请求：先 flush 保存和历史，保持暂停 PATCH，再 `command(noteId, baseVersion)`。等待旧写后才调用恢复；响应期间若有新编辑，保留新稿/旧 base、拒绝并标 conflict，不能装入恢复版本或自动重试。成功原子安装草稿/base/新 resetEpoch。网络或 409 保稿暂停。 |
@@ -77,3 +77,9 @@ pnpm --dir apps/web run build
 - 受影响完整门禁：`i1-lint.log`、`i1-typecheck.log`、`i1-test.log`、`i1-build.log` 均 exit 0；11 文件/156 测试，构建 3134 modules、711ms，保留既有 chunk 提示。
 - 命令仍使用上面的统一 TMPDIR/XDG_CACHE_HOME 前缀及 `pnpm --dir apps/web` 的 focused/lint/typecheck/test/build；修前及父 Agent 的门禁日志均保留。
 - 父 Agent 补充 HTTP503 + undo 参数化覆盖：网络错误/503 × 已提交/未提交四个 Deferred 分支，加关闭提示共 5 个 I1 用例。最终 `i1-http-focused.log` 49/49；`i1-http-lint.log` / `i1-http-typecheck.log` / `i1-http-test.log` / `i1-http-build.log` 均 exit 0，完整 158/158，构建 795ms。之前的 RED/GREEN 与 47/156 日志全部保留。
+
+## 主 Agent 集成验收
+
+PR [#101](https://github.com/xingjianxu/knoted/pull/101) → 主线 `752a093`。独立 Spec/Quality 审查 PASS，主线 Rust 229 passed / 0 failed / 1 既有 ignored，fmt/clippy exit0；Web 158 passed，typecheck/lint/build exit0。实际输出 `/data/knoted-dev/tasks/t27-t35/evidence/t30-main-*.log`。未挂载自动保存库，无需单独部署；T31统一页面挂载验收。本卡 Issue 已关闭且 Projects Done；任务 worktree/已合并分支已安全清理，其他任务成果保留。前述“待执行”是当时实施阶段的历史记录，以本节实际验收为准。
+
+T31 实际页面往返验收补正：`initialDocument` 是会话初建/显式替换时的种子，不会随普通本地编辑和保存更新；它不足以重新挂载已经编辑过的会话。消费端新挂载取 `draft.document`，已有 NoteEditor 依靠自身初始值语义及固定 key 保持稳定，显式加载/恢复仍整体更换 draft 与 epoch。真实 Router/Editor 往返回归及普通保存/Query 的同 DOM/选区断言覆盖此组合。
