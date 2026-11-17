@@ -1,0 +1,16 @@
+{
+  "id": "00000000-0000-4000-8000-000000000044",
+  "relative_path": "documents/empty.txt",
+  "name": "empty.txt",
+  "size": 0,
+  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "content_version": 1,
+  "version": 3,
+  "status": "present",
+  "mime": "text/plain",
+  "note": "元数据版本与内容版本独立",
+  "tag_ids": [],
+  "created_at": "2026-11-17T00:00:00Z",
+  "updated_at": "2026-11-18T00:00:00Z",
+  "last_seen_at": "2026-11-18T00:00:00Z"
+}

@@ -4,6 +4,7 @@ use crate::runner::{Handler, WorkerRunner};
 use knoted_core::{
     context::AppContext,
     files::{
+        capture,
         notifications::{NotificationWatch, ScanSchedule},
         scanner::{self, ObserveRoot, ScanRules},
     },
@@ -29,6 +30,41 @@ impl Handler for Dispatcher {
         };
         match job.kind.as_str() {
             scanner::SCAN_JOB_KIND => execute_scan(&self.ctx, lease).await,
+            capture::CAPTURE_JOB_KIND => {
+                let scan_id = job
+                    .payload
+                    .get("scan_id")
+                    .and_then(|v| v.as_str())
+                    .and_then(|v| uuid::Uuid::parse_str(v).ok());
+                let path = job.payload.get("relative_path").and_then(|v| v.as_str());
+                let (Some(scan_id), Some(path)) = (scan_id, path) else {
+                    return ExecutionOutcome::PermanentFailure {
+                        message: "invalid capture envelope".into(),
+                    };
+                };
+                let result = async {
+                    if !self.ctx.files().enabled {
+                        return Err(capture::DomainError::Stale);
+                    }
+                    let input =
+                        capture::load_observation(&self.ctx, scan_id, path.into(), lease.clone())
+                            .await?;
+                    capture::capture_stable(&self.ctx, input).await
+                }
+                .await;
+                match result {
+                    Ok(_) => ExecutionOutcome::Succeeded,
+                    Err(capture::DomainError::Stale | capture::DomainError::Cancelled) => {
+                        ExecutionOutcome::Cancelled
+                    }
+                    Err(capture::DomainError::TooLarge) => ExecutionOutcome::PermanentFailure {
+                        message: "input exceeds 100 MiB".into(),
+                    },
+                    Err(_) => ExecutionOutcome::TemporaryFailure {
+                        message: "capture changed or unavailable".into(),
+                    },
+                }
+            }
             _ => ExecutionOutcome::PermanentFailure {
                 message: "unsupported job kind".into(),
             },

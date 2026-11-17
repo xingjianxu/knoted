@@ -214,6 +214,19 @@ const EXPECTED_VERSION_SCHEMAS = [
 const REQUIRED_EXAMPLES = [
   {
     document: "openapi.yaml",
+    schema: "FileSource",
+    file: "valid/file-source.json",
+    valid: true,
+  },
+  {
+    document: "openapi.yaml",
+    schema: "FileSource",
+    file: "invalid/file-source-missing-version.json",
+    valid: false,
+  },
+
+  {
+    document: "openapi.yaml",
     schema: "TrashPage",
     file: "valid/trash-page.json",
     valid: true,

@@ -2051,6 +2051,7 @@ paths:
         - Files
       summary: 读取文件来源详情
       operationId: getFile
+      description: ETag 映射 FileSource.version；content_version 只标识源内容。
       parameters:
         - $ref: "#/components/parameters/FileId"
       responses:
@@ -2080,7 +2081,7 @@ paths:
         - Files
       summary: 更新文件备注与标签
       operationId: updateFile
-      description: PATCH 仅允许备注和标签；不修改源文件内容。
+      description: PATCH 仅允许备注和标签；expected_version 对应 FileSource.version，不修改源文件内容或 content_version。
       parameters:
         - $ref: "#/components/parameters/FileId"
         - $ref: "#/components/parameters/CsrfToken"
@@ -2153,7 +2154,7 @@ paths:
         - Files
       summary: 将文件来源重新关联到新来源
       operationId: relinkFile
-      description: 移动标签/备注/关联到新来源；旧引用快照保持原版本。歧义未确认时 409。
+      description: 移动标签/备注/关联到新来源；expected_version 对应旧来源 FileSource.version。旧引用快照保持原版本，歧义未确认时 409。
       parameters:
         - $ref: "#/components/parameters/FileId"
         - $ref: "#/components/parameters/CsrfToken"
@@ -4130,6 +4131,7 @@ components:
         - size
         - sha256
         - content_version
+        - version
         - status
         - mime
         - note
@@ -4156,6 +4158,11 @@ components:
         content_version:
           type: integer
           minimum: 1
+          description: 仅标识源内容与提取新鲜度，独立于元数据 version。
+        version:
+          type: integer
+          minimum: 1
+          description: 元数据 CAS 与 ETag 版本；备注、标签和定位变化不修改 content_version。
         status:
           $ref: "#/components/schemas/FileStatus"
         mime:
@@ -4207,6 +4214,7 @@ components:
         expected_version:
           type: integer
           minimum: 1
+          description: FileSource.version；不是 content_version。
         note:
           type:
             - string
@@ -4229,6 +4237,7 @@ components:
         expected_version:
           type: integer
           minimum: 1
+          description: FileSource.version；不是 content_version。
     OfficePreview:
       type: object
       additionalProperties: false

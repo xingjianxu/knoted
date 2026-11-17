@@ -888,7 +888,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 读取文件来源详情 */
+        /**
+         * 读取文件来源详情
+         * @description ETag 映射 FileSource.version；content_version 只标识源内容。
+         */
         get: operations["getFile"];
         put?: never;
         post?: never;
@@ -897,7 +900,7 @@ export interface paths {
         head?: never;
         /**
          * 更新文件备注与标签
-         * @description PATCH 仅允许备注和标签；不修改源文件内容。
+         * @description PATCH 仅允许备注和标签；expected_version 对应 FileSource.version，不修改源文件内容或 content_version。
          */
         patch: operations["updateFile"];
         trace?: never;
@@ -930,7 +933,7 @@ export interface paths {
         put?: never;
         /**
          * 将文件来源重新关联到新来源
-         * @description 移动标签/备注/关联到新来源；旧引用快照保持原版本。歧义未确认时 409。
+         * @description 移动标签/备注/关联到新来源；expected_version 对应旧来源 FileSource.version。旧引用快照保持原版本，歧义未确认时 409。
          */
         post: operations["relinkFile"];
         delete?: never;
@@ -1690,7 +1693,10 @@ export interface components {
             /** Format: int64 */
             size: number;
             sha256: string;
+            /** @description 仅标识源内容与提取新鲜度，独立于元数据 version。 */
             content_version: number;
+            /** @description 元数据 CAS 与 ETag 版本；备注、标签和定位变化不修改 content_version。 */
+            version: number;
             status: components["schemas"]["FileStatus"];
             mime: string | null;
             note: string | null;
@@ -1706,6 +1712,7 @@ export interface components {
             next_cursor: string | null;
         };
         FileSourceUpdate: {
+            /** @description FileSource.version；不是 content_version。 */
             expected_version: number;
             note?: string | null;
             tag_ids?: string[];
@@ -1713,6 +1720,7 @@ export interface components {
         FileRelinkRequest: {
             /** Format: uuid */
             new_source_id: string;
+            /** @description FileSource.version；不是 content_version。 */
             expected_version: number;
         };
         OfficePreview: {
