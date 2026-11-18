@@ -658,11 +658,13 @@ struct RunRecord {
     state: String,
     admitted: bool,
     upstream_requested: bool,
+    provider_stop_identity: Option<String>,
+    upstream_stopped: bool,
 }
 
 async fn lock_run(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<RunRecord, DomainError> {
     sqlx::query_as(
-        "SELECT session_id,message_id,assistant_message_id,job_id,provider,scope,state,admitted,upstream_requested
+        "SELECT session_id,message_id,assistant_message_id,job_id,provider,scope,state,admitted,upstream_requested,provider_stop_identity,upstream_stopped
          FROM generation_runs WHERE id=$1 FOR UPDATE",
     )
     .bind(id)
@@ -995,6 +997,16 @@ pub async fn mark_upstream_requested(
     id: Uuid,
     model: &str,
 ) -> Result<(), DomainError> {
+    persist_upstream_request(ctx, lease, id, model, None).await
+}
+
+async fn persist_upstream_request(
+    ctx: &AppContext,
+    lease: &Lease,
+    id: Uuid,
+    model: &str,
+    active_provider: Option<&HttpChatProvider>,
+) -> Result<(), DomainError> {
     let mut tx = ctx.pool().begin().await?;
     let record = lock_generation(&mut tx, lease, id, &["running"]).await?;
     if record.state != "started" || !record.admitted || record.upstream_requested {
@@ -1002,12 +1014,21 @@ pub async fn mark_upstream_requested(
             current_version: None,
         });
     }
+    let provider_stop_identity = active_provider
+        .map(HttpChatProvider::stop_identity)
+        .or_else(|| {
+            configured_provider(ctx, &record.provider)
+                .ok()
+                .map(|provider| provider.stop_identity())
+        });
     sqlx::query(
-        "UPDATE generation_runs SET model=$2,upstream_requested=true,updated_at=$3 WHERE id=$1",
+        "UPDATE generation_runs SET model=$2,upstream_requested=true,updated_at=$3,
+             provider_stop_identity=$4 WHERE id=$1",
     )
     .bind(id)
     .bind(model)
     .bind(ctx.now())
+    .bind(provider_stop_identity)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -1284,6 +1305,7 @@ pub async fn prepare_generation_context(
     input: &GenerationInput,
     evidence: EvidenceSet,
     info: &ProviderInfo,
+    provider_stop_identity: Option<&str>,
 ) -> Result<PreparedGeneration, DomainError> {
     let mut tx = ctx.pool().begin().await?;
     let id = input.run_id;
@@ -1345,13 +1367,14 @@ pub async fn prepare_generation_context(
     context::persist_dependencies(&mut tx, id, &budget.dependencies).await?;
     sqlx::query(
         "UPDATE generation_runs SET model=$2,upstream_requested=true,updated_at=$3,
-          input_tokens=$4,output_token_budget=$5 WHERE id=$1",
+          input_tokens=$4,output_token_budget=$5,provider_stop_identity=$6 WHERE id=$1",
     )
     .bind(id)
     .bind(&info.model)
     .bind(ctx.now())
     .bind(budget.input_tokens as i32)
     .bind(budget.max_output_tokens as i32)
+    .bind(provider_stop_identity)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -1452,14 +1475,43 @@ async fn provider_stop_confirmed(
     ctx: &AppContext,
     provider_name: &str,
     upstream_requested: bool,
+    provider_stop_identity: Option<&str>,
+    upstream_stopped: bool,
 ) -> bool {
-    if !upstream_requested {
+    if !upstream_requested || upstream_stopped {
         return true;
     }
+    let Some(identity) = provider_stop_identity else {
+        return false;
+    };
     match configured_provider(ctx, provider_name) {
-        Ok(provider) => provider.wait_for_stop().await,
-        Err(_) => false,
+        Ok(provider) if provider.stop_identity() == identity => provider.wait_for_stop().await,
+        _ => false,
     }
+}
+
+/// A terminal model frame was already validated by the provider adapter.
+/// Remember it before any await so this lease can prove stop even when its
+/// execute future is dropped by the worker runner's cancellation branch.
+async fn record_terminal_proof(
+    ctx: &AppContext,
+    lease: &Lease,
+    id: Uuid,
+) -> Result<(), DomainError> {
+    ctx.remember_chat_terminal(lease);
+    let mut tx = ctx.pool().begin().await?;
+    let record = lock_generation(&mut tx, lease, id, &["running", "cancel_requested"]).await?;
+    if !record.upstream_requested {
+        return Err(DomainError::Conflict {
+            current_version: None,
+        });
+    }
+    sqlx::query("UPDATE generation_runs SET upstream_stopped=true WHERE id=$1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 async fn stop_record(ctx: &AppContext, lease: &Lease, id: Uuid) -> Result<RunRecord, DomainError> {
@@ -1475,7 +1527,14 @@ async fn recover_generation(
     id: Uuid,
 ) -> Result<ExecutionOutcome, DomainError> {
     let record = stop_record(ctx, lease, id).await?;
-    let confirmed = provider_stop_confirmed(ctx, &record.provider, record.upstream_requested).await;
+    let confirmed = provider_stop_confirmed(
+        ctx,
+        &record.provider,
+        record.upstream_requested,
+        record.provider_stop_identity.as_deref(),
+        record.upstream_stopped || ctx.received_chat_terminal(lease),
+    )
+    .await;
     if confirmed && confirm_generation_stop(ctx, lease, id, true).await? {
         return Ok(job_failure("generation_interrupted"));
     }
@@ -1500,7 +1559,14 @@ pub async fn cancel_and_wait(ctx: &AppContext, lease: &Lease) -> bool {
         return false;
     };
     let confirmed = !record.admitted
-        || provider_stop_confirmed(ctx, &record.provider, record.upstream_requested).await;
+        || provider_stop_confirmed(
+            ctx,
+            &record.provider,
+            record.upstream_requested,
+            record.provider_stop_identity.as_deref(),
+            record.upstream_stopped || ctx.received_chat_terminal(lease),
+        )
+        .await;
     confirm_generation_stop(ctx, lease, id, confirmed)
         .await
         .unwrap_or(false)
@@ -1524,7 +1590,17 @@ async fn run_provider(
         Ok(evidence) => evidence,
         Err(_) => return fail_generation(ctx, lease, id, "retrieval_unavailable", true).await,
     };
-    let prepared = match prepare_generation_context(ctx, lease, &input, evidence, &info).await {
+    let identity = provider.stop_identity();
+    let prepared = match prepare_generation_context(
+        ctx,
+        lease,
+        &input,
+        evidence,
+        &info,
+        Some(&identity),
+    )
+    .await
+    {
         Ok(prepared) => prepared,
         Err(DomainError::Context(ContextError::TooLarge)) => {
             return fail_generation(ctx, lease, id, "context_too_large", true).await;
@@ -1561,17 +1637,28 @@ async fn run_provider(
                 }
                 Err(error) => return Err(error),
             },
-            Ok(ProviderEvent::Finished(FinishReason::Stop)) => {
-                return match finish_generation(ctx, lease, id, Some(&prepared.citations)).await {
-                    Ok(()) => Ok(ExecutionOutcome::Succeeded),
-                    Err(DomainError::Context(ContextError::SourceChanged)) => {
-                        fail_generation(ctx, lease, id, "source_changed", true).await
+            Ok(ProviderEvent::Finished(reason)) => {
+                record_terminal_proof(ctx, lease, id).await?;
+                let result = match reason {
+                    FinishReason::Stop => {
+                        match finish_generation(ctx, lease, id, Some(&prepared.citations)).await {
+                            Ok(()) => Ok(ExecutionOutcome::Succeeded),
+                            Err(DomainError::Context(ContextError::SourceChanged)) => {
+                                fail_generation(ctx, lease, id, "source_changed", true).await
+                            }
+                            Err(error) => Err(error),
+                        }
                     }
-                    Err(error) => Err(error),
+                    FinishReason::Length => {
+                        fail_generation(ctx, lease, id, "generation_output_limit", true).await
+                    }
                 };
-            }
-            Ok(ProviderEvent::Finished(FinishReason::Length)) => {
-                return fail_generation(ctx, lease, id, "generation_output_limit", true).await;
+                if matches!(&result, Err(DomainError::Conflict { .. }))
+                    && confirm_generation_stop(ctx, lease, id, true).await?
+                {
+                    return Ok(ExecutionOutcome::Cancelled);
+                }
+                return result;
             }
             Err(ProviderError::Cancelled { confirmed }) => {
                 return fail_generation(ctx, lease, id, "generation_interrupted", confirmed).await;
@@ -1619,14 +1706,24 @@ pub async fn execute_generation(ctx: &AppContext, lease: &Lease, job: &Job) -> E
 /// Reconcile the single admitted run after the queue recorded a terminal result
 /// while the dialogue transaction was unavailable.
 pub async fn recover_terminal_generation(ctx: &AppContext) -> Result<bool, DomainError> {
-    let candidate: Option<(Uuid, String, bool)> = sqlx::query_as(
-        "SELECT r.id,r.provider,r.upstream_requested FROM generation_runs r JOIN jobs j ON r.job_id=j.id
+    let candidate: Option<(Uuid, String, bool, Option<String>, bool)> = sqlx::query_as(
+        "SELECT r.id,r.provider,r.upstream_requested,r.provider_stop_identity,r.upstream_stopped
+         FROM generation_runs r JOIN jobs j ON r.job_id=j.id
          WHERE r.admitted AND j.state IN ('failed','cancelled','succeeded')",
-    ).fetch_optional(ctx.pool()).await?;
-    let Some((id, provider, upstream_requested)) = candidate else {
+    )
+    .fetch_optional(ctx.pool())
+    .await?;
+    let Some((id, provider, upstream_requested, identity, upstream_stopped)) = candidate else {
         return Ok(false);
     };
-    let stopped = provider_stop_confirmed(ctx, &provider, upstream_requested).await;
+    let stopped = provider_stop_confirmed(
+        ctx,
+        &provider,
+        upstream_requested,
+        identity.as_deref(),
+        upstream_stopped,
+    )
+    .await;
     let mut tx = ctx.pool().begin().await?;
     lock_slot(&mut tx).await?;
     let record = lock_run(&mut tx, id).await?;

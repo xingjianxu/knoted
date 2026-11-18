@@ -126,6 +126,7 @@ impl Harness {
                 context_window: 32 * 1024,
                 max_input_tokens: 28 * 1024,
             },
+            None,
         )
         .await
         .unwrap()

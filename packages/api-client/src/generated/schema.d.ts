@@ -1823,6 +1823,11 @@ export interface components {
             updated_at: string;
             path: string | null;
             score: number | null;
+            /**
+             * Format: uuid
+             * @description 仅聊天消息命中提供所属会话 ID，用于跳转到历史消息。
+             */
+            session_id?: string;
         };
         SearchResponse: {
             items: components["schemas"]["SearchHit"][];
