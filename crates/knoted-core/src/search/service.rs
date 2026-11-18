@@ -95,6 +95,8 @@ pub struct SearchHit {
     pub updated_at: DateTime<Utc>,
     pub path: Option<String>,
     pub score: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<Uuid>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -160,7 +162,7 @@ async fn visible(
             UNION ALL SELECT entity_id, tag_id FROM task_tags
         )
         SELECT hits.ordinality, source.source_type, source.source_id,
-               live.title, live.path, source.updated_at
+               live.title, live.path, source.updated_at, live.session_id
         FROM unnest($1::text[]) WITH ORDINALITY hits(document_key, ordinality)
         JOIN fulltext_publications publication ON publication.document_key=hits.document_key
           AND publication.engine='meilisearch' AND publication.index_uid=$2
@@ -169,27 +171,33 @@ async fn visible(
           AND source.superseded_at IS NULL AND NOT source.deleted
         JOIN LATERAL (
             SELECT n.title, NULL::text AS path,
-                   false AS archived, NULL::uuid AS project_id
+                   false AS archived, NULL::uuid AS project_id, NULL::uuid AS session_id
             FROM notes n
             WHERE source.source_type='note' AND n.id=source.source_id
               AND n.deleted_at IS NULL AND n.content_version=source.source_version
             UNION ALL
             SELECT regexp_replace(f.relative_path, '^.*/', ''), f.relative_path,
-                   false, NULL::uuid
+                   false, NULL::uuid, NULL::uuid
             FROM file_sources f
             WHERE source.source_type='file' AND f.id=source.source_id
               AND f.status='present' AND f.content_fresh
               AND f.content_version=source.source_version
             UNION ALL
-            SELECT p.title, NULL::text, p.archived_at IS NOT NULL, p.id
+            SELECT p.title, NULL::text, p.archived_at IS NOT NULL, p.id, NULL::uuid
             FROM projects p
             WHERE source.source_type='project' AND p.id=source.source_id
               AND p.deleted_at IS NULL AND p.version=source.source_version
             UNION ALL
-            SELECT t.title, NULL::text, t.archived_at IS NOT NULL, t.project_id
+            SELECT t.title, NULL::text, t.archived_at IS NOT NULL, t.project_id, NULL::uuid
             FROM tasks t
             WHERE source.source_type='task' AND t.id=source.source_id
               AND t.deleted_at IS NULL AND t.version=source.source_version
+            UNION ALL
+            SELECT s.title, NULL::text, false, NULL::uuid, s.id
+            FROM chat_messages m JOIN chat_sessions s ON s.id=m.session_id
+            WHERE source.source_type='chat_message' AND m.id=source.source_id
+              AND m.deleted_at IS NULL AND s.deleted_at IS NULL AND NOT m.incomplete
+              AND m.content_version=source.source_version
         ) live ON true
         WHERE ($3::text IS NULL OR source.source_type=$3)
           AND ($4::timestamptz IS NULL OR source.updated_at >= $4)
@@ -237,6 +245,7 @@ struct VisibleHit {
     title: String,
     path: Option<String>,
     updated_at: DateTime<Utc>,
+    session_id: Option<Uuid>,
 }
 
 /// Searches the active document index, with a query-bound engine offset.
@@ -284,23 +293,19 @@ pub async fn search(ctx: &AppContext, input: SearchQuery) -> Result<Page<SearchH
         .transpose()?
         .unwrap_or(0);
 
-    // Chat is registered in the browser contract, and gains a PG read path
-    // when T62 introduces its domain tables and publication.
     let mut result = Page {
         items: Vec::new(),
         next_cursor: None,
     };
-    if matches!(filters.entity_type, Some(SearchType::Chat)) {
-        return Ok(result);
-    }
-
     let client = MeiliClient::from_context(ctx)?;
     let engine_filter = match filters.entity_type {
         Some(kind) => format!(
             "deleted = false AND source_type = \"{}\"",
             kind.source().as_str()
         ),
-        None => "deleted = false AND source_type IN [file, note, project, task]".into(),
+        None => {
+            "deleted = false AND source_type IN [file, note, project, task, chat_message]".into()
+        }
     };
     while offset < MAX_SEARCH_HITS {
         let count = ENGINE_BATCH.min(MAX_SEARCH_HITS - offset);
@@ -335,6 +340,7 @@ pub async fn search(ctx: &AppContext, input: SearchQuery) -> Result<Page<SearchH
                 updated_at: entry.updated_at,
                 path: entry.path,
                 score: candidate.score,
+                session_id: entry.session_id,
             });
         }
         if candidates.len() < count {
@@ -406,7 +412,9 @@ async fn source_document(
                ON extraction.source_id=source.id AND extraction.content_version=source.content_version
              WHERE source.id=$1 AND source.content_version=$2 AND extraction.id=$3"
         }
-        SourceType::ChatMessage => return Ok(None),
+        SourceType::ChatMessage => {
+            return super::chat_projection::document(tx, event.source_id, event.source_version).await;
+        }
     };
     let mut query = sqlx::query_as::<_, ProjectionRow>(sql)
         .bind(event.source_id)
@@ -494,12 +502,13 @@ pub async fn project_pending(ctx: &AppContext) -> Result<usize, meili::DomainErr
         let mut tx = ctx.pool().begin().await?;
         let pending: Option<(Uuid, String, serde_json::Value)> = sqlx::query_as(
             "SELECT id, topic, payload FROM outbox WHERE published_at IS NULL
-             AND topic IN ('note.changed', 'project.changed', 'task.changed', 'file.extracted')
+             AND topic IN ('note.changed', 'project.changed', 'task.changed', 'file.extracted', 'chat.changed')
              ORDER BY created_at, id LIMIT 1 FOR UPDATE SKIP LOCKED",
         )
         .fetch_optional(&mut *tx)
         .await?;
         let Some((id, topic, payload)) = pending else {
+            tx.commit().await?;
             return Ok(index);
         };
         let source = match topic.as_str() {
@@ -507,6 +516,7 @@ pub async fn project_pending(ctx: &AppContext) -> Result<usize, meili::DomainErr
             "project.changed" => SourceType::Project,
             "task.changed" => SourceType::Task,
             "file.extracted" => SourceType::File,
+            "chat.changed" => SourceType::ChatMessage,
             _ => unreachable!("outbox query restricts topics"),
         };
         match serde_json::from_value(payload) {

@@ -9,6 +9,7 @@ use knoted_core::{
         scanner::{self, ObserveRoot, ScanRules},
     },
     jobs::{self, ExecutionOutcome, Lease},
+    rag::chat,
 };
 use std::{
     sync::Arc,
@@ -68,6 +69,7 @@ impl Handler for Dispatcher {
             knoted_core::files::extraction::EXTRACT_JOB_KIND => {
                 super::extract::execute(&self.ctx, lease, &job).await
             }
+            chat::GENERATE_JOB_KIND => chat::execute_generation(&self.ctx, lease, &job).await,
             super::vector::KIND => super::vector::execute(&self.ctx, lease, &job).await,
             super::chunk_fulltext::BUILD_JOB_KIND | super::chunk_fulltext::PUBLISH_JOB_KIND => {
                 super::chunk_fulltext::execute(&self.ctx, lease, &job).await
@@ -81,9 +83,8 @@ impl Handler for Dispatcher {
         }
     }
     async fn cancel_and_wait<'a>(&'a self, lease: &'a Lease) -> bool {
-        // Only extraction owns an external process whose exit must be proven.
-        // A leaked or unknown row has nothing to wait for, but a failed kind
-        // lookup must fail closed and take the extraction path.
+        // Extraction, embeddings, and generation require upstream stop
+        // confirmation. A failed kind lookup cannot prove that work stopped.
         match sqlx::query_scalar::<_, String>("SELECT kind FROM jobs WHERE id=$1")
             .bind(lease.job_id)
             .fetch_optional(self.ctx.pool())
@@ -97,6 +98,9 @@ impl Handler for Dispatcher {
                     || kind == super::fulltext::CLEANUP_JOB_KIND =>
             {
                 super::fulltext::cancel_and_wait(&self.ctx, lease).await
+            }
+            Ok(Some(kind)) if kind == chat::GENERATE_JOB_KIND => {
+                chat::cancel_and_wait(&self.ctx, lease).await
             }
             Ok(Some(kind)) if kind == super::vector::KIND => {
                 super::vector::cancel_and_wait(&self.ctx, lease).await
@@ -217,6 +221,17 @@ async fn schedule(ctx: AppContext) -> ! {
     }
 }
 
+async fn recover_chat(ctx: AppContext) -> ! {
+    let mut tick = tokio::time::interval(Duration::from_secs(2));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tick.tick().await;
+        if chat::recover_terminal_generation(&ctx).await.is_err() {
+            eprintln!("knoted-worker: generation recovery unavailable");
+        }
+    }
+}
+
 pub async fn run(ctx: AppContext) {
     let runner = WorkerRunner::with_context(
         ctx.clone(),
@@ -228,6 +243,7 @@ pub async fn run(ctx: AppContext) {
         _ = schedule(ctx.clone()), if ctx.files().enabled => unreachable!(),
         _ = super::chunk_fulltext::schedule(ctx.clone()), if ctx.search().enabled => unreachable!(),
         _ = super::vector::schedule(ctx.clone()), if ctx.vectors_enabled() => unreachable!(),
+        _ = recover_chat(ctx.clone()) => unreachable!(),
         _ = runner.run() => {},
     }
 }

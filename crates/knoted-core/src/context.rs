@@ -85,6 +85,7 @@ pub struct AppContext {
     search: crate::config::SearchConfig,
     vectors_enabled: bool,
     search_api_key: Option<String>,
+    chat_providers: Option<Arc<crate::rag::providers::ProviderRegistry>>,
     office: Option<Arc<crate::files::office::PreviewStore>>,
 }
 
@@ -100,6 +101,7 @@ impl AppContext {
             search: crate::config::SearchConfig::default(),
             vectors_enabled: false,
             search_api_key: None,
+            chat_providers: None,
             office: None,
         }
     }
@@ -152,6 +154,18 @@ impl AppContext {
     /// Full-text publication target; disabled by default.
     pub fn search(&self) -> &crate::config::SearchConfig {
         &self.search
+    }
+
+    pub fn with_chat_providers(
+        mut self,
+        providers: Arc<crate::rag::providers::ProviderRegistry>,
+    ) -> Self {
+        self.chat_providers = Some(providers);
+        self
+    }
+
+    pub fn chat_providers(&self) -> Option<&crate::rag::providers::ProviderRegistry> {
+        self.chat_providers.as_deref()
     }
 
     /// Installs the search engine's API key from the credential file. The value
