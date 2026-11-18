@@ -13,6 +13,7 @@ type FileSource=components["schemas"]["FileSource"];
 function file(id=a):FileSource{return {id,name:id===a?"alpha.txt":"beta.txt",relative_path:id===a?"folder/alpha.txt":"beta.txt",size:12,sha256:"a".repeat(64),version:1,content_version:7,status:"present",note:"original",tag_ids:[b],mime:null,created_at:"2026-11-18T00:00:00Z",updated_at:"2026-11-18T00:00:00Z",last_seen_at:null};}
 const json=(data:unknown,status=200)=>new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json"}});
 function setup(){
+ const deletedTags=new Set<string>();
  const rows=[file(),file(b)],patches:unknown[]=[];let failList=false;let hold:((r:Response)=>void)|undefined;let holdPatch=false;let contentHook:(()=>Response|Promise<Response>)|undefined;let detailHook:(()=>Response|Promise<Response>)|undefined;let listHook:(()=>Response|Promise<Response>)|undefined;
  const fetch:typeof globalThis.fetch=async input=>{const req=input as Request;const url=new URL(req.url);const path=url.pathname.replace("/api/v1","");
  if(path==="/auth/session")return json({session:{id:a,user_id:b,current:true},csrf_token:"test-csrf-value-long"});
@@ -20,7 +21,7 @@ function setup(){
  if(path==="/files"&&listHook)return listHook();
  if(path==="/files")return failList?json({code:"dependency_unavailable",message:"offline",request_id:a},503):json({items:rows,next_cursor:null});
  const row=rows.find(r=>r.id===path.split("/")[2]);if(!row)return json({},404);
- if(req.method==="PATCH"){const body=await req.json();patches.push(body);if(holdPatch)return new Promise<Response>(r=>{hold=r;});if(body.expected_version!==row.version)return json({code:"version_conflict",message:"conflict",current_version:row.version,request_id:a},409);Object.assign(row,body,{version:row.version+1});return json(row);}
+ if(req.method==="PATCH"){const body=await req.json();patches.push(body);if(holdPatch)return new Promise<Response>(r=>{hold=r;});if(body.expected_version!==row.version)return json({code:"version_conflict",message:"conflict",current_version:row.version,request_id:a},409);if(body.tag_ids?.some((id:string)=>deletedTags.has(id)))return json({code:"validation_failed",message:"tag no longer active",request_id:a},422);if("note" in body)row.note=body.note;if("tag_ids" in body)row.tag_ids=body.tag_ids;row.version+=1;return json(row);}
  if(path.endsWith("/relink")){const body=await req.json();return json({...rows.find(r=>r.id===body.new_source_id)!,version:2});}
  if(path.endsWith("/content")&&contentHook)return contentHook();
  if(path.endsWith("/content"))return new Response("source bytes",{headers:{etag:`"${row.version}"`}});
@@ -28,7 +29,7 @@ function setup(){
  return json(row);
  };
  const queryClient=new QueryClient({defaultOptions:{queries:{retry:false,staleTime:Infinity}}});const bundle={queryClient,api:createApiClient({baseUrl:"http://localhost/api/v1",fetch})};
- return {bundle,rows,patches,failList:()=>{failList=true},hold:()=>{holdPatch=true},resolve:(row:FileSource)=>hold?.(json(row)),content:(fn:()=>Response|Promise<Response>)=>{contentHook=fn},detail:(fn:()=>Response|Promise<Response>)=>{detailHook=fn},list:(fn:()=>Response|Promise<Response>)=>{listHook=fn}};
+ return {bundle,rows,patches,deleteTag:(id:string)=>{deletedTags.add(id);for(const row of rows)row.tag_ids=row.tag_ids.filter(tag=>tag!==id)},failList:()=>{failList=true},hold:()=>{holdPatch=true},resolve:(row:FileSource)=>hold?.(json(row)),content:(fn:()=>Response|Promise<Response>)=>{contentHook=fn},detail:(fn:()=>Response|Promise<Response>)=>{detailHook=fn},list:(fn:()=>Response|Promise<Response>)=>{listHook=fn}};
 }
 function view(bundle:QueryClientBundle,id=a){return <UiProvider><QueryClientProvider client={bundle.queryClient}><FilesPage bundle={bundle} fileId={id} onSelectFile={()=>{}} /></QueryClientProvider></UiProvider>;}
 describe("T49 files",()=>{
@@ -36,7 +37,7 @@ describe("T49 files",()=>{
  const h=setup();render(view(h.bundle));fireEvent.change(await screen.findByLabelText("文件备注"),{target:{value:" local "}});
  h.rows[0]!.version=2;act(()=>{h.bundle.queryClient.setQueryData(queryKeys.files.detail(a),{...h.rows[0]!});});
  fireEvent.click(screen.getByRole("button",{name:"保存备注和标签"}));await screen.findByText("版本冲突，草稿已保留。");
- expect(h.patches).toEqual([{expected_version:1,note:" local ",tag_ids:[b]}]);expect(screen.getByLabelText("文件备注")).toHaveValue(" local ");
+ expect(h.patches).toEqual([{expected_version:1,note:" local "}]);expect(screen.getByLabelText("文件备注")).toHaveValue(" local ");expect(screen.getByLabelText("文件草稿副本")).toHaveValue(JSON.stringify({expected_version:1,note:" local ",tag_ids:[b]},null,2));
  });
  it("acknowledges save even when list refresh fails",async()=>{
  const h=setup();render(view(h.bundle));fireEvent.change(await screen.findByLabelText("文件备注"),{target:{value:"saved"}});h.failList();fireEvent.click(screen.getByRole("button",{name:"保存备注和标签"}));await screen.findByText("保存成功，列表刷新失败。");expect(screen.getByRole("button",{name:"保存备注和标签"})).toBeDisabled();
@@ -175,4 +176,49 @@ it.each(["list", "detail", "content", "list-page", "logout"] as const)("default 
   server.closeAllConnections();
   await new Promise<void>((resolve, rejectClose) => server.close(error => error ? rejectClose(error) : resolve()));
  }
+});
+
+
+async function removeSelectedTag() {
+ fireEvent.click(await screen.findByRole("button",{name:new RegExp(`^(?:移除|Remove) ${b}$`)}));
+}
+
+it("saves only a dirty note after a tag disappears from the same-version server projection",async()=>{
+ const h=setup();render(view(h.bundle));
+ fireEvent.change(await screen.findByLabelText("文件备注"),{target:{value:"retained note draft"}});
+ h.deleteTag(b);
+ await act(async()=>h.bundle.queryClient.invalidateQueries({queryKey:queryKeys.files.detail(a)}));
+ expect(screen.getByLabelText("文件备注")).toHaveValue("retained note draft");
+ expect(screen.getByText(b,{exact:true})).toBeInTheDocument();
+ fireEvent.click(screen.getByRole("button",{name:"保存备注和标签"}));
+ await screen.findByText("保存成功。");
+ expect(h.patches).toEqual([{expected_version:1,note:"retained note draft"}]);
+ expect(h.rows[0]).toMatchObject({note:"retained note draft",tag_ids:[],version:2});
+ expect(screen.getByLabelText("文件备注")).toHaveValue("retained note draft");
+});
+it("preserves an existing empty-string note when only tags change",async()=>{
+ const h=setup();h.rows[0]!.note="";render(view(h.bundle));
+ await screen.findByLabelText("文件备注");await removeSelectedTag();
+ fireEvent.click(screen.getByRole("button",{name:"保存备注和标签"}));await screen.findByText("保存成功。");
+ expect(h.rows[0]!.note).toBe("");
+ expect(h.patches).toEqual([{expected_version:1,tag_ids:[]}]);
+ expect(h.rows[0]!.tag_ids).toEqual([]);
+});
+it("submits two genuinely changed fields in one PATCH with one CAS base",async()=>{
+ const h=setup();render(view(h.bundle));fireEvent.change(await screen.findByLabelText("文件备注"),{target:{value:"both fields"}});
+ await removeSelectedTag();fireEvent.click(screen.getByRole("button",{name:"保存备注和标签"}));await screen.findByText("保存成功。");
+ expect(h.patches).toEqual([{expected_version:1,note:"both fields",tag_ids:[]}]);
+ expect(h.rows[0]).toMatchObject({version:2,note:"both fields",tag_ids:[]});
+});
+it.each(["remote note","local draft"])("recompares retained fields after explicit rebase with server note %s",async(serverNote)=>{
+ const h=setup();render(view(h.bundle));fireEvent.change(await screen.findByLabelText("文件备注"),{target:{value:"local draft"}});
+ Object.assign(h.rows[0]!,{version:2,note:serverNote,tag_ids:[]});
+ fireEvent.click(screen.getByRole("button",{name:"保存备注和标签"}));await screen.findByText("版本冲突，草稿已保留。");
+ fireEvent.click(screen.getByRole("button",{name:"用当前版本重试草稿"}));
+ fireEvent.click(await screen.findByRole("button",{name:"采用当前版本"}));
+ await screen.findByText("已采用服务端版本，保存将覆盖服务端备注和标签。");
+ expect(screen.getByLabelText("文件备注")).toHaveValue("local draft");
+ fireEvent.click(screen.getByRole("button",{name:"保存备注和标签"}));await screen.findByText("保存成功。");
+ expect(h.patches).toEqual([{expected_version:1,note:"local draft"},{expected_version:2,...(serverNote==="local draft"?{}:{note:"local draft"}),tag_ids:[b]}]);
+ expect(h.rows[0]).toMatchObject({version:3,note:"local draft",tag_ids:[b]});
 });

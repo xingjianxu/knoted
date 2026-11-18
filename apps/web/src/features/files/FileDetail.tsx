@@ -27,7 +27,9 @@ function FileEditor({ bundle, source, onSelectFile }: {
     const [tagPage, setTagPage] = useState<string | null>(null), [tagNames, setTagNames] = useState<Record<string, string>>({});
     const lifetime = useRef<AbortController | null>(null);
     useEffect(() => { const owner = new AbortController(); lifetime.current = owner; return () => { owner.abort(); }; }, []);
-    const dirty = note !== (base.note ?? "") || !same(tags, base.tag_ids);
+    const noteChanged = note !== (base.note ?? "");
+    const tagsChanged = !same(tags, base.tag_ids);
+    const dirty = noteChanged || tagsChanged;
     if (!dirty && !busy && source !== base && source.version >= base.version) {
         setBase(source);
         setNote(source.note ?? "");
@@ -71,7 +73,15 @@ function FileEditor({ bundle, source, onSelectFile }: {
             await bundle.queryClient.cancelQueries({ queryKey: queryKeys.files.detail(source.id) });
             if (!active(owner))
                 return;
-            const { data } = await bundle.api.raw.PATCH("/files/{fileId}", { params: { path: { fileId: source.id } }, body: { expected_version: base.version, note: note === "" ? null : note, tag_ids: tags }, signal: owner.signal });
+            // Omission preserves untouched fields, including soft-deleted tag
+            // history and a stored empty-string note. Explicit rebase changes
+            // base, so the retained draft is compared again before retrying.
+            const body: components["schemas"]["FileSourceUpdate"] = {
+                expected_version: base.version,
+                ...(noteChanged ? { note: note === "" ? null : note } : {}),
+                ...(tagsChanged ? { tag_ids: tags } : {}),
+            };
+            const { data } = await bundle.api.raw.PATCH("/files/{fileId}", { params: { path: { fileId: source.id } }, body, signal: owner.signal });
             if (!active(owner))
                 return;
             if (!data || data.id !== source.id || data.version < base.version)

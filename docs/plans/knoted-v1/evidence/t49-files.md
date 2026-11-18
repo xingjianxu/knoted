@@ -76,3 +76,16 @@ Rust 计数使用主 Agent 的 `count-rust.py` 区分顶层和嵌套子测试，
 B 定向测试保留 15 次 jsdom scrollTo 提示（新增默认路由往返增加调用，#143），不是测试失败。没有 Python 改动或重复模型测试；只为 Rust 测试配置父授权的解释器路径，未安装或修改其环境。全量 Rust/Web/API verify/build 由父 Agent 对冻结分支独立执行，不重复将历史 A 全量结果当作 B 组合门禁。
 
 代码与测试已冻结：`57d31c4ffd6fc85b287619adf6383ac352103f05f78dc8be2ad136fd68b1b881`，19 个 whole A+B 源码/测试文件，逐文件摘要位于 `/data/knoted-dev/tasks/t49/phase-b-frozen-source-manifest.json`。其后仅写证据并安全提交。真实 HTTPS/API/浏览器/全格式业务验收、独立审查、PR/主线/部署及清理由父 Agent 继续；本分支保留待集成。
+
+## 独立审查修复 R1：仅提交变化字段
+
+独立审查 I1 发现：页面把纯备注修改也作为备注+标签双字段替换，标签同版本软删后会携带未编辑的失效 ID 而 422；纯标签修改又会把合法的原备注空串改写为 null。修复基线为 `1f1501e629dee2176ca2f906fab385689d4d2e42`。
+
+`FileDetail` 现在分别比较备注和标签与当前草稿基线，只将有变化的字段加入同一次 PATCH，继续使用一个 expected_version。用户明确接受当前服务端版本后重新比较保留草稿，实际双字段变化仍原子提交。不会静默删除尚未加载名称的标签 ID，也不改变 missing、401、请求 owner、下载 ETag 或缓存身份边界。
+
+新增 5 个真实组件行为用例覆盖：dirty 备注期间同版本软删标签仍可保存且保留草稿；原备注空串的纯标签修改不发 note；两字段实际变化单次 CAS；显式 rebase 后两字段变化或备注已相同而只改标签。原 dirty CAS 用例改为断言未改标签不提交，并继续断言完整草稿保留原标签 ID。HTTP fixture 按既有可选字段语义更新行，并模拟软删标签校验；没有修改 Rust/API。
+
+- `r1-red.log/.exit=1`：首轮 6 failed/18 passed，其中 2 项是测试误把 MultiSelect 输入点击当成展开操作，属于测试操作错误，不计产品 RED；随后改用公开标签移除按钮。
+- `r1-product-red.log/.exit=1`：修正测试操作后 5 failed/19 passed；明确出现标签失效 422、空串变 null 及多发未改字段。
+- `r1-green.log/.exit=0`：产品修复后 24 passed；`r1-typecheck`、`r1-lint` 的 `.exit` 均 0。原有 scrollTo 提示保持记录。
+- 冻结 sourcehash：`b3e08dc4c3014ce65a4ed1838ecac38a122ee48c628f8074c423add3f819e5dd`，逐文件摘要为 `/data/knoted-dev/tasks/t49/r1-frozen-source-manifest.json`。主 Agent 对冻结分支独立跑完整 Web 并定向复审 I1；本轮 Rust/API/Python 未改，沿用其修前完整组合证据，不重复模型或全量 Rust。整卡集成及实际运行验收仍待主 Agent 完成。
