@@ -22,6 +22,6 @@
 
 切换前停止本实例 API 和 Worker，并为 PostgreSQL 和资产做一致备份，备份摘要校验通过。首次使用固定版本 `e051558` 时合成孤立图片保留。第二次使用同一合成样本，切换与放行前重新生成一致备份。修复固定产物 `e51532f` 校验条目 38,343 个，`SHA256SUMS` 摘要为 `7dd614188131b42d710e564989461fd19e9b0cc0ff203da48bcd65f0a0f06f29`。
 
-Chromium 通过真实 HTTPS 15601 上传两份合成图片，用普通笔记编辑及历史快照建立一项仅历史引用。在仅有合成样本符合条件的窗口，Worker 启动后回收无引用图片，文件不存在且鉴权读取返回 404。历史图片文件仍在，鉴权读取返回 200，历史快照引用可读。合成笔记移入回收站，临时验收会话撤销。复验期间共享 Caddy、PostgreSQL、OnlyOffice、Strata 的进程 PID 一致。
+在 Chromium 认证上下文通过 HTTPS 15601 调用上传、笔记和快照 API，建立两份合成图片及一项仅历史引用。在仅有合成样本符合条件的窗口，Worker 启动后回收无引用图片，文件不存在且鉴权读取返回 404。历史图片文件仍在，鉴权读取返回 200，历史快照引用可读。合成笔记移入回收站，临时验收会话撤销。复验期间共享 Caddy、PostgreSQL、OnlyOffice、Strata 的进程 PID 一致。暂存回收的边界由专项自动化用例覆盖，本轮 dev 实测的是图片回收。
 
-本地证据见 `/data/knoted-dev/tasks/t67/evidence/`，包括 `head-rust.log`、`netns-rust.log`、`netns-mainline.log`、`netns-host-probe.log`、`web-suite.log`、`dev-acceptance.log`（首次失败）和 `netns-dev-acceptance.log`（复验通过）。
+本地证据见 `/data/knoted-dev/tasks/t67/evidence/`，包括 `head-rust.log`、`netns-rust.log`、`netns-mainline.log`、`netns-host-probe.log`、`netns-dev-release.log`、`web-suite.log`、`dev-acceptance.log`（首次失败）和 `netns-dev-acceptance.log`（复验通过）。
