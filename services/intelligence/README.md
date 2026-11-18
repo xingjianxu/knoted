@@ -80,6 +80,47 @@ invalid output with a stable error code instead of publishing a partial result.
 Parse and embed share `KNOTED_INTELLIGENCE_GPU_SLOTS` (default 1), so the two
 model families are serialised on the one Python card.
 
+Office parsing uses `parsing.office.parse_office` through the same persisted
+execution/guardian and Worker publication pipeline as PDF/images. The Worker
+selects DOCX/XLSX/PPTX from the source extension and persists that selection in
+format-specific parser revisions; the shared options identity binds the pure
+parser policy and budgets. Opaque staging names do not supply a source extension.
+Rust verifies the manifest/digest, parser metadata, format and structural locations
+before publishing with the existing source/lease/deadline fences. Same-content
+extension changes select a distinct success/failure identity; note/tag edits do not.
+It reads transitional DOCX/XLSX/PPTX OOXML with bounded ZIP/XML admission and
+never launches Office, calculates formulas, loads external resources, or extracts
+embedded objects. It reuses `ParsedDocument`/`ParsedBlock`; its options revision
+binds the extraction policy and internal budgets.
+
+DOCX extracts body paragraphs/tables in original order (including merged and
+nested cells); unsupported revisions, fields, content controls and text boxes
+fail explicitly. XLSX extracts visible sheets/rows/columns using actual sparse
+cells, original names and A1 coordinates. Formulas use stored caches only, omit
+missing caches and retain error caches; external/structured-reference formulas
+are conservatively refused. Numeric/date values retain their OOXML stored text.
+PPTX extracts slide-owned text boxes/groups/tables in XML z-order, including
+hidden slides with their original 1-based ordinal. Charts/SmartArt and embedded
+objects are refused. Headers/footers, comments/notes, inherited master/layout
+text, images/OCR, formatting and presentation animations are outside this body
+text policy. DOCX/XLSX have no invented page numbers; all Office bbox values are
+null. A successful result means complete extraction within this declared subset,
+not a full Office rendering.
+
+Admission includes the existing 100 MiB input ceiling plus internal limits:
+4096 parts, 32 MiB per expanded part, 128 MiB total expansion, 200:1 compression,
+500,000 XML nodes, depth 64, 16 MiB XML/output text, 100,000 actual cells and
+100,000 blocks. These conservative implementation choices may reject valid
+large documents; refusals never return truncated results. `corrupt_input`,
+`unsupported_format`, `input_too_large`, `office_budget_exceeded` and
+`office_io_error` remain distinct safe parser codes. The execution supervisor,
+not the pure function, enforces the existing 900-second deadline and confirms
+compute exit. Office budget failures are permanent; Office IO failures retain the
+existing finite retry policy. No guardian/ledger lifecycle or public DTO changes
+are required. Integration/deployment status is recorded in the task evidence.
+See [T48 evidence](../../docs/plans/knoted-v1/evidence/t48-office.md) for exact
+boundaries, budget rationale and verification status.
+
 ## 固定 Python 产物与停机检查
 
 `tools/dev/build-intelligence.sh <完整提交SHA> <新输出目录>` 从 `git archive`

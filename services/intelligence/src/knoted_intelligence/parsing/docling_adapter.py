@@ -110,7 +110,7 @@ class ParsedDocument:
     title: str | None
     blocks: tuple[ParsedBlock, ...]
     full_text: str
-    source_format: Literal["pdf", "image", "text"]
+    source_format: Literal["pdf", "image", "text", "docx", "xlsx", "pptx"]
     page_count: int | None
     options_revision: str
 

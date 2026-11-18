@@ -56,7 +56,9 @@ pid = os.fork()
 if pid == 0:
     os.setsid()
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    open(sys.argv[1], 'w').write(str(os.getpid()))
+    with open(sys.argv[1] + '.tmp', 'w') as marker:
+        marker.write(str(os.getpid()))
+    os.replace(sys.argv[1] + '.tmp', sys.argv[1])
     while True: time.sleep(1)
 from pathlib import Path
 while not Path(sys.argv[1]).exists(): time.sleep(.01)

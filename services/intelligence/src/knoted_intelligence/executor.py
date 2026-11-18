@@ -787,6 +787,7 @@ def _compute(spec: dict[str, Any]) -> dict[str, Any]:
         "child_pid": os.getpid(),
     }
     if spec["kind"] == "parse":
+        from .parsing import office
         from .parsing.pdf import parse_pdf_image
 
         parser = (
@@ -794,10 +795,15 @@ def _compute(spec: dict[str, Any]) -> dict[str, Any]:
             if spec["options_revision"] == parsing_models.OPTIONS_REVISION
             else parse_document
         )
-        document = parser(
-            Path(spec["input_path"]),
-            options_revision=spec["options_revision"],
-        )
+        if spec["options_revision"] == office.options_revision():
+            document = office.parse_office(Path(spec["input_path"]), staged=True)
+            parser_metadata = office.parser_summary()
+        else:
+            document = parser(
+                Path(spec["input_path"]),
+                options_revision=spec["options_revision"],
+            )
+            parser_metadata = parsing_models.parser_summary()
         payload = {
             **base,
             "text_length": len(document.full_text),
@@ -806,7 +812,7 @@ def _compute(spec: dict[str, Any]) -> dict[str, Any]:
             "page_count": document.page_count,
             # A real parse never publishes a truncated document.
             "truncated": False,
-            "parser": parsing_models.parser_summary(),
+            "parser": parser_metadata,
             # The text lives in the blocks only: `ParsedDocument.full_text` is an
             # in-process convenience, and copying it here would double the
             # artifact volume for a 100 MiB input.
