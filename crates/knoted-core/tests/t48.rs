@@ -132,3 +132,13 @@ fn t48_echo_exit_proof_and_expired_office_record_refuse_release() {
         );
     }
 }
+
+#[test]
+fn t48_cancelled_office_record_requires_confirmed_exit() {
+    let req = request();
+    for proof in [false, true] {
+        let value = json!({"execution_id":req.execution_id,"kind":"parse","state":"cancelled","input_sha256":req.input_sha256,"source_version":7,"options_revision":req.options_revision,"compute_exit_confirmed":proof,"created_at":chrono::Utc::now(),"started_at":null,"finished_at":chrono::Utc::now(),"updated_at":chrono::Utc::now(),"error":null});
+        let record: ExecutionRecord = serde_json::from_value(value).unwrap();
+        assert_eq!(record.verify_resource_exit(&req).is_ok(), proof);
+    }
+}

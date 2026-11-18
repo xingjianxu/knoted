@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 struct Service {
+    python: String,
     process: Child,
     _directory: tempfile::TempDir,
     client: IntelligenceClient,
@@ -34,7 +35,9 @@ impl Service {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let repository = std::env::var_os("T48_TEST_REPOSITORY")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."));
         let python = std::env::var("KNOTED_TEST_PYTHON").unwrap_or_else(|_| {
             std::env::var("UV_PROJECT_ENVIRONMENT")
                 .map(|p| format!("{p}/bin/python"))
@@ -45,7 +48,7 @@ impl Service {
                         .into_owned()
                 })
         });
-        let process = Command::new(python)
+        let process = Command::new(&python)
             .args([
                 "-I",
                 "-B",
@@ -75,6 +78,7 @@ impl Service {
             .unwrap();
         let client = IntelligenceClient::new(format!("http://127.0.0.1:{port}")).unwrap();
         let mut service = Self {
+            python,
             process,
             _directory: directory,
             client,
@@ -104,14 +108,8 @@ async fn t48_real_http_office_artifact_identity_digest_and_metadata() {
     let service = Service::start().await;
     let root = service._directory.path();
     let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let python = std::env::var("KNOTED_TEST_PYTHON").unwrap_or_else(|_| {
-        format!(
-            "{}/bin/python",
-            std::env::var("UV_PROJECT_ENVIRONMENT").unwrap()
-        )
-    });
     assert!(
-        Command::new(python)
+        Command::new(&service.python)
             .args(["-I", "-B"])
             .arg(repository.join("crates/knoted-core/tests/fixtures/t48_office.py"))
             .arg(root.join("fixtures"))
@@ -191,4 +189,47 @@ async fn t48_real_http_office_artifact_identity_digest_and_metadata() {
                 .is_err()
         );
     }
+}
+
+#[test]
+fn t48_default_venv_runs_service_and_office_fixture_without_optional_env() {
+    let env_root = std::env::var_os("UV_PROJECT_ENVIRONMENT")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("KNOTED_TEST_PYTHON").map(|p| {
+                std::path::PathBuf::from(p)
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .to_owned()
+            })
+        })
+        .unwrap_or_else(|| {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../services/intelligence/.venv")
+        });
+    let repository = tempfile::tempdir_in(std::env::temp_dir()).unwrap();
+    let intelligence = repository.path().join("services/intelligence");
+    std::fs::create_dir_all(&intelligence).unwrap();
+    std::os::unix::fs::symlink(
+        std::fs::canonicalize(env_root).unwrap(),
+        intelligence.join(".venv"),
+    )
+    .unwrap();
+    let status = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "t48_real_http_office_artifact_identity_digest_and_metadata",
+            "--nocapture",
+        ])
+        .env_remove("KNOTED_TEST_PYTHON")
+        .env_remove("UV_PROJECT_ENVIRONMENT")
+        .env("T48_TEST_REPOSITORY", repository.path())
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "default venv must serve and generate fixtures without optional env"
+    );
 }

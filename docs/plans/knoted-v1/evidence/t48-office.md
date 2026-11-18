@@ -204,3 +204,33 @@ SQLite 只读导出并重新校验 artifact SHA/size；`b-frozen-code-sha256.txt
 Office/Rust 冻结哈希，最终带 fixture 修正的文件清单由完整报告记录。
 本实施者未运行 main/dev/发布/真实 SourceRoot；待父独立 review、完整 Python
 复验、PR 合入、固定产物及 dev 验收，不宣称整卡生命周期完成。
+
+
+### 独立审查修复第 2 轮（I1 / I2 / I3）
+
+基于 `586c856`，主 Agent 此前已独立确认完整 Python 157 passed / 9 既有
+warnings、Rust 392 顶层 + 1 嵌套子进程 passed / 1 ignored，静态门禁通过。
+本轮仅修三项 Important，完整审查与逐项回复在外部实施报告。
+
+- I1：锁定 openpyxl 生成的无 `is` 空 inlineStr 当作空单元格，保留相邻
+  正文；`v` / `f` 冲突结构拒绝，避免缓存缺失早退绕过校验。
+- I2：在 ZipFile / ZipInfo 全量构造前，以已有有界输入快照遍历实际中央
+  目录固定头，跳过变长字段，第 4097 条即 office_budget_exceeded。
+  伪造 EOCD 少量声明不能绕过。4096 条含 extra/comment 的真实 DOCX 仍成功。
+  ZIP64 中央目录、多磁盘为 unsupported_format；目录长度/计数不一致拒绝。
+  不支持自解压前缀或尾部垃圾；不改变 100 MiB、4096 或其他既有预算。
+- I3：真实 HTTP helper 保存一次选定的解释器供服务和 Office fixture 共用。
+  子进程清除两个可选 env，临时 repo 的默认 .venv 目录链接指向任务管理环境，
+  修前真实 NotPresent panic，修后真实三格式成功；临时目录由 TempDir 回收。
+- 补卡片要求的 Rust cancelled + compute_exit_confirmed true/false 回归。
+  guardian 产品及测试本轮未改；旧 PDF 命名/OCR 注释 Minor 留待后续。
+
+日志根 `/data/knoted-dev/tasks/t48/logs/`；每个 label 有 `.command/.log/.exit`：
+`r2-python-red` 5 failed / 1 passed；`r2-python-green` 6 passed；
+`r2-default-red` exit101（预期默认环境故障），`r2-default-green` 1 顶层 +
+1 子进程 passed；`r2-office-final` **76 passed / 无 warnings / exit0**；
+`r2-rust-final`（cargo test --workspace --locked t48_）**12 顶层 + 1 子进程
+passed / exit0**，含真实 Worker 管线与发布锁跨截止测试；
+`r2-fmt-final`、`r2-clippy-final`、`r2-ruff-final`、`r2-format-final` 全 exit0。
+代码/测试冻结后仅更新本证据与报告；父将独立完整 Python 复验同一快照。
+本轮不重复完整 Rust/Python，无远程、部署、SourceRoot 或模型宿主变更。

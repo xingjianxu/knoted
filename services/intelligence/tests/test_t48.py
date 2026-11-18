@@ -849,3 +849,95 @@ def test_t48_real_http_cancel_deadline_restart_and_new_attempt(tmp_path):
     finally:
         sentinel.terminate()
         sentinel.wait(timeout=5)
+
+
+def test_t48_empty_inline_string_preserves_visible_neighbor(tmp_path):
+    path = tmp_path / "empty.xlsx"
+    book = Workbook()
+    book.active["A1"] = "expected visible"
+    book.active["B1"] = ""
+    book.save(path)
+    assert [b.text for b in parser().parse_office(path).blocks] == ["expected visible"]
+
+
+@pytest.mark.parametrize("content", ["<v>3</v>", "<f>1+2</f>", "<is><t>text</t></is><v>3</v>"])
+def test_t48_inline_string_conflicting_values_refused(tmp_path, content):
+    path = tmp_path / "conflict.xlsx"
+    book = Workbook()
+    book.active["A1"] = "expected visible"
+    book.active["B1"] = ""
+    book.save(path)
+    rewrite(
+        path,
+        {
+            "xl/worksheets/sheet1.xml": lambda data: data.replace(
+                b'<c r="B1" t="inlineStr"></c>',
+                f'<c r="B1" t="inlineStr">{content}</c>'.encode(),
+            )
+        },
+    )
+    with pytest.raises(ParseError) as error:
+        parser().parse_office(path)
+    assert error.value.code == "corrupt_input"
+
+
+@pytest.mark.parametrize("declared", [4097, 1])
+def test_t48_member_budget_precedes_zipinfo_allocation(tmp_path, monkeypatch, declared):
+    import struct
+
+    path = tmp_path / "many.docx"
+    with zipfile.ZipFile(path, "w") as archive:
+        for index in range(4097):
+            archive.writestr(f"empty{index}", b"")
+    data = bytearray(path.read_bytes())
+    end = data.rfind(b"PK\x05\x06")
+    struct.pack_into("<HH", data, end + 8, declared, declared)
+    path.write_bytes(data)
+    office = parser()
+
+    def refuse_full_directory(*args, **kwargs):
+        pytest.fail("over-budget directory reached full ZipFile construction")
+
+    monkeypatch.setattr(office.zipfile, "ZipFile", refuse_full_directory)
+    with pytest.raises(ParseError) as error:
+        office.parse_office(path)
+    assert error.value.code == "office_budget_exceeded"
+
+
+def test_t48_directory_exact_member_limit_with_variable_fields(tmp_path):
+    path = docx(tmp_path)
+    with zipfile.ZipFile(path) as archive:
+        count = len(archive.infolist())
+    with zipfile.ZipFile(path, "a") as archive:
+        archive.comment = b"archive comment"
+        for index in range(4096 - count):
+            member = zipfile.ZipInfo(f"media/unused{index}.bin")
+            member.extra = b"\xfe\xca\x02\x00ok"
+            member.comment = b"member comment"
+            archive.writestr(member, b"")
+    assert parser().parse_office(path).full_text == "before"
+
+
+@pytest.mark.parametrize("damage", ["count", "length", "zip64", "multidisk"])
+def test_t48_directory_rejects_malformed_or_unsupported_headers(tmp_path, damage):
+    import struct
+
+    path = docx(tmp_path)
+    data = bytearray(path.read_bytes())
+    end = data.rfind(b"PK\x05\x06")
+    expected = "corrupt_input"
+    if damage == "count":
+        struct.pack_into("<HH", data, end + 8, 1, 1)
+    elif damage == "length":
+        central = struct.unpack_from("<L", data, end + 16)[0]
+        struct.pack_into("<HHH", data, central + 28, 65535, 65535, 65535)
+    elif damage == "zip64":
+        struct.pack_into("<L", data, end + 16, 0xFFFFFFFF)
+        expected = "unsupported_format"
+    else:
+        struct.pack_into("<H", data, end + 4, 1)
+        expected = "unsupported_format"
+    path.write_bytes(data)
+    with pytest.raises(ParseError) as error:
+        parser().parse_office(path)
+    assert error.value.code == expected

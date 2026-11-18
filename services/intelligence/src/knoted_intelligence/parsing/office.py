@@ -11,6 +11,7 @@ import io
 import json
 import posixpath
 import re
+import struct
 import zipfile
 import zlib
 from dataclasses import asdict, dataclass
@@ -91,6 +92,46 @@ def _part_name(name: str) -> bool:
         or any(p in {"", ".", ".."} for p in name.split("/"))
         or any(ord(c) < 32 for c in name)
     )
+
+
+def _check_directory(data: bytes, limit: int) -> None:
+    """Count actual ZIP32 directory records before ZipFile allocates ZipInfo objects.
+
+    Only fixed headers are unpacked; names/extra/comments are skipped by length.
+    ZIP64 and multi-disk archives are outside this bounded OOXML subset.
+    """
+    end = data.rfind(b"PK\x05\x06", max(0, len(data) - 65557))
+    if end < 0 or end + 22 > len(data):
+        _fail()
+    disk, central_disk, disk_count, total, size, offset, comment = struct.unpack_from(
+        "<4H2LH", data, end + 4
+    )
+    if end + 22 + comment != len(data):
+        _fail()
+    if (
+        disk
+        or central_disk
+        or total == 0xFFFF
+        or size == 0xFFFFFFFF
+        or offset == 0xFFFFFFFF
+        or data[max(0, end - 20) : end - 16] == b"PK\x06\x07"
+    ):
+        _fail("unsupported_format")
+    if offset + size != end:
+        _fail()
+    cursor = offset
+    count = 0
+    while cursor < end:
+        if cursor + 46 > end or data[cursor : cursor + 4] != b"PK\x01\x02":
+            _fail()
+        name, extra, note = struct.unpack_from("<3H", data, cursor + 28)
+        cursor += 46 + name + extra + note
+        if cursor > end:
+            _fail()
+        count += 1
+        _bound(count, limit)
+    if count != total or count != disk_count:
+        _fail()
 
 
 class _Package:
@@ -472,6 +513,8 @@ def _xlsx(package: _Package, out: _Output):
                 value = cell.find(S + "v")
                 cell_type = cell.get("t", "n")
                 text = value.text if value is not None and value.text is not None else ""
+                if cell_type == "inlineStr" and (value is not None or formula is not None):
+                    _fail()
                 if formula is not None and not text:
                     continue  # missing cache is absent, never computed or changed to zero
                 if cell_type == "s":
@@ -482,8 +525,11 @@ def _xlsx(package: _Package, out: _Output):
                 elif cell_type == "inlineStr":
                     inline = cell.find(S + "is")
                     if inline is None:
-                        _fail()
-                    text = _spreadsheet_text(inline)
+                        if len(cell) or (cell.text or "").strip():
+                            _fail()
+                        text = ""
+                    else:
+                        text = _spreadsheet_text(inline)
                 elif cell_type not in {"n", "b", "e", "str", "d"}:
                     _fail("unsupported_format")
                 location = {"sheet": title, "cell": address}
@@ -573,6 +619,7 @@ def parse_office(
             _fail("input_too_large")
         if data.startswith(bytes.fromhex("d0cf11e0a1b11ae1")):
             _fail("unsupported_format")
+        _check_directory(data, limits.members)
         package = _Package(io.BytesIO(data), limits)
         if not staged and path.suffix and path.suffix.lower() != "." + package.format:
             _fail("unsupported_format")
