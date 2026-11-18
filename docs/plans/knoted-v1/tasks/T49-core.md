@@ -1,6 +1,6 @@
 # T49 补充子任务：文件领域读取与元数据事务
 
-- 状态：独立阶段 A 已实现并审查，见 [草稿 PR #161](https://github.com/xingjianxu/knoted/pull/161)；属于 [T49](T49.md)，尚未主线集成或整卡验收。
+- 状态：done；随 [T49](T49.md) 的 PR [#161](https://github.com/xingjianxu/knoted/pull/161) 主线/dev `8ffb240` 验收。
 - 依据：T49 既定 list/detail/PATCH/content 行为、[ADR 0006](../../../decisions/0006-file-pipeline-and-aggregate-contracts.md)。本子任务不新增公共字段、迁移、模块边界或依赖；将文件领域事务与 FD 读取放到已有 core files 模块，API 只作 HTTP 适配。
 - 原因：API 生产依赖没有 SQLx/rustix/sha2；不能在路由复制数据库与文件安全实现，也不应为此扩大 API 依赖。按 T49 的额外业务模块规则拆出明确子任务，由同一个 T49 实施 Agent 在其任务分支串行完成。
 - 隔离：主根 `.worktrees/knoted-t49` / `feat/t49`；主 Agent 负责契约、集成及 dev。等待 T48 时仅作独立准备，集成/运行验收仍遵循上游依赖。
@@ -25,5 +25,5 @@
 - [x] 真实 PG 验证 CAS、备注三态、标签联合更新/no-op/回滚、generic tag 写后旧 CAS、missing、分页及游标作用域。
 - [x] 真实临时根/FD 验证路径穿越、symlink/FIFO/非普通文件、根身份、同路径替换、观察失效、读中变化、metadata-only 与最终 ETag；确定阶段的 PG/FD 屏障优先于 sleep。
 - [x] 自建并 RAII 持有本任务 tmp，释放事务/任务并显式 `db.drop().await` 后断言，避免已有 #138/#153；不修改通用测试 helper。
-- [ ] T49 API 和 Web 测试消费真实操作，运行 Rust fmt/test/clippy 及相应 Web/API 门禁，留存真实输出。库测试不冒充整卡 dev。
-- [ ] 同一实施者安全提交；主 Agent 独立审查、整卡上游依赖检查、PR/主线/dev 验收后才完成 T49。
+- [x] T49 API 和 Web 测试消费真实操作，运行 Rust fmt/test/clippy 及相应 Web/API 门禁，留存真实输出。库测试不冒充整卡 dev。
+- [x] 同一实施者安全提交；主 Agent 独立审查、整卡上游依赖检查、PR/主线/dev 验收后才完成 T49。
