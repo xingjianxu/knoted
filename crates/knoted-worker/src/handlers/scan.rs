@@ -77,21 +77,25 @@ impl Handler for Dispatcher {
         }
     }
     async fn cancel_and_wait<'a>(&'a self, lease: &'a Lease) -> bool {
-        // Only extraction owns an external process whose exit must be proven;
-        // a leaked or unknown row is treated as having nothing to wait for.
-        let kind: Option<String> = sqlx::query_scalar("SELECT kind FROM jobs WHERE id=$1")
+        // Only extraction owns an external process whose exit must be proven.
+        // A leaked or unknown row has nothing to wait for, but a failed kind
+        // lookup must fail closed and take the extraction path.
+        match sqlx::query_scalar::<_, String>("SELECT kind FROM jobs WHERE id=$1")
             .bind(lease.job_id)
             .fetch_optional(self.ctx.pool())
             .await
-            .unwrap_or(None);
-        match kind.as_deref() {
-            Some(knoted_core::files::extraction::EXTRACT_JOB_KIND) => {
+        {
+            Ok(Some(kind)) if kind == knoted_core::files::extraction::EXTRACT_JOB_KIND => {
                 super::extract::cancel_and_wait(&self.ctx, lease).await
             }
-            Some(super::fulltext::PUBLISH_JOB_KIND | super::fulltext::CLEANUP_JOB_KIND) => {
+            Ok(Some(kind))
+                if kind == super::fulltext::PUBLISH_JOB_KIND
+                    || kind == super::fulltext::CLEANUP_JOB_KIND =>
+            {
                 super::fulltext::cancel_and_wait(&self.ctx, lease).await
             }
-            _ => true,
+            Ok(_) => true,
+            Err(_) => super::extract::cancel_and_wait(&self.ctx, lease).await,
         }
     }
 }

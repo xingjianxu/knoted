@@ -88,6 +88,32 @@ impl Engine {
         body
     }
 
+    async fn put(&self, path: &str, body: Value) -> Value {
+        let response = self
+            .http
+            .put(format!("{}/{}", self.base, path))
+            .json(&body)
+            .send()
+            .await
+            .expect("Meilisearch is reachable");
+        let status = response.status();
+        let body: Value = response.json().await.expect("Meilisearch returns JSON");
+        assert!(status.is_success(), "PUT {path} failed: {body}");
+        body
+    }
+
+    async fn wait_task(&self, uid: i64) {
+        for _ in 0..100 {
+            let task = self.get(&format!("tasks/{uid}")).await;
+            match task["status"].as_str() {
+                Some("succeeded") => return,
+                Some("failed") | Some("canceled") => panic!("seed task failed: {task}"),
+                _ => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
+            }
+        }
+        panic!("seed task did not finish");
+    }
+
     async fn search(&self, query: &str) -> Value {
         self.post(
             &format!("indexes/{}/search", self.index),
@@ -209,6 +235,11 @@ async fn t53_1_chinese_word_inside_a_long_sentence_is_found() {
     let hits = engine.search("知识管理").await;
     assert_eq!(hits["hits"].as_array().unwrap().len(), 1, "{hits}");
     assert_eq!(hits["hits"][0]["id"], json!(published.document_key));
+
+    // A raw substring spanning two segmented words proves the hit above is real
+    // segmentation, not prefix/substring matching.
+    let partial = engine.search("识管").await;
+    assert_eq!(partial["hits"].as_array().unwrap().len(), 0, "{partial}");
 
     // An English word is searchable in the same index.
     let english = engine.search("meeting").await;
@@ -517,6 +548,43 @@ async fn t53_4_lost_lease_cannot_mark_a_document_published() {
     assert_ne!(state.0, "published");
     assert!(state.1.is_none());
 
+    // The publication fence itself: the engine task already succeeded and its
+    // id is in the ledger, so this attempt reaches `record_published` and must
+    // still be rejected there.
+    sqlx::query(
+        "UPDATE fulltext_publications SET status='submitted', published_at=NULL WHERE id=$1",
+    )
+    .bind(publication.id)
+    .execute(ctx.pool())
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE jobs SET state='queued', lease_token=NULL, lease_expires_at=NULL, \
+         locked_by=NULL, available_at=now() WHERE id=$1",
+    )
+    .bind(lease.job_id)
+    .execute(ctx.pool())
+    .await
+    .unwrap();
+    let (lease, job) = claim_job(&ctx, lease.job_id).await;
+    sqlx::query("UPDATE jobs SET lease_token=gen_random_uuid() WHERE id=$1")
+        .bind(lease.job_id)
+        .execute(ctx.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        execute(&ctx, &lease, &job).await,
+        ExecutionOutcome::Cancelled
+    );
+    let state: (String, Option<chrono::DateTime<Utc>>) =
+        sqlx::query_as("SELECT status, published_at FROM fulltext_publications WHERE id=$1")
+            .bind(publication.id)
+            .fetch_one(ctx.pool())
+            .await
+            .unwrap();
+    assert_eq!(state.0, "submitted");
+    assert!(state.1.is_none());
+
     engine.drop_index().await;
 }
 
@@ -610,4 +678,341 @@ async fn claim_publication_cleanup(ctx: &AppContext) -> (jobs::Lease, Job) {
     .await
     .unwrap();
     claim_job(ctx, job_id).await
+}
+
+#[test]
+fn t53_7_search_config_rejects_non_loopback_and_bad_index_uid() {
+    use knoted_core::config::{AppConfig, ConfigError};
+
+    let dir = tempfile::tempdir().unwrap();
+    let write = |name: &str, section: &str| {
+        let path = dir.path().join(name);
+        std::fs::write(
+            &path,
+            format!("[database]\nurl = \"postgres://127.0.0.1/knoted_test\"\n\n{section}"),
+        )
+        .unwrap();
+        path
+    };
+
+    let remote = write(
+        "remote.toml",
+        "[search]\nenabled = true\nbase_url = \"http://10.0.0.7:15605\"\n",
+    );
+    assert!(matches!(
+        AppConfig::load(&remote),
+        Err(ConfigError::Invalid {
+            field: "search",
+            ..
+        })
+    ));
+
+    let credentials = write(
+        "credentials.toml",
+        "[search]\nenabled = true\nbase_url = \"http://user:pw@127.0.0.1:15605\"\n",
+    );
+    assert!(matches!(
+        AppConfig::load(&credentials),
+        Err(ConfigError::Invalid {
+            field: "search",
+            ..
+        })
+    ));
+
+    let bad_uid = write(
+        "uid.toml",
+        "[search]\nenabled = true\nindex_uid = \"knoted/documents\"\n",
+    );
+    assert!(matches!(
+        AppConfig::load(&bad_uid),
+        Err(ConfigError::Invalid {
+            field: "search",
+            ..
+        })
+    ));
+
+    let absent = write("absent.toml", "");
+    let config = AppConfig::load(&absent).unwrap();
+    assert!(!config.search.enabled);
+    assert_eq!(config.search.base_url, "http://127.0.0.1:15605");
+    assert_eq!(config.search.index_uid, "knoted_documents");
+    assert!(config.search_api_key().is_none());
+}
+
+#[tokio::test]
+async fn t53_8_manual_retry_after_failure_publishes() {
+    let engine = Engine::new();
+    let db = TestDb::create().await.unwrap();
+    let ctx = AppContext::new(db.pool.clone()).with_search(engine.config());
+    let source = Uuid::new_v4();
+    let publication = meili::publish_fulltext(&ctx, document(source, 1, "手动重试的会议纪要"))
+        .await
+        .unwrap();
+    let (lease, job) = claim_publication(&ctx, publication.id).await;
+    sqlx::query(
+        "UPDATE fulltext_publications SET status='failed', last_error='engine rejected' WHERE id=$1",
+    )
+    .bind(publication.id)
+    .execute(ctx.pool())
+    .await
+    .unwrap();
+    knoted_core::jobs::service::finish_execution(
+        &ctx,
+        knoted_core::jobs::FinishExecution {
+            job_id: lease.job_id,
+            lease_token: lease.token,
+            outcome: ExecutionOutcome::PermanentFailure {
+                message: "engine rejected".into(),
+            },
+            cancel_confirmed: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    // The product-level retry creates a new job that only knows the original
+    // through `retry_of`; the publication must still become publishable.
+    let retried = knoted_core::jobs::service::retry_failed(&ctx, job.id)
+        .await
+        .unwrap();
+    assert_eq!(retried.retry_of, Some(job.id));
+    let (lease, job) = claim_job(&ctx, retried.id).await;
+    assert_eq!(
+        execute(&ctx, &lease, &job).await,
+        ExecutionOutcome::Succeeded
+    );
+
+    let published = meili::get_publication(
+        &ctx,
+        GetPublication {
+            source_type: SourceType::Note,
+            source_id: source,
+            source_version: None,
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(published.status, PublicationStatus::Published);
+    assert!(published.meili_task_uid.is_some());
+
+    engine.drop_index().await;
+}
+
+#[tokio::test]
+async fn t53_9_permanent_engine_rejection_ends_in_failed() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    let index = "knoted_t53_reject";
+    for (suffix, body) in [
+        (
+            format!("/indexes/{index}"),
+            json!({ "uid": index, "primaryKey": "id" }),
+        ),
+        (
+            format!("/indexes/{index}/settings"),
+            json!({
+                "searchableAttributes": ["title", "body"],
+                "filterableAttributes": ["source_type", "source_id", "source_version",
+                    "project_id", "tags", "archived", "deleted", "path", "format"],
+                "sortableAttributes": ["updated_at", "version"]
+            }),
+        ),
+    ] {
+        Mock::given(method("GET"))
+            .and(path(suffix))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("PUT"))
+        .and(path(format!("/indexes/{index}/documents")))
+        .respond_with(ResponseTemplate::new(422).set_body_json(json!({
+            "message": "Document identifier is invalid",
+            "code": "invalid_document_id",
+            "type": "invalid_request"
+        })))
+        .mount(&server)
+        .await;
+
+    let db = TestDb::create().await.unwrap();
+    let ctx = AppContext::new(db.pool.clone()).with_search(SearchConfig {
+        enabled: true,
+        base_url: server.uri(),
+        index_uid: index.into(),
+        api_key_credential: None,
+    });
+    let source = Uuid::new_v4();
+    let publication = meili::publish_fulltext(&ctx, document(source, 1, "被拒绝的会议纪要"))
+        .await
+        .unwrap();
+    let (lease, job) = claim_publication(&ctx, publication.id).await;
+    assert!(matches!(
+        execute(&ctx, &lease, &job).await,
+        ExecutionOutcome::PermanentFailure { .. }
+    ));
+
+    // A terminal failure must be visible in the ledger; staying `pending` would
+    // make every later publish call a silent no-op.
+    let state: (String, Option<String>) =
+        sqlx::query_as("SELECT status, last_error FROM fulltext_publications WHERE id=$1")
+            .bind(publication.id)
+            .fetch_one(ctx.pool())
+            .await
+            .unwrap();
+    assert_eq!(state.0, "failed");
+    assert!(state.1.is_some());
+
+    // Re-publishing the same version now creates real work again.
+    let retry = meili::publish_fulltext(&ctx, document(source, 1, "被拒绝的会议纪要"))
+        .await
+        .unwrap();
+    assert_eq!(retry.id, publication.id);
+    let jobs: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs WHERE kind='fulltext.publish'")
+        .fetch_one(ctx.pool())
+        .await
+        .unwrap();
+    assert_eq!(jobs, 2, "a failed publication may be attempted again");
+}
+
+#[tokio::test]
+async fn t53_10_cleanup_removes_a_document_without_a_recorded_task_id() {
+    let engine = Engine::new();
+    let db = TestDb::create().await.unwrap();
+    let ctx = AppContext::new(db.pool.clone()).with_search(engine.config());
+    let source = Uuid::new_v4();
+
+    let first = meili::publish_fulltext(&ctx, document(source, 1, "第一版会议纪要"))
+        .await
+        .unwrap();
+    // The engine accepted v1 but the response was lost, so the ledger has no
+    // task id for it. Seed exactly that document into the engine.
+    let seeded = engine
+        .put(
+            &format!("indexes/{}/documents", engine.index),
+            json!([{
+                "id": first.document_key,
+                "source_type": "note",
+                "source_version": 1,
+                "version": 1,
+                "title": "周会纪要",
+                "body": "第一版会议纪要",
+                "archived": false,
+                "deleted": false,
+                "updated_at": 0
+            }]),
+        )
+        .await;
+    engine.wait_task(seeded["taskUid"].as_i64().unwrap()).await;
+    let task_uid: Option<i64> =
+        sqlx::query_scalar("SELECT meili_task_uid FROM fulltext_publications WHERE id=$1")
+            .bind(first.id)
+            .fetch_one(ctx.pool())
+            .await
+            .unwrap();
+    assert!(task_uid.is_none(), "precondition: no recorded task id");
+
+    let second = meili::publish_fulltext(&ctx, document(source, 2, "第二版会议纪要"))
+        .await
+        .unwrap();
+    let (lease, job) = claim_publication(&ctx, second.id).await;
+    assert_eq!(
+        execute(&ctx, &lease, &job).await,
+        ExecutionOutcome::Succeeded
+    );
+    assert_eq!(engine.document_count().await, 2);
+
+    let (lease, job) = claim_publication_cleanup(&ctx).await;
+    assert_eq!(
+        execute(&ctx, &lease, &job).await,
+        ExecutionOutcome::Succeeded
+    );
+    assert_eq!(
+        engine.document_count().await,
+        1,
+        "the key of a version without a recorded task id must be deleted"
+    );
+    assert_eq!(
+        engine.search("第一版").await["hits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+
+    engine.drop_index().await;
+}
+
+#[tokio::test]
+async fn t53_11_older_version_after_a_newer_one_is_rejected() {
+    let engine = Engine::new();
+    let db = TestDb::create().await.unwrap();
+    let ctx = AppContext::new(db.pool.clone()).with_search(engine.config());
+    let source = Uuid::new_v4();
+
+    meili::publish_fulltext(&ctx, document(source, 1, "第一版"))
+        .await
+        .unwrap();
+    meili::publish_fulltext(&ctx, document(source, 2, "第二版"))
+        .await
+        .unwrap();
+    let error = meili::publish_fulltext(&ctx, document(source, 1, "第一版"))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, meili::DomainError::Stale), "{error}");
+    let current: Vec<i64> = sqlx::query_scalar(
+        "SELECT source_version FROM source_documents WHERE source_id=$1 \
+         AND superseded_at IS NULL",
+    )
+    .bind(source)
+    .fetch_all(ctx.pool())
+    .await
+    .unwrap();
+    assert_eq!(current, vec![2]);
+
+    engine.drop_index().await;
+}
+
+#[tokio::test]
+async fn t53_12_concurrent_versions_leave_exactly_one_current_projection() {
+    let engine = Engine::new();
+    let db = TestDb::create().await.unwrap();
+    let ctx = AppContext::new(db.pool.clone()).with_search(engine.config());
+    let source = Uuid::new_v4();
+
+    let (older, newer) = tokio::join!(
+        meili::publish_fulltext(&ctx, document(source, 1, "第一版")),
+        meili::publish_fulltext(&ctx, document(source, 2, "第二版")),
+    );
+    assert!(newer.is_ok(), "the newer version must win: {newer:?}");
+    if let Err(error) = &older {
+        assert!(matches!(error, meili::DomainError::Stale), "{error}");
+    }
+    let current: Vec<i64> = sqlx::query_scalar(
+        "SELECT source_version FROM source_documents WHERE source_id=$1 \
+         AND superseded_at IS NULL",
+    )
+    .bind(source)
+    .fetch_all(ctx.pool())
+    .await
+    .unwrap();
+    assert_eq!(current, vec![2]);
+
+    engine.drop_index().await;
+}
+
+#[test]
+fn t53_13_client_debug_hides_the_api_key() {
+    let config = SearchConfig {
+        enabled: true,
+        base_url: "http://127.0.0.1:15605".into(),
+        index_uid: "knoted_documents".into(),
+        api_key_credential: None,
+    };
+    let client = meili::MeiliClient::new(&config, Some("sentinel-secret")).unwrap();
+    let debug = format!("{client:?}");
+    assert!(!debug.contains("sentinel-secret"), "{debug}");
+    assert!(debug.contains("api_key_set: true"), "{debug}");
 }

@@ -8,7 +8,7 @@
 -- visibility never depends on how fast a deletion reaches the engine.
 CREATE TABLE source_documents (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    source_type text NOT NULL CHECK (source_type IN ('file', 'note', 'project', 'task', 'chat')),
+    source_type text NOT NULL CHECK (source_type IN ('file', 'note', 'project', 'task', 'chat_message')),
     source_id uuid NOT NULL,
     source_version bigint NOT NULL CHECK (source_version > 0),
     title text NOT NULL CHECK (title <> ''),

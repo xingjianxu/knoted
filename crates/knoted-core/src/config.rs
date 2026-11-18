@@ -230,7 +230,7 @@ impl SearchConfig {
         });
         if !valid {
             return Err(invalid(
-                "base_url requires an HTTP loopback origin without credentials or a path",
+                "base_url requires an HTTP loopback IP-literal origin without credentials or a path",
             ));
         }
         // Meilisearch index uids are also used as URL path segments.

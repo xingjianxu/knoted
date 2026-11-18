@@ -69,7 +69,8 @@ const FILTERABLE_ATTRIBUTES: &[&str] = &[
 /// Sort keys; `version` mirrors `source_version` with a sort-friendly name.
 const SORTABLE_ATTRIBUTES: &[&str] = &["updated_at", "version"];
 
-/// A kind of searchable source.
+/// A kind of searchable source. The spellings match the shared source registry
+/// (`chat_message`, not `chat`) so T54/T57 need no translation layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceType {
@@ -77,7 +78,7 @@ pub enum SourceType {
     Note,
     Project,
     Task,
-    Chat,
+    ChatMessage,
 }
 
 impl SourceType {
@@ -88,7 +89,7 @@ impl SourceType {
             SourceType::Note => "note",
             SourceType::Project => "project",
             SourceType::Task => "task",
-            SourceType::Chat => "chat",
+            SourceType::ChatMessage => "chat_message",
         }
     }
 
@@ -99,7 +100,7 @@ impl SourceType {
             "note" => SourceType::Note,
             "project" => SourceType::Project,
             "task" => SourceType::Task,
-            "chat" => SourceType::Chat,
+            "chat_message" => SourceType::ChatMessage,
             _ => return None,
         })
     }
@@ -261,7 +262,7 @@ async fn lock_source(
     source_type: SourceType,
     source_id: Uuid,
 ) -> Result<(), DomainError> {
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':' || $1, 0))")
         .bind(format!("{}:{}", source_type.as_str(), source_id))
         .execute(&mut **tx)
         .await?;
@@ -274,6 +275,11 @@ async fn lock_source(
 /// returns the existing publication without a second job. An older version is
 /// rejected; a newer version supersedes the current row. A previously failed
 /// publication of the same version is retried with a new job.
+///
+/// The version identifies the projected content: a metadata-only change
+/// (`title`, `body`, `tags`, `archived`, `deleted`, `path`, `format`,
+/// `updated_at`) must arrive as a new `source_version`. Re-sending an existing
+/// version keeps the stored projection.
 pub async fn publish_fulltext(
     ctx: &AppContext,
     document: SourceDocument,
@@ -331,17 +337,24 @@ pub async fn publish_fulltext(
     .await?;
 
     let (publication_id, needs_job) = match existing {
-        Some((id, status)) if status == PublicationStatus::Failed.as_str() => {
-            sqlx::query(
-                "UPDATE fulltext_publications SET status='pending', meili_task_uid=NULL, \
-                 last_error=NULL, updated_at=now() WHERE id=$1",
-            )
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-            (id, true)
+        Some((id, status)) => {
+            // A terminal owning job (failed, cancelled, or a success whose
+            // ledger write was rolled back) must not block new work. While the
+            // job is still queued/running the publish call stays idempotent.
+            let retry = status == PublicationStatus::Failed.as_str()
+                || (status != PublicationStatus::Published.as_str()
+                    && owning_job_terminal(&mut tx, id).await?);
+            if retry {
+                sqlx::query(
+                    "UPDATE fulltext_publications SET status='pending', meili_task_uid=NULL, \
+                     last_error=NULL, attempts=attempts+1, updated_at=now() WHERE id=$1",
+                )
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            }
+            (id, retry)
         }
-        Some((id, _)) => (id, false),
         None => {
             let id: Uuid = sqlx::query_scalar(
                 "INSERT INTO fulltext_publications (document_id, engine, index_uid, document_key) \
@@ -408,6 +421,26 @@ async fn insert_document(
     Ok(id)
 }
 
+/// Whether the job that owns a publication already reached a terminal state, so
+/// a new attempt is real work rather than a duplicate.
+async fn owning_job_terminal(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    publication_id: Uuid,
+) -> Result<bool, DomainError> {
+    let row: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT j.state FROM fulltext_publications p LEFT JOIN jobs j ON j.id=p.job_id \
+         WHERE p.id=$1",
+    )
+    .bind(publication_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(match row {
+        Some((Some(state),)) => matches!(state.as_str(), "succeeded" | "failed" | "cancelled"),
+        // No rows or no job: nothing will run, so new work must be enqueued.
+        _ => true,
+    })
+}
+
 /// Reads the publication of one source version, or its current version.
 pub async fn get_publication(
     ctx: &AppContext,
@@ -418,11 +451,13 @@ pub async fn get_publication(
          p.last_error, p.published_at, d.source_type, d.source_id, d.source_version \
          FROM fulltext_publications p JOIN source_documents d ON d.id=p.document_id \
          WHERE d.source_type=$1 AND d.source_id=$2 AND ($3::bigint IS NULL OR d.source_version=$3) \
+         AND p.index_uid=$4 \
          ORDER BY d.source_version DESC, p.created_at DESC LIMIT 1",
     )
     .bind(input.source_type.as_str())
     .bind(input.source_id)
     .bind(input.source_version)
+    .bind(&ctx.search().index_uid)
     .fetch_optional(ctx.pool())
     .await?;
     Ok(row.and_then(PublicationRow::into_publication))
@@ -479,6 +514,7 @@ impl PublicationRow {
 
 /// Everything the worker needs to submit a publication.
 struct PublicationRecord {
+    id: Uuid,
     job_id: Option<Uuid>,
     index_uid: String,
     document_key: String,
@@ -501,6 +537,7 @@ struct PublicationRecord {
 
 #[derive(sqlx::FromRow)]
 struct PublicationRecordRow {
+    id: Uuid,
     job_id: Option<Uuid>,
     index_uid: String,
     document_key: String,
@@ -526,7 +563,7 @@ async fn load_record(
     publication_id: Uuid,
 ) -> Result<Option<PublicationRecord>, sqlx::Error> {
     let row: Option<PublicationRecordRow> = sqlx::query_as(
-        "SELECT p.job_id, p.index_uid, p.document_key, p.status, p.meili_task_uid, \
+        "SELECT p.id, p.job_id, p.index_uid, p.document_key, p.status, p.meili_task_uid, \
          d.source_type, d.source_id, d.source_version, d.superseded_at IS NOT NULL AS superseded, \
          d.title, d.body, d.project_id, d.tags, d.archived, d.deleted, d.path, d.format, d.updated_at \
          FROM fulltext_publications p JOIN source_documents d ON d.id=p.document_id \
@@ -537,6 +574,7 @@ async fn load_record(
     .await?;
     Ok(row.and_then(|row| {
         Some(PublicationRecord {
+            id: row.id,
             job_id: row.job_id,
             index_uid: row.index_uid,
             document_key: row.document_key,
@@ -600,11 +638,21 @@ impl EngineTask {
 
 /// Minimal Meilisearch HTTP client: enough for index preparation, document
 /// upserts, task polling and deletion. It is not a general-purpose SDK.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MeiliClient {
     base: String,
     api_key: Option<String>,
     http: reqwest::Client,
+}
+
+impl std::fmt::Debug for MeiliClient {
+    // The API key is a credential: `{:?}` must never reveal it.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MeiliClient")
+            .field("base", &self.base)
+            .field("api_key_set", &self.api_key.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl MeiliClient {
@@ -684,13 +732,35 @@ impl MeiliClient {
             } else if created_status.as_u16() != 409 {
                 return Err(DomainError::Unavailable);
             }
+        } else if status.is_client_error() {
+            return Err(DomainError::Rejected(format!(
+                "engine index probe: HTTP {}",
+                status.as_u16()
+            )));
         } else if !status.is_success() {
             return Err(DomainError::Unavailable);
         }
 
-        let settings = self
-            .send(self.request(reqwest::Method::GET, &format!("indexes/{uid}/settings")))
-            .await?;
+        let response = self
+            .request(reqwest::Method::GET, &format!("indexes/{uid}/settings"))
+            .send()
+            .await
+            .map_err(|_| DomainError::Unavailable)?;
+        let status = response.status();
+        let settings: Value = response.json().await.unwrap_or(Value::Null);
+        if status.as_u16() == 404 {
+            // Another publication may still be creating this index.
+            return Err(DomainError::Unavailable);
+        }
+        if status.is_client_error() {
+            return Err(DomainError::Rejected(format!(
+                "engine settings probe: HTTP {}",
+                status.as_u16()
+            )));
+        }
+        if !status.is_success() {
+            return Err(DomainError::Unavailable);
+        }
         if !settings_match(&settings) {
             let body = self
                 .send(
@@ -832,71 +902,135 @@ async fn execute_publish(ctx: &AppContext, lease: &Lease, job: &Job) -> Executio
             message: "invalid publication envelope".into(),
         };
     };
-    let client = match MeiliClient::from_context(ctx) {
-        Ok(client) => client,
-        Err(error) => return outcome(error),
-    };
-    let record = match load_record(ctx.pool(), publication_id).await {
-        Ok(Some(record)) => record,
-        Ok(None) => {
-            return ExecutionOutcome::PermanentFailure {
-                message: "unknown publication".into(),
-            };
+    match publish_once(ctx, lease, job, publication_id).await {
+        Ok(()) => ExecutionOutcome::Succeeded,
+        Err(error) => {
+            let failure = outcome(error);
+            // A permanent failure - and a retry budget that is now exhausted -
+            // must end in the ledger's terminal `failed`. Otherwise the row
+            // stays `pending`/`submitted` and the next publish call treats it
+            // as work already in flight.
+            let exhausted = matches!(failure, ExecutionOutcome::TemporaryFailure { .. })
+                && job.attempts >= job.max_attempts;
+            match &failure {
+                ExecutionOutcome::PermanentFailure { message } => {
+                    let _ = record_failed(ctx, lease, publication_id, message).await;
+                }
+                ExecutionOutcome::TemporaryFailure { message } if exhausted => {
+                    let _ = record_failed(ctx, lease, publication_id, message).await;
+                }
+                _ => {}
+            }
+            failure
         }
-        Err(_) => return temporary("publication ledger unavailable"),
-    };
-    // The ledger row names the job that owns it; a takeover of some other job
-    // can never publish this document.
-    if record.job_id != Some(lease.job_id) {
-        return ExecutionOutcome::Cancelled;
     }
-    if record.status == PublicationStatus::Published.as_str() {
+}
+
+/// One publish attempt. Every error ends in [`outcome`]; the caller records the
+/// terminal failure in the ledger.
+async fn publish_once(
+    ctx: &AppContext,
+    lease: &Lease,
+    job: &Job,
+    publication_id: Uuid,
+) -> Result<(), DomainError> {
+    let client = MeiliClient::from_context(ctx)?;
+    let record = load_record(ctx.pool(), publication_id)
+        .await?
+        // The projection was cleaned up with an older superseded version: the
+        // work is moot rather than broken, so the job is cancelled quietly.
+        .ok_or(DomainError::Stale)?;
+    if !owns_publication(ctx, lease, job, &record).await? {
+        return Err(DomainError::Stale);
+    }
+    match PublicationStatus::parse(&record.status) {
         // Replaying a finished publication is a no-op, not a second document.
-        return ExecutionOutcome::Succeeded;
+        Some(PublicationStatus::Published) => return Ok(()),
+        Some(PublicationStatus::Superseded) => {
+            return mark_superseded(ctx, lease, publication_id).await;
+        }
+        _ => {}
     }
-    if record.status == PublicationStatus::Superseded.as_str() || record.superseded {
+    if record.superseded {
         // A newer version already won; submitting this one would only create a
         // stale hit. The cleanup job removes whatever reached the engine.
-        return match mark_superseded(ctx, lease, publication_id).await {
-            Ok(()) => ExecutionOutcome::Succeeded,
-            Err(error) => outcome(error),
-        };
+        return mark_superseded(ctx, lease, publication_id).await;
     }
-    if let Err(error) = client.ensure_index(&record.index_uid).await {
-        return outcome(error);
-    }
+    client.ensure_index(&record.index_uid).await?;
 
     let task_uid = match record.meili_task_uid {
         Some(uid) => uid,
-        None => match client
-            .submit_document(&record.index_uid, engine_document(&record))
-            .await
-        {
-            Ok(uid) => {
-                if let Err(error) = record_submission(ctx, lease, publication_id, uid).await {
-                    return outcome(error);
-                }
-                uid
+        None => {
+            // A newer version may have won while the index was being prepared:
+            // never submit a projection that stopped being current.
+            if !still_current(ctx.pool(), publication_id).await? {
+                return mark_superseded(ctx, lease, publication_id).await;
             }
-            Err(error) => return outcome(error),
-        },
+            let uid = client
+                .submit_document(&record.index_uid, engine_document(&record))
+                .await?;
+            // If the lease was lost after the engine accepted the document, the
+            // id must not be attributed to this attempt; the next owner submits
+            // the same key and the engine upserts it.
+            record_submission(ctx, lease, publication_id, uid).await?;
+            uid
+        }
     };
 
-    match client.wait_task(task_uid).await {
-        Ok(EngineTask::Succeeded) => match record_published(ctx, lease, publication_id).await {
-            Ok(()) => ExecutionOutcome::Succeeded,
-            Err(error) => outcome(error),
-        },
-        Ok(EngineTask::Failed { .. } | EngineTask::Canceled) => {
-            let message = "search engine task failed";
-            let _ = record_failed(ctx, lease, publication_id, message).await;
-            ExecutionOutcome::PermanentFailure {
-                message: message.into(),
-            }
-        }
-        Ok(EngineTask::Enqueued | EngineTask::Processing) => temporary("search task not confirmed"),
-        Err(error) => outcome(error),
+    match client.wait_task(task_uid).await? {
+        EngineTask::Succeeded => record_published(ctx, lease, publication_id).await,
+        EngineTask::Failed { .. } | EngineTask::Canceled => Err(DomainError::Rejected(
+            "engine task failed or was canceled".into(),
+        )),
+        EngineTask::Enqueued | EngineTask::Processing => Err(DomainError::Unavailable),
     }
+}
+
+/// Whether this attempt may write the ledger row.
+///
+/// A takeover keeps the same job id, so the lease fence alone rejects it. A
+/// platform-level manual retry (`jobs::service::retry_failed`) is a new job with
+/// the same payload linked through `retry_of`; the ledger is rebound to it once
+/// the original job is terminal, otherwise a retried publication could never
+/// run.
+async fn owns_publication(
+    ctx: &AppContext,
+    lease: &Lease,
+    job: &Job,
+    record: &PublicationRecord,
+) -> Result<bool, DomainError> {
+    if record.job_id == Some(lease.job_id) {
+        return Ok(true);
+    }
+    let Some(original) = record.job_id else {
+        return Ok(false);
+    };
+    if job.retry_of != Some(original) {
+        return Ok(false);
+    }
+    let updated = sqlx::query(
+        "UPDATE fulltext_publications p SET job_id=$2, updated_at=now() \
+         FROM jobs original WHERE p.id=$1 AND p.job_id=$3 AND original.id=$3 \
+         AND original.state IN ('failed','cancelled')",
+    )
+    .bind(record.id)
+    .bind(lease.job_id)
+    .bind(original)
+    .execute(ctx.pool())
+    .await?;
+    Ok(updated.rows_affected() == 1)
+}
+
+/// Whether the projection is still the current version of its source.
+async fn still_current(pool: &PgPool, publication_id: Uuid) -> Result<bool, sqlx::Error> {
+    let current: Option<bool> = sqlx::query_scalar(
+        "SELECT d.superseded_at IS NULL FROM fulltext_publications p \
+         JOIN source_documents d ON d.id=p.document_id WHERE p.id=$1",
+    )
+    .bind(publication_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(current == Some(true))
 }
 
 async fn execute_cleanup(ctx: &AppContext, lease: &Lease, job: &Job) -> ExecutionOutcome {
@@ -916,8 +1050,7 @@ async fn execute_cleanup(ctx: &AppContext, lease: &Lease, job: &Job) -> Executio
             message: "invalid cleanup envelope".into(),
         };
     };
-    let keys = match cleanup_keys(ctx.pool(), source_type, source_id, keep_version, index_uid).await
-    {
+    let keys = match cleanup_keys(ctx.pool(), source_type, source_id, keep_version).await {
         Ok(keys) => keys,
         Err(_) => return temporary("cleanup ledger unavailable"),
     };
@@ -1028,18 +1161,30 @@ async fn record_published(
     .execute(&mut *tx)
     .await?;
     // Cleanup is keyed by the version that must survive, so publishing v3 keeps
-    // v3 and removes everything older; it is idempotent and may run late.
-    let mut spec = jobs::JobSpec::new(CLEANUP_JOB_KIND);
-    spec.idempotency_key = Some(format!(
-        "{source_type}:{source_id}:{source_version}:{index_uid}"
-    ));
-    spec.payload = json!({
-        "source_type": source_type,
-        "source_id": source_id,
-        "keep_version": source_version,
-        "index_uid": index_uid,
-    });
-    jobs::enqueue(&mut tx, spec).await?;
+    // v3 and removes everything older; it is idempotent and may run late. The
+    // first version of a source has nothing older to remove.
+    let has_older: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM source_documents \
+         WHERE source_type=$1 AND source_id=$2 AND source_version<$3)",
+    )
+    .bind(&source_type)
+    .bind(source_id)
+    .bind(source_version)
+    .fetch_one(&mut *tx)
+    .await?;
+    if has_older {
+        let mut spec = jobs::JobSpec::new(CLEANUP_JOB_KIND);
+        spec.idempotency_key = Some(format!(
+            "{source_type}:{source_id}:{source_version}:{index_uid}"
+        ));
+        spec.payload = json!({
+            "source_type": source_type,
+            "source_id": source_id,
+            "keep_version": source_version,
+            "index_uid": index_uid,
+        });
+        jobs::enqueue(&mut tx, spec).await?;
+    }
     tx.commit().await?;
     Ok(())
 }
@@ -1088,26 +1233,32 @@ async fn record_failed(
     Ok(())
 }
 
+/// Keys of every older version of one source.
+///
+/// Derived from the projection rows instead of the ledger's task id: a
+/// submission the engine accepted before its acknowledgement was lost has no
+/// task id recorded, but its document still exists and must be deleted. Deleting
+/// an absent key is a no-op in the engine, so over-listing is safe.
 async fn cleanup_keys(
     pool: &PgPool,
     source_type: SourceType,
     source_id: Uuid,
     keep_version: i64,
-    index_uid: &str,
 ) -> Result<Vec<String>, sqlx::Error> {
-    sqlx::query_scalar(
-        "SELECT p.document_key FROM fulltext_publications p \
-         JOIN source_documents d ON d.id=p.document_id \
-         WHERE d.source_type=$1 AND d.source_id=$2 AND d.source_version<$3 \
-         AND p.engine=$4 AND p.index_uid=$5 AND p.meili_task_uid IS NOT NULL",
+    let versions: Vec<i64> = sqlx::query_scalar(
+        "SELECT source_version FROM source_documents \
+         WHERE source_type=$1 AND source_id=$2 AND source_version<$3 \
+         ORDER BY source_version",
     )
     .bind(source_type.as_str())
     .bind(source_id)
     .bind(keep_version)
-    .bind(ENGINE)
-    .bind(index_uid)
     .fetch_all(pool)
-    .await
+    .await?;
+    Ok(versions
+        .into_iter()
+        .map(|version| document_key(source_type, source_id, version))
+        .collect())
 }
 
 /// Drops the superseded projections and their publication rows once the engine
