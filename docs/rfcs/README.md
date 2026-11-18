@@ -15,3 +15,4 @@
 | T47 计算进程退出确认与崩溃恢复 | [2026-11-18-t47-execution-exit-confirmation.md](2026-11-18-t47-execution-exit-confirmation.md) | 用户决策，主 Agent 整理 | Resolved | [ADR 0007](../decisions/0007-execution-exit-confirmation.md) |
 | T51/T52 OnlyOffice 只读预览授权 | [2026-11-18-t51-t52-office-preview.md](2026-11-18-t51-t52-office-preview.md) | 用户决策，主 Agent 整理 | Resolved | [ADR 0008](../decisions/0008-office-preview-authorization.md) |
 | T51 OnlyOffice 取源凭据改用官方出站 JWT | [2026-11-18-office-source-header-auth.md](2026-11-18-office-source-header-auth.md) | 用户决策，主 Agent 整理 | Resolved | [ADR 0009](../decisions/0009-office-source-jwt-header.md) |
+| T52 浏览器预览不向共享 OnlyOffice 发送 Knoted 会话 | [2026-11-18-office-preview-browser-isolation.md](2026-11-18-office-preview-browser-isolation.md) | 用户决策，主 Agent 整理 | Resolved | [ADR 0010](../decisions/0010-office-preview-credentialless-host.md) |
