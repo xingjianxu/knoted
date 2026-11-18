@@ -51,6 +51,9 @@ processes:
       failure_threshold: 60
 
   knoted-worker:
+    shutdown:
+      signal: 15
+      timeout_seconds: 75
     command: "exec bash tools/dev/pc/service.sh worker"
     availability:
       restart: "on_failure"
@@ -59,3 +62,25 @@ processes:
     depends_on:
       migrate:
         condition: process_completed_successfully
+      knoted-intelligence:
+        condition: process_healthy
+
+  knoted-intelligence:
+    command: "exec bash tools/dev/pc/service.sh intelligence"
+    availability:
+      restart: "on_failure"
+      backoff_seconds: 3
+      max_restarts: 5
+    depends_on:
+      prepare:
+        condition: process_completed_successfully
+    shutdown:
+      signal: 15
+      timeout_seconds: 30
+    readiness_probe:
+      exec:
+        command: "bash tools/dev/pc/service.sh probe-intelligence"
+      initial_delay_seconds: 1
+      period_seconds: 2
+      timeout_seconds: 3
+      failure_threshold: 60

@@ -73,10 +73,10 @@
 | [T44](tasks/T44.md) | 稳定副本与版本 | T43, T09 | done（PR [#147](https://github.com/xingjianxu/knoted/pull/147)，主线 `9160def`，dev `9160def`；[证据](evidence/t44-capture.md)） |
 | [T45](tasks/T45.md) | 移动识别和重关联 | T44 | done（PR [#150](https://github.com/xingjianxu/knoted/pull/150)，主线 `c786f3e`，dev `c786f3e`；[证据](evidence/t45-identity.md)） |
 | [T46](tasks/T46.md) | 文本解析 | T44 | done（PR [#154](https://github.com/xingjianxu/knoted/pull/154)，主线 `e10ee8e`，dev `e10ee8e`；[证据](evidence/t46-text.md)） |
-| [T47](tasks/T47.md) | PDF与图片解析 | T10, T44, T46 | pending |
-| [T48](tasks/T48.md) | Office解析 | T47 | pending |
-| [T49](tasks/T49.md) | 文件浏览备注下载 | T45, T48, T32 | pending |
-| [T50](tasks/T50.md) | PDF图片文本预览 | T49 | pending |
+| [T47](tasks/T47.md) | PDF与图片解析 | T10, T44, T46 | done（PR [#157](https://github.com/xingjianxu/knoted/pull/157)，主线 `0f65529`，dev `0f65529`；[证据](evidence/t47-parse.md)） |
+| [T48](tasks/T48.md) | Office解析 | T47 | in progress（阶段 A：[草稿 PR #159](https://github.com/xingjianxu/knoted/pull/159)；T47 已验收，待阶段 B 对接） |
+| [T49](tasks/T49.md) | 文件浏览备注下载 | T45, T48, T32 | in progress（阶段 A：[草稿 PR #161](https://github.com/xingjianxu/knoted/pull/161)；整卡验收待 T48） |
+| [T50](tasks/T50.md) | PDF图片文本预览 | T49 | in progress（阶段 A：[草稿 PR #162](https://github.com/xingjianxu/knoted/pull/162)；整卡验收待 T49） |
 | [T51](tasks/T51.md) | OnlyOffice授权后端 | T49, T15 | pending |
 | [T52](tasks/T52.md) | OnlyOffice网页接入 | T51, T50 | pending |
 | [T53](tasks/T53.md) | 全文索引发布 | T07, T48, T36 | pending |

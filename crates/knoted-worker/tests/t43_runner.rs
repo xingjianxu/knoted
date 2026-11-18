@@ -8,10 +8,7 @@ use knoted_worker::{
 #[tokio::test]
 async fn t43_worker_runs_queued_scan_through_real_lease_and_preserves_busy_event() {
     let db = TestDb::create().await.unwrap();
-    let path = std::path::PathBuf::from(format!(
-        "/data/knoted-dev/tasks/t43/tmp/worker-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let path = std::env::temp_dir().join(format!("worker-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&path).unwrap();
     std::fs::write(path.join("sample.txt"), "sample").unwrap();
     let ctx = AppContext::new(db.pool.clone()).with_files(FilesConfig {
@@ -49,10 +46,7 @@ async fn t43_worker_runs_queued_scan_through_real_lease_and_preserves_busy_event
 async fn t43_runtime_retains_real_notifications_while_scan_is_active() {
     use std::time::Duration;
     let db = TestDb::create().await.unwrap();
-    let path = std::path::PathBuf::from(format!(
-        "/data/knoted-dev/tasks/t43/tmp/runtime-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let path = std::env::temp_dir().join(format!("runtime-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&path).unwrap();
     let parent = path;
     let path = parent.join("source");
@@ -129,10 +123,7 @@ async fn t43_r1_heartbeat_wait_keeps_polling_scan_holding_job_lock() {
     use std::time::Duration;
     let db = TestDb::create().await.unwrap();
     let pool = concurrent_pool(&db).await;
-    let path = std::path::PathBuf::from(format!(
-        "/data/knoted-dev/tasks/t43/tmp/r1-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let path = std::env::temp_dir().join(format!("r1-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&path).unwrap();
     let ctx = AppContext::new(pool.clone()).with_files(FilesConfig {
         enabled: true,
@@ -217,10 +208,7 @@ async fn t43_r3_runner_cancel_drops_observed_report_without_losing_invalidation(
     }
     let db = TestDb::create().await.unwrap();
     let pool = concurrent_pool(&db).await;
-    let path = std::path::PathBuf::from(format!(
-        "/data/knoted-dev/tasks/t43/tmp/r3-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let path = std::env::temp_dir().join(format!("r3-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&path).unwrap();
     std::fs::write(path.join("a.txt"), "old").unwrap();
     let ctx = AppContext::new(pool.clone()).with_files(FilesConfig {
