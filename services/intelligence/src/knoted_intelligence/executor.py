@@ -797,7 +797,7 @@ def _compute(spec: dict[str, Any]) -> dict[str, Any]:
         )
         if spec["options_revision"] == office.options_revision():
             document = office.parse_office(Path(spec["input_path"]), staged=True)
-            parser_metadata = office.parser_summary()
+            parser_metadata = office.parser_summary(document.source_format)
         else:
             document = parser(
                 Path(spec["input_path"]),

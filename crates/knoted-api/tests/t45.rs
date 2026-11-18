@@ -5,7 +5,7 @@ use axum::{
 use knoted_api::build_router;
 use knoted_core::{
     auth::{self, sessions},
-    config::AuthConfig,
+    config::{AuthConfig, FilesConfig},
     context::AppContext,
     db::testing::TestDb,
     files::safe_fs,
@@ -16,9 +16,13 @@ use uuid::Uuid;
 #[tokio::test]
 async fn t45_http_relink_authenticated_csrf_and_target_etag() {
     let db = TestDb::create().await.unwrap();
-    let ctx = AppContext::new(db.pool.clone());
+    let root = tempfile::tempdir().unwrap();
+    let ctx = AppContext::new(db.pool.clone()).with_files(FilesConfig {
+        enabled: true,
+        root: Some(root.path().into()),
+        ..Default::default()
+    });
     let app = build_router(ctx.clone());
-    let root = tempfile::tempdir_in("/data/knoted-dev/tasks/t45/tmp").unwrap();
     let root_id = Uuid::new_v4();
     let identity = safe_fs::metadata(safe_fs::open_root(root.path()).unwrap())
         .unwrap()

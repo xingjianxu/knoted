@@ -32,9 +32,14 @@ fn artifact(req: &ExecutionRequest, format: &str) -> Value {
             json!({"path":"shape:1/shape:2/paragraph:1"}),
         ),
     };
+    let parser = if format == "docx" {
+        "office-ooxml-body-v3:docx"
+    } else {
+        "office-ooxml-body-v2-hidden-slides-included-cache-only"
+    };
     json!({"kind":"parse","input_sha256":req.input_sha256,"source_version":7,"options_revision":office::OPTIONS_REVISION,
         "child_pid":123,"truncated":false,"source_format":format,"title":null,"page_count":pages,"text_length":2,
-        "parser":{"parser_revision":office::PARSER_REVISION,"options_revision":office::OPTIONS_REVISION,
+        "parser":{"parser_revision":parser,"options_revision":office::OPTIONS_REVISION,
         "limits":{"members":4096,"part_bytes":33554432,"expanded_bytes":134217728,"compression_ratio":200,"xml_nodes":500000,"xml_depth":64,"text_bytes":16777216,"cells":100000,"blocks":100000}},
         "blocks":[{"ordinal":0,"type":"paragraph","text":"中文","page":page,"bbox":null,"structure":location.to_string()}]})
 }
@@ -103,6 +108,15 @@ fn t48_3_no_invented_pages_and_no_invalid_structures() {
         assert!(office::decode_artifact(&serde_json::to_vec(&value).unwrap(), &req).is_err());
     }
 }
+#[test]
+fn t48_docx_artifact_rejects_previous_body_policy() {
+    let req = request();
+    let mut old = artifact(&req, "docx");
+    old["parser"]["parser_revision"] =
+        json!("office-ooxml-body-v2-hidden-slides-included-cache-only");
+    assert!(office::decode_artifact(&serde_json::to_vec(&old).unwrap(), &req).is_err());
+}
+
 #[test]
 fn t48_echo_exit_proof_and_expired_office_record_refuse_release() {
     let req = request();

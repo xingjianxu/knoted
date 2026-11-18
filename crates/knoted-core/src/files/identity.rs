@@ -1,6 +1,7 @@
 //! Conservative identity matching and atomic user metadata transfer.
 use super::capture::SourceObservation;
 use sqlx::{PgConnection, types::Json};
+use std::path::Path;
 use uuid::Uuid;
 
 /// Called only while capture holds the current complete root/scan lock. A hash
@@ -83,7 +84,7 @@ struct RelinkRoot {
 }
 impl RelinkRoot {
     fn validate(&self) -> Result<(), DomainError> {
-        let actual = super::safe_fs::open_root(std::path::Path::new(&self.configured_path))
+        let actual = super::safe_fs::open_root(Path::new(&self.configured_path))
             .and_then(super::safe_fs::metadata)
             .map(|m| m.identity);
         if actual.ok().as_ref() != Some(&self.identity.0) {
@@ -110,6 +111,9 @@ pub async fn relink_source(
         let root:Option<RelinkRoot>=sqlx::query_as("SELECT id,configured_path,identity FROM file_roots WHERE singleton AND identity IS NOT NULL AND paused_reason IS NULL AND scan_token IS NULL FOR UPDATE")
             .fetch_optional(&mut *tx).await?;
         let root=root.ok_or(DomainError::Conflict{current_version:None})?;
+        if !ctx.files().enabled || ctx.files().root.as_deref()!=Some(Path::new(&root.configured_path)) {
+            return Err(DomainError::Conflict{current_version:None});
+        }
         root.validate()?;
         let rows:Vec<RelinkRow>=sqlx::query_as("SELECT id,root_id,version,status,note FROM file_sources WHERE id=ANY($1) ORDER BY id FOR UPDATE")
             .bind(vec![input.id,input.new_source_id]).fetch_all(&mut *tx).await?;
