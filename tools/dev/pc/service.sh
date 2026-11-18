@@ -17,6 +17,7 @@
 #   DATABASE_URL          postgres://xingjian@127.0.0.1:5432/knoted_dev
 #   KNOTED_LOG_LEVEL      info
 #   KNOTED_OFFICE_ORIGIN / KNOTED_OFFICE_JWT_SECRET_FILE  可选，必须同时提供；只记录凭据路径
+#   KNOTED_SEARCH_ENABLED=1 / KNOTED_SEARCH_CREDENTIAL_FILE  启用本机索引；可选 [secrets].meilisearch 凭据文件
 set -euo pipefail
 # 与 tools/dev/build-artifact.sh 一致：清单排序必须固定字节序，否则 locale 会改变 sort 结果。
 export LC_ALL=C
@@ -189,6 +190,24 @@ office_config_block() {
   printf '\n[office]\ndocument_server_origin = "%s"\njwt_secret_file = "%s"\n' "$origin" "$path"
 }
 
+search_config_block() {
+  local enabled=${KNOTED_SEARCH_ENABLED:-0} path=${KNOTED_SEARCH_CREDENTIAL_FILE:-}
+  if [[ $enabled == 0 && -z $path ]]; then
+    return 0
+  fi
+  [[ $enabled == 1 ]] || die "KNOTED_SEARCH_ENABLED 必须是 0 或 1，且凭据路径需要启用检索"
+  if [[ -n $path && ( $path != /* || $path == *['"\']* || $path =~ [[:cntrl:]] ) ]]; then
+    die "全文索引凭据需要安全的绝对文件路径"
+  fi
+  if [[ -n $path ]]; then
+    printf '\n[credentials]\ncredential_file = "%s"\n' "$path"
+  fi
+  printf '\n[search]\nenabled = true\n'
+  if [[ -n $path ]]; then
+    printf 'api_key_credential = "meilisearch"\n'
+  fi
+}
+
 command_prepare() {
   # 顺序：守卫 → 验产物 → 验依赖 → 建目录 → 渲染，失败时不留半个实例。
   guard_worktree
@@ -196,8 +215,9 @@ command_prepare() {
   revision=$(verify_runtime)
   log "固定产物 revision=$revision"
   require_tools
-  local office
+  local office search
   office=$(office_config_block)
+  search=$(search_config_block)
   prepare_instance_root
   install -d -m 0700 "$config_dir" "$state_dir" \
     "$logs_dir" "$assets_dir" "$staging_dir" "$backups_dir" \
@@ -216,7 +236,8 @@ command_prepare() {
     @LOG_LEVEL@ "$log_level" \
     @ASSETS_ROOT@ "$instance_root/assets" \
     @STAGING_ROOT@ "$instance_root/staging" \
-    @OFFICE_CONFIG@ "$office"
+    @OFFICE_CONFIG@ "$office" \
+    @SEARCH_CONFIG@ "$search"
 
   check_ports
   log "prepare 完成：配置 $config_file；HTTPS 由宿主 Caddy 管理"

@@ -172,6 +172,8 @@ function prepareEnv({ runtimeRoot, instanceRoot, certDir, apiPort, httpsPort, in
     KNOTED_HTTPS_PORT: String(httpsPort),
     KNOTED_HTTPS_DOMAIN: domain,
     KNOTED_LOG_LEVEL: "debug",
+    KNOTED_SEARCH_ENABLED: "",
+    KNOTED_SEARCH_CREDENTIAL_FILE: "",
     KNOTED_OFFICE_ORIGIN: "",
     KNOTED_OFFICE_JWT_SECRET_FILE: "",
     DATABASE_URL: "postgres://dev@127.0.0.1:5432/dev",
@@ -233,6 +235,20 @@ describe("编排配置", () => {
 });
 
 describe("prepare", () => {
+  it("仅按显式开关启用本机全文检索，配置只保存凭据路径", async () => {
+    const fixture = await fullFixture();
+    const result = run("bash", [serviceScript, "prepare"], {
+      env: prepareEnv(fixture, {
+        KNOTED_SEARCH_ENABLED: "1",
+        KNOTED_SEARCH_CREDENTIAL_FILE: "/run/knoted/search.key",
+      }),
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const config = readFileSync(join(fixture.instanceRoot, "config/knoted.toml"), "utf8");
+    assert.match(config, /\[credentials\]\ncredential_file = "\/run\/knoted\/search.key"/);
+    assert.match(config, /\[search\]\nenabled = true\napi_key_credential = "meilisearch"/);
+  });
+
   it("只渲染应用配置，不生成 HTTPS 配置或 reload 入口", async () => {
     const fixture = await fullFixture();
     const result = run(
