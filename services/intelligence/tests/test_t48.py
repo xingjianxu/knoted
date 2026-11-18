@@ -174,7 +174,6 @@ def test_docx_table_properties_and_range_markers_preserve_content(tmp_path):
     assert json.loads(result.blocks[1].structure)["path"] == "body/table:2/row:1/cell:1/paragraph:1"
 
 
-
 def test_formula_cache_only_never_evaluates_or_launches(tmp_path, monkeypatch):
     path = tmp_path / "formulas.xlsx"
     book = Workbook()
