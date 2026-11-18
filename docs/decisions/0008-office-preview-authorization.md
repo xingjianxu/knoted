@@ -7,7 +7,7 @@
 - Related issues: [#179](https://github.com/xingjianxu/knoted/issues/179)、[#180](https://github.com/xingjianxu/knoted/issues/180)
 - Related PRs: 尚未创建
 - Supersedes: 无
-- Superseded by: 无
+- Superseded by: [ADR 0009](0009-office-source-jwt-header.md) 部分替代取源随机凭据，其他决定继续有效
 
 ## 背景与问题
 

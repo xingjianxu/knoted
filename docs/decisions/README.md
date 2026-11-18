@@ -13,6 +13,7 @@
 | 0005 | 测试 HTTPS 由宿主共享 Caddy 管理（[文件](0005-https-owned-by-caddy.md)） | 2026-11-16 | Accepted | 部分替代 0003（HTTPS / 续期 reload 归属） |
 | 0006 | 文件处理链与概览回收站契约（[文件](0006-file-pipeline-and-aggregate-contracts.md)） | 2026-11-17 | Accepted | 无 |
 | 0007 | 计算退出证明与持久监督（[文件](0007-execution-exit-confirmation.md)） | 2026-11-18 | Accepted | 无；补充 0006 |
-| 0008 | OnlyOffice 预览使用短时固定版本授权（[文件](0008-office-preview-authorization.md)） | 2026-11-18 | Accepted | 无 |
+| 0008 | OnlyOffice 预览使用短时固定版本授权（[文件](0008-office-preview-authorization.md)） | 2026-11-18 | Accepted | 取源凭据部分由 0009 替代 |
+| 0009 | OnlyOffice 取源只接受官方出站 JWT 请求头（[文件](0009-office-source-jwt-header.md)） | 2026-11-18 | Accepted | 部分替代 0008 的取源随机凭据 |
 
 新 ADR 必须填写背景、方案、理由、正负影响、人工确认依据和关联任务。
