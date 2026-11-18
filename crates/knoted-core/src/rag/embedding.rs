@@ -161,13 +161,7 @@ pub async fn embed_chunks(
         return Err(DomainError::InvalidRequest);
     }
     for (chunks, request) in batches.clone().zip(requests) {
-        if request.kind != ExecutionKind::Embed
-            || request.options_revision != OPTIONS_REVISION
-            || request.source_version != set.source.source_version
-            || request.input_sha256 != Sha256Hex::digest(&manifest_bytes(set.id, chunks)?)
-        {
-            return Err(DomainError::InvalidRequest);
-        }
+        verify_request(set, chunks, request)?;
     }
 
     let client = IntelligenceClient::new(&ctx.intelligence().base_url)?;
@@ -186,6 +180,40 @@ pub async fn embed_chunks(
         model_revision: MODEL_REVISION.into(),
         rows,
     })
+}
+
+/// Execute one batch after persisting its possibly dispatched identity. The
+/// caller retains the rows until all batches of the set have been verified.
+pub async fn embed_chunk_batch(
+    ctx: &AppContext,
+    set: &ChunkSet,
+    batch_index: usize,
+    request: &ExecutionRequest,
+) -> Result<Vec<Embedding>, DomainError> {
+    let chunks = set
+        .chunks
+        .chunks(CHUNKS_PER_EXECUTION)
+        .nth(batch_index)
+        .ok_or(DomainError::InvalidRequest)?;
+    verify_request(set, chunks, request)?;
+    let client = IntelligenceClient::new(&ctx.intelligence().base_url)?;
+    let body = complete_batch(ctx, &client, request).await?;
+    decode_artifact(set.id, chunks.iter().map(|chunk| chunk.id), &body)
+}
+
+fn verify_request(
+    set: &ChunkSet,
+    chunks: &[Chunk],
+    request: &ExecutionRequest,
+) -> Result<(), DomainError> {
+    if request.kind != ExecutionKind::Embed
+        || request.options_revision != OPTIONS_REVISION
+        || request.source_version != set.source.source_version
+        || request.input_sha256 != Sha256Hex::digest(&manifest_bytes(set.id, chunks)?)
+    {
+        return Err(DomainError::InvalidRequest);
+    }
+    Ok(())
 }
 
 /// Questions use the same locked dense space as stored chunks. The ephemeral
