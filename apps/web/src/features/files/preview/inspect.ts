@@ -9,6 +9,12 @@ export type Preview = {
     mime: string;
 };
 export const PREVIEW_BYTES = 52428800;
+// The server verifies the supported OOXML format and pinned original; these
+// sources never enter the local byte-sniffing or Blob preview pipeline.
+export function isOfficeFile(file: FileSource): boolean {
+    const dot = file.name.lastIndexOf(".");
+    return dot > 0 && ["docx", "xlsx", "pptx"].includes(file.name.slice(dot + 1).toLowerCase());
+}
 // Keep aligned with crates/knoted-core/src/files/text.rs::supports (T46).
 const textExtensions = new Set("txt md markdown rs py js jsx ts tsx c h cpp hpp cc java go rb php sh bash zsh fish sql html htm css scss xml json toml yaml yml ini cfg conf csv tsv log nix swift kt kts lua r pl ex exs erl hrl vue svelte".split(" "));
 const textNames = new Set(["readme", "license", "makefile", "dockerfile", "justfile"]);
