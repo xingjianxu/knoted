@@ -17,10 +17,12 @@ import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated.
 import { Route as AuthenticatedFilesRouteImport } from './routes/_authenticated.files'
 import { Route as AuthenticatedNotesRouteImport } from './routes/_authenticated.notes'
 import { Route as AuthenticatedProjectsRouteImport } from './routes/_authenticated.projects'
+import { Route as AuthenticatedSearchRouteImport } from './routes/_authenticated.search'
 import { Route as AuthenticatedTasksRouteImport } from './routes/_authenticated.tasks'
 import { Route as AuthenticatedTrashRouteImport } from './routes/_authenticated.trash'
 import { Route as AuthenticatedFilesIndexRouteImport } from './routes/_authenticated.files.index'
 import { Route as AuthenticatedFilesFileIdRouteImport } from './routes/_authenticated.files.$fileId'
+import { Route as AuthenticatedFilesJobsRouteImport } from './routes/_authenticated.files_.jobs'
 import { Route as AuthenticatedNotesIndexRouteImport } from './routes/_authenticated.notes.index'
 import { Route as AuthenticatedNotesNoteIdRouteImport } from './routes/_authenticated.notes.$noteId'
 import { Route as AuthenticatedProjectsIndexRouteImport } from './routes/_authenticated.projects.index'
@@ -68,6 +70,11 @@ const AuthenticatedProjectsRoute = AuthenticatedProjectsRouteImport.update({
   path: '/projects',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedSearchRoute = AuthenticatedSearchRouteImport.update({
+  id: '/search',
+  path: '/search',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
 const AuthenticatedTasksRoute = AuthenticatedTasksRouteImport.update({
   id: '/tasks',
   path: '/tasks',
@@ -89,6 +96,11 @@ const AuthenticatedFilesFileIdRoute =
     path: '/$fileId',
     getParentRoute: () => AuthenticatedFilesRoute,
   } as any)
+const AuthenticatedFilesJobsRoute = AuthenticatedFilesJobsRouteImport.update({
+  id: '/files_/jobs',
+  path: '/files/jobs',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
 const AuthenticatedNotesIndexRoute = AuthenticatedNotesIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -138,9 +150,11 @@ export interface FileRoutesByFullPath {
   '/files': typeof AuthenticatedFilesRouteWithChildren
   '/notes': typeof AuthenticatedNotesRouteWithChildren
   '/projects': typeof AuthenticatedProjectsRouteWithChildren
+  '/search': typeof AuthenticatedSearchRoute
   '/tasks': typeof AuthenticatedTasksRouteWithChildren
   '/trash': typeof AuthenticatedTrashRoute
   '/files/$fileId': typeof AuthenticatedFilesFileIdRoute
+  '/files/jobs': typeof AuthenticatedFilesJobsRoute
   '/notes/$noteId': typeof AuthenticatedNotesNoteIdRoute
   '/projects/$projectId': typeof AuthenticatedProjectsProjectIdRoute
   '/settings/security': typeof AuthenticatedSettingsSecurityRoute
@@ -154,9 +168,11 @@ export interface FileRoutesByTo {
   '/bootstrap': typeof BootstrapRoute
   '/login': typeof LoginRoute
   '/recovery': typeof RecoveryRoute
+  '/search': typeof AuthenticatedSearchRoute
   '/trash': typeof AuthenticatedTrashRoute
   '/': typeof AuthenticatedIndexRoute
   '/files/$fileId': typeof AuthenticatedFilesFileIdRoute
+  '/files/jobs': typeof AuthenticatedFilesJobsRoute
   '/notes/$noteId': typeof AuthenticatedNotesNoteIdRoute
   '/projects/$projectId': typeof AuthenticatedProjectsProjectIdRoute
   '/settings/security': typeof AuthenticatedSettingsSecurityRoute
@@ -175,10 +191,12 @@ export interface FileRoutesById {
   '/_authenticated/files': typeof AuthenticatedFilesRouteWithChildren
   '/_authenticated/notes': typeof AuthenticatedNotesRouteWithChildren
   '/_authenticated/projects': typeof AuthenticatedProjectsRouteWithChildren
+  '/_authenticated/search': typeof AuthenticatedSearchRoute
   '/_authenticated/tasks': typeof AuthenticatedTasksRouteWithChildren
   '/_authenticated/trash': typeof AuthenticatedTrashRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/files/$fileId': typeof AuthenticatedFilesFileIdRoute
+  '/_authenticated/files_/jobs': typeof AuthenticatedFilesJobsRoute
   '/_authenticated/notes/$noteId': typeof AuthenticatedNotesNoteIdRoute
   '/_authenticated/projects/$projectId': typeof AuthenticatedProjectsProjectIdRoute
   '/_authenticated/settings/security': typeof AuthenticatedSettingsSecurityRoute
@@ -198,9 +216,11 @@ export interface FileRouteTypes {
     | '/files'
     | '/notes'
     | '/projects'
+    | '/search'
     | '/tasks'
     | '/trash'
     | '/files/$fileId'
+    | '/files/jobs'
     | '/notes/$noteId'
     | '/projects/$projectId'
     | '/settings/security'
@@ -214,9 +234,11 @@ export interface FileRouteTypes {
     | '/bootstrap'
     | '/login'
     | '/recovery'
+    | '/search'
     | '/trash'
     | '/'
     | '/files/$fileId'
+    | '/files/jobs'
     | '/notes/$noteId'
     | '/projects/$projectId'
     | '/settings/security'
@@ -234,10 +256,12 @@ export interface FileRouteTypes {
     | '/_authenticated/files'
     | '/_authenticated/notes'
     | '/_authenticated/projects'
+    | '/_authenticated/search'
     | '/_authenticated/tasks'
     | '/_authenticated/trash'
     | '/_authenticated/'
     | '/_authenticated/files/$fileId'
+    | '/_authenticated/files_/jobs'
     | '/_authenticated/notes/$noteId'
     | '/_authenticated/projects/$projectId'
     | '/_authenticated/settings/security'
@@ -313,6 +337,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedProjectsRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/search': {
+      id: '/_authenticated/search'
+      path: '/search'
+      fullPath: '/search'
+      preLoaderRoute: typeof AuthenticatedSearchRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/tasks': {
       id: '/_authenticated/tasks'
       path: '/tasks'
@@ -340,6 +371,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/files/$fileId'
       preLoaderRoute: typeof AuthenticatedFilesFileIdRouteImport
       parentRoute: typeof AuthenticatedFilesRoute
+    }
+    '/_authenticated/files_/jobs': {
+      id: '/_authenticated/files_/jobs'
+      path: '/files/jobs'
+      fullPath: '/files/jobs'
+      preLoaderRoute: typeof AuthenticatedFilesJobsRouteImport
+      parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/notes/': {
       id: '/_authenticated/notes/'
@@ -451,9 +489,11 @@ interface AuthenticatedRouteChildren {
   AuthenticatedFilesRoute: typeof AuthenticatedFilesRouteWithChildren
   AuthenticatedNotesRoute: typeof AuthenticatedNotesRouteWithChildren
   AuthenticatedProjectsRoute: typeof AuthenticatedProjectsRouteWithChildren
+  AuthenticatedSearchRoute: typeof AuthenticatedSearchRoute
   AuthenticatedTasksRoute: typeof AuthenticatedTasksRouteWithChildren
   AuthenticatedTrashRoute: typeof AuthenticatedTrashRoute
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
+  AuthenticatedFilesJobsRoute: typeof AuthenticatedFilesJobsRoute
   AuthenticatedSettingsSecurityRoute: typeof AuthenticatedSettingsSecurityRoute
 }
 
@@ -461,9 +501,11 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedFilesRoute: AuthenticatedFilesRouteWithChildren,
   AuthenticatedNotesRoute: AuthenticatedNotesRouteWithChildren,
   AuthenticatedProjectsRoute: AuthenticatedProjectsRouteWithChildren,
+  AuthenticatedSearchRoute: AuthenticatedSearchRoute,
   AuthenticatedTasksRoute: AuthenticatedTasksRouteWithChildren,
   AuthenticatedTrashRoute: AuthenticatedTrashRoute,
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
+  AuthenticatedFilesJobsRoute: AuthenticatedFilesJobsRoute,
   AuthenticatedSettingsSecurityRoute: AuthenticatedSettingsSecurityRoute,
 }
 

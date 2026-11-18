@@ -60,6 +60,7 @@ async fn main() -> ExitCode {
                 .with_vectors_enabled(config.vectors.enabled)
                 .with_search_api_key(search_api_key);
             tokio::select! {
+                _ = knoted_worker::handlers::fulltext::project(ctx.clone()), if ctx.search().enabled => unreachable!(),
                 _ = knoted_worker::handlers::note_history::run(ctx.clone()) => unreachable!(),
                 _ = knoted_worker::handlers::trash::run(ctx.clone()) => unreachable!(),
                 _ = knoted_worker::handlers::scan::run(ctx) => ExitCode::SUCCESS,
