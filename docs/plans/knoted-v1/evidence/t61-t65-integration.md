@@ -31,4 +31,4 @@
 - 从聊天全文命中跳转同一会话并聚焦原回答。当前来源有直达链接，软删除后保留同一引用快照，显示来源已删除并移除链接。
 - 临时会话授权撤销，合成会话、笔记及标签软删除。恢复常规 dev 运行方式，实际运行仍为 `867b004`。宿主 Caddy、PostgreSQL、OnlyOffice、Strata 进程 PID 保持一致。
 
-T61 已集成且协议测试通过。宿主 Strata 健康检查返回 HTTP 200，真实带鉴权的流和停止确认仍等待为 dev 运行身份授权凭据文件路径。[Issue #196](https://github.com/xingjianxu/knoted/issues/196) 保持开启。
+在上述集成验收后，宿主配置已为 dev 运行身份授予既有 Strata 客户端组权限。T61 在同一 dev 发布版本完成真实鉴权、生成流和停止确认，见[真实 Strata 验收](t61-providers.md#真实-strata-dev-验收)。
