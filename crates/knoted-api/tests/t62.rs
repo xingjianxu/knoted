@@ -516,7 +516,25 @@ async fn t62_5_generation_streams_the_selected_provider_to_durable_events() {
     let (_, _, detail) = h
         .send("GET", &format!("/sessions/{session}"), Value::Null, None)
         .await;
-    assert_eq!(detail["messages"][1]["body"], "持久回答");
+    assert_eq!(detail["messages"][1]["body"], "依据不足。");
+    let events = chat::events(
+        &h.ctx,
+        sqlx::query_scalar("SELECT user_id FROM chat_sessions WHERE id=$1")
+            .bind(session)
+            .fetch_one(&h.db.pool)
+            .await
+            .unwrap(),
+        id,
+        0,
+    )
+    .await
+    .unwrap();
+    assert!(
+        events
+            .items
+            .iter()
+            .any(|event| event.delta.as_deref() == Some("持久回答"))
+    );
     let (_, _, run) = h
         .send("GET", &format!("/runs/{id}"), Value::Null, None)
         .await;

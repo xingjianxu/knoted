@@ -50,7 +50,9 @@ use knoted_core::{
         chat::{self, ChatScope, SubmitMessage, Submitted},
         chunking::CHUNKER_REVISION,
         citations::persist_citations,
-        context::{self as rag_context, ContextInput, HistoryTurn},
+        context as rag_context,
+        providers::ProviderInfo,
+        retrieval::EvidenceSet,
     },
 };
 use serde_json::{Value, json};
@@ -106,10 +108,27 @@ impl Harness {
         chat::begin_generation(&self.ctx, &lease, submitted.run.id)
             .await
             .unwrap();
-        chat::mark_upstream_requested(&self.ctx, &lease, submitted.run.id, "fixture-model")
+        (submitted, lease)
+    }
+
+    async fn prepare(&self, run_id: Uuid, lease: &Lease) -> chat::PreparedGeneration {
+        let input = chat::load_generation_input(&self.ctx, run_id)
             .await
             .unwrap();
-        (submitted, lease)
+        chat::prepare_generation_context(
+            &self.ctx,
+            lease,
+            &input,
+            EvidenceSet { items: vec![] },
+            &ProviderInfo {
+                name: "local".into(),
+                model: "fixture-model".into(),
+                context_window: 32 * 1024,
+                max_input_tokens: 28 * 1024,
+            },
+        )
+        .await
+        .unwrap()
     }
 
     async fn evidence(&self) -> (Note, CitationDraft) {
@@ -147,6 +166,7 @@ impl Harness {
         drafts: &[CitationDraft],
     ) -> Uuid {
         let run_id = submitted.run.id;
+        self.prepare(run_id, lease).await;
         let assistant: Uuid =
             sqlx::query_scalar("SELECT assistant_message_id FROM generation_runs WHERE id=$1")
                 .bind(run_id)
@@ -273,37 +293,31 @@ async fn t64_3_persisted_snapshots_are_not_materialized_into_new_prompt_history(
     fixture
         .complete(&old, &lease, std::slice::from_ref(&draft))
         .await;
-    let (new, _) = fixture.begin().await;
-    let new = chat::load_generation_input(&fixture.ctx, new.run.id)
-        .await
-        .unwrap();
+    let (new, lease) = fixture.begin().await;
+    let prepared = fixture.prepare(new.run.id, &lease).await;
     let mut conn = fixture.ctx.pool().acquire().await.unwrap();
-    let dependencies = rag_context::load_dependencies(&mut conn, old.run.id)
+    let dependencies = rag_context::load_dependencies(&mut conn, new.run.id)
         .await
         .unwrap();
     drop(conn);
-    let rebuilt = rag_context::build_context(
-        ContextInput {
-            system: "新运行".into(),
-            question: new.question.body,
-            history: vec![HistoryTurn {
-                question: new.history[0].body.clone(),
-                answer: new.history[1].body.clone(),
-                dependencies,
-            }],
-            evidence: vec![],
-            unavailable: Default::default(),
-            input_limit: 28000,
-        },
-        str::len,
-    )
-    .unwrap();
     fixture.db.drop().await;
 
-    assert_eq!(rebuilt.history[0].answer, "早先的回答");
-    assert!(!rebuilt.history[0].answer.contains(&draft.snippet));
-    assert!(rebuilt.evidence.is_empty());
-    assert_eq!(rebuilt.dependencies[0].chunk_set_id, draft.chunk_set_id);
+    assert!(
+        prepared
+            .request
+            .messages
+            .iter()
+            .any(|message| message.content == "早先的回答")
+    );
+    assert!(
+        prepared
+            .request
+            .messages
+            .iter()
+            .all(|message| !message.content.contains(&draft.snippet))
+    );
+    assert!(prepared.evidence.is_empty());
+    assert_eq!(dependencies[0].chunk_set_id, draft.chunk_set_id);
 }
 
 #[tokio::test]

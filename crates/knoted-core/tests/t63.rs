@@ -185,13 +185,13 @@ async fn t63_normal_generation_trims_over_budget_history() {
             let question = messages.last().unwrap()["content"].as_str().unwrap();
             let answer = if question.starts_with("old-") {
                 "old-answer".repeat(1800)
-            } else if question == "keep question" {
+            } else if question.starts_with("keep-") {
                 "keep answer".into()
             } else {
                 assert_eq!(question, "current question");
                 assert_eq!(messages.len(), 4);
-                assert_eq!(messages[1]["content"], "keep question");
-                assert_eq!(messages[2]["content"], "keep answer");
+                assert_eq!(messages[1]["content"], "keep-".repeat(3200));
+                assert_eq!(messages[2]["content"], "依据不足。");
                 "current answer".into()
             };
             assert_eq!(body["max_tokens"], 4096);
@@ -203,7 +203,7 @@ async fn t63_normal_generation_trims_over_budget_history() {
     let (_root, db, ctx, owner, session) = with_mock_provider(&provider).await;
     for (key, content) in [
         ("old", "old-".repeat(4000)),
-        ("keep", "keep question".into()),
+        ("keep", "keep-".repeat(3200)),
         ("current", "current question".into()),
     ] {
         chat::submit_message(
@@ -363,7 +363,11 @@ async fn t63_source_removal_fences_stream_and_restore_leaves_history_excluded() 
                 "source question" => {
                     assert_eq!(earlier.len(), 1);
                     assert!(earlier[0].contains("private source evidence"));
-                    provider_reply("source answer")
+                    let source: Value =
+                        serde_json::from_str(earlier[0].strip_prefix("检索资料：").unwrap())
+                            .unwrap();
+                    let marker = source["citation"].as_str().unwrap();
+                    provider_reply(&format!("source answer {marker} [cite:{}]", Uuid::new_v4()))
                 }
                 "dependent question" => {
                     assert_eq!(earlier, ["source question", "source answer"]);
@@ -376,7 +380,7 @@ async fn t63_source_removal_fences_stream_and_restore_leaves_history_excluded() 
                             "source question",
                             "source answer",
                             "dependent question",
-                            "dependent answer"
+                            "依据不足。"
                         ]
                     );
                     observe_start.notify_one();
@@ -501,6 +505,22 @@ async fn t63_source_removal_fences_stream_and_restore_leaves_history_excluded() 
         chat::get_run(&ctx, owner, waiting).await.unwrap().state,
         "completed"
     );
+    let snapshot: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT snippet,source_version FROM generation_citation_snapshots ORDER BY ordinal",
+    )
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        snapshot,
+        [("private source evidence".into(), note.content_version)]
+    );
+    let citation_events: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM chat_run_events WHERE type='citation'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(citation_events, 1);
     let history = chat::get_session(&ctx, owner, session).await.unwrap();
     assert!(
         history
@@ -512,7 +532,7 @@ async fn t63_source_removal_fences_stream_and_restore_leaves_history_excluded() 
         history
             .messages
             .iter()
-            .any(|message| message.body == "dependent answer")
+            .any(|message| message.body == "依据不足。")
     );
     assert!(
         !history
