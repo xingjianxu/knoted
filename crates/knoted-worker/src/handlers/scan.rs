@@ -68,6 +68,7 @@ impl Handler for Dispatcher {
             knoted_core::files::extraction::EXTRACT_JOB_KIND => {
                 super::extract::execute(&self.ctx, lease, &job).await
             }
+            super::vector::KIND => super::vector::execute(&self.ctx, lease, &job).await,
             super::chunk_fulltext::BUILD_JOB_KIND | super::chunk_fulltext::PUBLISH_JOB_KIND => {
                 super::chunk_fulltext::execute(&self.ctx, lease, &job).await
             }
@@ -97,8 +98,11 @@ impl Handler for Dispatcher {
             {
                 super::fulltext::cancel_and_wait(&self.ctx, lease).await
             }
+            Ok(Some(kind)) if kind == super::vector::KIND => {
+                super::vector::cancel_and_wait(&self.ctx, lease).await
+            }
             Ok(_) => true,
-            Err(_) => super::extract::cancel_and_wait(&self.ctx, lease).await,
+            Err(_) => false,
         }
     }
 }
@@ -223,6 +227,7 @@ pub async fn run(ctx: AppContext) {
     tokio::select! {
         _ = schedule(ctx.clone()), if ctx.files().enabled => unreachable!(),
         _ = super::chunk_fulltext::schedule(ctx.clone()), if ctx.search().enabled => unreachable!(),
+        _ = super::vector::schedule(ctx.clone()), if ctx.vectors_enabled() => unreachable!(),
         _ = runner.run() => {},
     }
 }

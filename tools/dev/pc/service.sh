@@ -17,6 +17,7 @@
 #   DATABASE_URL          postgres://xingjian@127.0.0.1:5432/knoted_dev
 #   KNOTED_LOG_LEVEL      info
 #   KNOTED_OFFICE_ORIGIN / KNOTED_OFFICE_JWT_SECRET_FILE  可选，必须同时提供；只记录凭据路径
+#   KNOTED_VECTORS_ENABLED=1  启用固定模型向量发布
 #   KNOTED_SEARCH_ENABLED=1 / KNOTED_SEARCH_CREDENTIAL_FILE  启用本机索引；可选 [secrets].meilisearch 凭据文件
 set -euo pipefail
 # 与 tools/dev/build-artifact.sh 一致：清单排序必须固定字节序，否则 locale 会改变 sort 结果。
@@ -215,9 +216,14 @@ command_prepare() {
   revision=$(verify_runtime)
   log "固定产物 revision=$revision"
   require_tools
-  local office search
+  local office search vectors=''
   office=$(office_config_block)
   search=$(search_config_block)
+  case "${KNOTED_VECTORS_ENABLED:-0}" in
+    0) ;;
+    1) vectors=$'\n[vectors]\nenabled = true' ;;
+    *) die "KNOTED_VECTORS_ENABLED 必须是 0 或 1" ;;
+  esac
   prepare_instance_root
   install -d -m 0700 "$config_dir" "$state_dir" \
     "$logs_dir" "$assets_dir" "$staging_dir" "$backups_dir" \
@@ -237,7 +243,8 @@ command_prepare() {
     @ASSETS_ROOT@ "$instance_root/assets" \
     @STAGING_ROOT@ "$instance_root/staging" \
     @OFFICE_CONFIG@ "$office" \
-    @SEARCH_CONFIG@ "$search"
+    @SEARCH_CONFIG@ "$search" \
+    @VECTORS_CONFIG@ "$vectors"
 
   check_ports
   log "prepare 完成：配置 $config_file；HTTPS 由宿主 Caddy 管理"
