@@ -4,6 +4,7 @@ import { Alert, Button, ConfirmDialog, FormField, Input, MultiSelect, Spinner, T
 import { ApiRequestError, type components } from "@knoted/api-client";
 import { queryKeys, type QueryClientBundle } from "../../lib/query";
 import { fileQuery, remember, type FileSource } from "./queries";
+import { FilePreview } from "./preview/FilePreview";
 const message = (e: unknown) => e instanceof Error ? e.message : "操作失败，请重试";
 const same = (a: string[], b: string[]) => [...a].sort().join() === [...b].sort().join();
 export function FileDetail({ bundle, fileId, onSelectFile }: {
@@ -25,6 +26,8 @@ function FileEditor({ bundle, source, onSelectFile }: {
     const [busy, setBusy] = useState(false), [error, setError] = useState(""), [notice, setNotice] = useState(""), [conflict, setConflict] = useState(false), [revoked, setRevoked] = useState(false);
     const [targetId, setTargetId] = useState(""), [target, setTarget] = useState<FileSource>();
     const [tagPage, setTagPage] = useState<string | null>(null), [tagNames, setTagNames] = useState<Record<string, string>>({});
+    const [preview, setPreview] = useState<FileSource | null>(null);
+    const previewEntry = useRef<HTMLButtonElement | null>(null);
     const lifetime = useRef<AbortController | null>(null);
     useEffect(() => { const owner = new AbortController(); lifetime.current = owner; return () => { owner.abort(); }; }, []);
     const noteChanged = note !== (base.note ?? "");
@@ -128,28 +131,30 @@ function FileEditor({ bundle, source, onSelectFile }: {
                 setBusy(false);
         }
     }
-    async function download() {
+    async function download(selected: FileSource, reportToPreview = false) {
         const owner = lifetime.current;
-        if (!owner || busy)
+        if (!owner || !active(owner) || busy || selected.id !== source.id || selected.status !== "present")
             return;
         setBusy(true);
         setError("");
         try {
-            const { data, response } = await bundle.api.raw.GET("/files/{fileId}/content", { params: { path: { fileId: source.id } }, parseAs: "blob", signal: owner.signal });
+            const { data, response } = await bundle.api.raw.GET("/files/{fileId}/content", { params: { path: { fileId: selected.id } }, parseAs: "blob", signal: owner.signal });
             if (!active(owner))
                 return;
             if (!data)
                 throw new Error("下载响应无效");
-            if (response.headers.get("etag") !== `"${source.version}"`) {
+            if (response.headers.get("etag") !== `"${selected.version}"`) {
                 setNotice("文件版本已变化，请刷新后重试下载。");
-                await bundle.queryClient.invalidateQueries({ queryKey: queryKeys.files.detail(source.id) });
+                await bundle.queryClient.invalidateQueries({ queryKey: queryKeys.files.detail(selected.id) });
+                if (reportToPreview)
+                    throw new Error("文件版本已变化，请刷新后重试下载。");
                 return;
             }
             const url = URL.createObjectURL(data);
             try {
                 const link = document.createElement("a");
                 link.href = url;
-                link.download = Array.from(source.name, c => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127 || c === "/" || c === "\\" ? "_" : c).join("");
+                link.download = Array.from(selected.name, c => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127 || c === "/" || c === "\\" ? "_" : c).join("");
                 document.body.append(link);
                 link.click();
                 link.remove();
@@ -160,6 +165,8 @@ function FileEditor({ bundle, source, onSelectFile }: {
         }
         catch (e) {
             failure(e, owner);
+            if (reportToPreview)
+                throw e;
         }
         finally {
             if (active(owner))
@@ -227,7 +234,20 @@ function FileEditor({ bundle, source, onSelectFile }: {
  {options.error && <Alert tone="error">标签名称读取失败，已有标签 ID 保留。<Button onClick={() => void options.refetch()}>重试标签</Button></Alert>}
  <Button disabled={options.isFetching || !options.data?.next_cursor} onClick={() => setTagPage(options.data?.next_cursor ?? null)}>加载更多标签名称</Button>
  <Button disabled={locked || !dirty || conflict} onClick={() => void save()}>保存备注和标签</Button><Button disabled={busy || !dirty} onClick={() => { setBase(source); setNote(source.note ?? ""); setTags(source.tag_ids); setConflict(false); }}>丢弃草稿</Button>
- <Button disabled={busy || readOnly} onClick={() => void download()}>下载原文件</Button>
+ <Button ref={previewEntry} disabled={busy || readOnly} onClick={event => { event.currentTarget.focus(); setPreview(source); }}>预览文件</Button>
+ <Button disabled={busy || readOnly} onClick={() => void download(source)}>下载原文件</Button>
+ <FilePreview api={bundle.api} file={preview} open={preview !== null} onDownload={selected => download(selected, true)} onOpenChange={open => {
+        if (open) return;
+        setPreview(null);
+        const owner = lifetime.current;
+        // The business opener can disappear on navigation/session loss. Never
+        // move focus back into a different file or an expired session.
+        queueMicrotask(() => {
+            const entry = previewEntry.current;
+            if (owner && active(owner) && entry?.isConnected && !entry.disabled) entry.focus();
+        });
+    }}/>
+
  {conflict && <Alert tone="warning">版本冲突，草稿已保留。</Alert>}{conflict && <><FormField label="文件草稿副本"><Textarea readOnly value={JSON.stringify(draft, null, 2)}/></FormField><Button disabled={busy} onClick={() => void refresh(false)}>刷新服务端信息，保留草稿</Button><ConfirmDialog title="用当前版本重试草稿？" description="保存会覆盖服务端的备注和标签。" confirmText="采用当前版本" trigger={<Button disabled={busy}>用当前版本重试草稿</Button>} onConfirm={() => refresh(true)}/></>}
  {notice && <p role="status">{notice}</p>}{error && <Alert tone="error">{error}</Alert>}
  <div className="space-y-2"><h3>手动重关联</h3><p>将当前来源的备注、标签和关联转移到明确选择的现存来源，旧引用快照保留。{dirty && "请先保存或丢弃草稿。"}</p><FormField label="重关联目标 UUID"><Input value={targetId} disabled={busy || dirty} onChange={e => { setTargetId(e.target.value); setTarget(undefined); }}/></FormField><Button disabled={busy || dirty} onClick={() => void inspectTarget()}>读取重关联目标</Button>
