@@ -1034,6 +1034,7 @@ async fn t53_14_manual_retry_replaces_a_failed_engine_task() {
         base_url: server.uri(),
         index_uid: index.into(),
         api_key_credential: None,
+        ..SearchConfig::default()
     });
     let publication = meili::publish_fulltext(&ctx, document(Uuid::new_v4(), 1, "retry"))
         .await
