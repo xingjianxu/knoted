@@ -203,16 +203,15 @@ describe("t20 auth routes", () => {
     ])
       expect(safeReturnTo(path)).toBe("/");
     expect(safeReturnTo("/settings/security")).toBe("/settings/security");
+    expect(safeReturnTo("/search?q=%E7%AC%94%E8%AE%B0&type=note")).toBe("/search?q=%E7%AC%94%E8%AE%B0&type=note");
+    expect(safeReturnTo("/search//evil.example")).toBe("/");
   });
-  it("disables unimplemented navigation entries while notes is open", async () => {
+  it("enables implemented navigation entries and leaves chat disabled", async () => {
     loggedIn = true;
     await mount("/");
-    // 已实现的概览/笔记/项目/事项/文件可用，未来入口仍待开放。
     expect(await screen.findByRole("button", { name: "文件" })).toBeEnabled();
-    for (const name of ["搜索", "问答"])
-      expect(
-        await screen.findByRole("button", { name: new RegExp(name) }),
-      ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "搜索" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /问答/ })).toBeDisabled();
     expect(screen.getByRole("button", { name: "笔记" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "项目" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "事项" })).toBeEnabled();
