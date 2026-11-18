@@ -1,18 +1,10 @@
-"""Execution scheduling, cancellation and the child compute process.
+"""Execution scheduling and gated child computation.
 
-Each accepted execution runs in **its own child process group**
-(``start_new_session=True``, so ``pgid == pid``). That is what makes
-cancellation trustworthy: the supervisor sends ``SIGTERM`` to the whole group,
-escalates to ``SIGKILL`` after a grace period and then blocks on ``wait()``. Only
-after the child is confirmed dead does the ledger move to ``cancelled`` — an
-HTTP timeout or a dropped request never releases a slot on its own.
-
-The compute itself lives in :func:`child_main`, started as
-``python -c <bootstrap> <json spec>``. Keeping the child entry point in this one
-module means the parent and the child share the handler code and the artifact
-layout; the parse and embed handlers are the revision-locked backends from
-:mod:`parsing` and :mod:`embedding.bge`, and replacing either does not touch the
-protocol.
+A separate lightweight guardian exclusively signals and reaps each complete
+compute subtree. The API persists launch authorization before GO, retains its
+slots until the guardian receipt validates, and closes an owner pipe on shutdown.
+The child loads locked parse/embed models only after its private gate opens.
+A timeout, leader exit or interrupted ledger state alone never releases a slot.
 """
 
 from __future__ import annotations
@@ -33,7 +25,6 @@ from typing import Any
 
 from . import staging
 from .config import Settings
-from .embedding import bge
 from .ledger import (
     IN_FLIGHT_STATES,
     TERMINAL_STATES,
@@ -43,8 +34,7 @@ from .ledger import (
     Ledger,
     LedgerConflict,
 )
-from .parsing import models as parsing_models
-from .parsing import parse_document
+from .supervision import Supervision
 
 logger = logging.getLogger(__name__)
 
@@ -58,15 +48,11 @@ INTERRUPTED = "interrupted"
 
 #: Bounded wait while polling for a free slot, so a queued cancellation is seen.
 SLOT_POLL_SECONDS = 0.02
-#: How long the group gets to disappear after SIGKILL.
-SIGKILL_GRACE_SECONDS = 5.0
 #: How long a cancel request waits for the supervisor to confirm the exit.
 CANCEL_CONFIRM_SECONDS = 15.0
 #: Grace period the child itself grants after SIGTERM, so an observer can see
 #: ``cancel_requested`` before the row becomes ``cancelled``.
 TERMINATE_NOTICE_SECONDS = 0.3
-#: Trailing child stderr kept in the error message.
-STDERR_TAIL_BYTES = 600
 
 #: Name of the child's self-reported status file inside the output directory.
 CHILD_STATUS_FILE = "child-status.json"
@@ -87,6 +73,10 @@ class ExecutionFailure(Exception):
     """Base class for protocol-level refusals; the HTTP layer maps the code."""
 
     code = "execution_error"
+
+
+class ExecutionUnavailable(ExecutionFailure):
+    code = "execution_unavailable"
 
 
 class ExecutionNotFound(ExecutionFailure):
@@ -131,6 +121,8 @@ class _Entry:
     confirmed: threading.Event = field(default_factory=threading.Event)
     process: subprocess.Popen[bytes] | None = None
     thread: threading.Thread | None = None
+    token: str = ""
+    owner_fd: int | None = None
 
 
 class Scheduler:
@@ -146,7 +138,47 @@ class Scheduler:
         self._gpu_slots = threading.BoundedSemaphore(settings.gpu_slots)
         self._lock = threading.RLock()
         self._entries: dict[str, _Entry] = {}
+        self._unresolved: set[str] = set()
         self._closed = False
+        self._closed_at = 0.0
+        self._supervision = Supervision(ledger.path)
+
+    def recover(self) -> None:
+        # Only called after taking the instance lock. Ordinary Ledger.open is inert.
+        rows = self._ledger.all_rows()
+        self._unresolved.update(row.execution_id for row in rows)
+        for row in rows:
+            if self._supervision.phase(row.execution_id) == "queued":
+                with self._supervision.connect() as db:
+                    token = db.execute(
+                        "SELECT token FROM supervision WHERE execution_id=?", (row.execution_id,)
+                    ).fetchone()[0]
+                self._supervision.complete(row.execution_id, token, "never_started", None)
+        self._ledger.interrupt_unfinished(_now())
+        self.reconcile()
+
+    def reconcile(self) -> bool:
+        # Historical confirmed rows were validated once at recovery. Runtime
+        # polling visits only unresolved occupancy; requested rows still get
+        # independent receipt validation in _require().
+        uncertain = False
+        with self._lock:
+            for execution_id in self._unresolved.difference(self._entries):
+                if self._ledger.confirm_exit(execution_id):
+                    self._unresolved.discard(execution_id)
+                else:
+                    uncertain = True
+        return uncertain
+
+    def degraded(self) -> bool:
+        uncertain = self.reconcile()
+        with self._lock:
+            return uncertain or any(
+                entry.process is not None
+                and entry.process.poll() is not None
+                and not self._supervision.receipt(entry.execution_id)
+                for entry in self._entries.values()
+            )
 
     # -- public API ----------------------------------------------------------
 
@@ -163,6 +195,9 @@ class Scheduler:
             existing = self._ledger.get(spec.execution_id)
             if existing is not None:
                 return self._replay(existing, spec)
+            if self._closed or self.degraded():
+                raise ExecutionUnavailable("execution resources are not confirmed available")
+            token = str(uuid.uuid4())
             try:
                 row = self._ledger.insert(
                     execution_id=spec.execution_id,
@@ -173,6 +208,7 @@ class Scheduler:
                     options_revision=spec.options_revision,
                     deadline=spec.deadline,
                     now=now,
+                    supervision_token=token,
                 )
             except LedgerConflict:
                 # A concurrent insert of the same id can land here; the stored
@@ -181,8 +217,17 @@ class Scheduler:
                 if existing is None:
                     raise
                 return self._replay(existing, spec)
-            entry = _Entry(execution_id=spec.execution_id)
+            self._unresolved.add(spec.execution_id)
+            entry = _Entry(execution_id=spec.execution_id, token=token)
             self._entries[spec.execution_id] = entry
+            if spec.deadline <= now:
+                self._finish(
+                    spec.execution_id,
+                    FAILED,
+                    error=_failure_error("deadline_exceeded", "execution deadline elapsed"),
+                )
+                self._entries.pop(spec.execution_id)
+                return self._require(spec.execution_id), True
             thread = threading.Thread(
                 target=self._run,
                 args=(spec.execution_id, spec.kind),
@@ -210,60 +255,20 @@ class Scheduler:
             if row.state in TERMINAL_STATES:
                 raise ExecutionFinished(f"execution {execution_id} is already {row.state}")
             entry = self._entries.get(execution_id)
+            self._supervision.request_stop(execution_id)
             if entry is None:
-                # In flight in the ledger but no supervisor owns it: nothing can
-                # be computing, so the cancellation is immediate.
-                self._ledger.finish(
-                    execution_id,
-                    CANCELLED,
-                    _now(),
-                    error=_cancel_error(None),
-                )
+                # Recovery never equates an absent in-memory handle with exit.
+                self.reconcile()
                 return self._require(execution_id)
             entry.cancel_event.set()
-            if row.state == RUNNING:
-                self._ledger.mark_cancel_requested(execution_id, _now())
-            process = entry.process
-
-        if process is not None:
-            self._terminate_group(entry)
-        else:
-            entry.confirmed.wait(CANCEL_CONFIRM_SECONDS)
-
-        row = self._require(execution_id)
-        if row.state == CANCEL_REQUESTED:
-            logger.error("execution %s is still cancelling; not reporting success", execution_id)
-        return row
-
-    def _terminate_group(self, entry: _Entry) -> None:
-        """SIGTERMs the child group, escalating to SIGKILL when it does not exit.
-
-        The caller has already published ``cancel_requested``. This method only
-        signals and waits for the supervisor's confirmation, so a child that
-        ignores SIGTERM (a stuck parser, a hung CUDA call) is still killed and
-        still reaped before the record may become ``cancelled``.
-        """
-
-        process = entry.process
-        if process is None:
-            return
-        grace = self._settings.cancel_grace_seconds
-        _signal_group(process.pid, signal.SIGTERM)
-        if entry.confirmed.wait(grace):
-            return
-        logger.warning(
-            "execution %s ignored SIGTERM for %.2fs; sending SIGKILL",
-            entry.execution_id,
-            grace,
-        )
-        _signal_group(process.pid, signal.SIGKILL)
-        entry.confirmed.wait(SIGKILL_GRACE_SECONDS)
+        entry.confirmed.wait(CANCEL_CONFIRM_SECONDS)
+        return self._require(execution_id)
 
     def result(self, execution_id: str) -> ExecutionRow:
         """Returns the record only when its artifact may be published."""
 
         row = self._require(execution_id)
-        if row.state == SUCCEEDED:
+        if row.state == SUCCEEDED and row.compute_exit_confirmed:
             return row
         if row.state in TERMINAL_STATES:
             raise ExecutionNotSucceeded(
@@ -271,28 +276,29 @@ class Scheduler:
             )
         raise ExecutionNotFinished(f"execution {execution_id} is still {row.state}")
 
-    def shutdown(self) -> None:
-        """Stops the supervisor and kills whatever is still running."""
-
+    def shutdown(self) -> bool:
         with self._lock:
-            if self._closed:
-                return
             self._closed = True
+            self._closed_at = time.monotonic()
             entries = list(self._entries.values())
-        for entry in entries:
-            entry.cancel_event.set()
-            if entry.process is not None:
-                _signal_group(entry.process.pid, signal.SIGKILL)
-            entry.confirmed.wait(SIGKILL_GRACE_SECONDS)
+            for entry in entries:
+                entry.cancel_event.set()
+                if entry.owner_fd is not None:
+                    os.close(entry.owner_fd)
+                    entry.owner_fd = None
+        deadline = time.monotonic() + CANCEL_CONFIRM_SECONDS + 5
         for entry in entries:
             if entry.thread is not None:
-                entry.thread.join(timeout=SIGKILL_GRACE_SECONDS)
+                entry.thread.join(timeout=max(0, deadline - time.monotonic()))
+        # If a thread is stuck, keep the DB and instance lock until process exit.
+        return all(entry.thread is None or not entry.thread.is_alive() for entry in entries)
 
     # -- supervisor ----------------------------------------------------------
 
     def _replay(self, row: ExecutionRow, spec: ExecutionSpec) -> tuple[ExecutionRow, bool]:
         same = (
-            row.kind == spec.kind
+            row.deadline == spec.deadline
+            and row.kind == spec.kind
             and row.input_object_id == spec.input_object_id
             and row.input_sha256 == spec.input_sha256
             and row.source_version == spec.source_version
@@ -305,15 +311,14 @@ class Scheduler:
                 f"input_sha256={row.input_sha256} source_version={row.source_version} "
                 f"options_revision={row.options_revision}"
             )
-        return row, False
+        return self._require(row.execution_id), False
 
     def _run(self, execution_id: str, kind: str) -> None:
         """Waits for a general and (for GPU kinds) a GPU slot, then executes.
 
         Both waits poll the cancel event, so a queued cancellation never holds a
-        slot or waits for a model load. Slots are released in reverse order in
-        the `finally`; an execution that is cancelled while waiting for the GPU
-        slot ends `cancelled` without ever spawning a child.
+        slot or waits for a model load. Slots release only after validated exit
+        evidence; a queued cancellation writes never_started before any launch.
         """
 
         with self._lock:
@@ -347,13 +352,19 @@ class Scheduler:
                 error=_failure_error("internal_error", f"supervisor failed ({type(exc).__name__})"),
             )
         finally:
-            if gpu_slot_held:
-                self._gpu_slots.release()
-            if slot_held:
-                self._slots.release()
+            # Unknown evidence keeps the slots reserved; recovery also blocks admission.
+            proven = self._supervision.receipt(execution_id) is not None
+            if proven:
+                if gpu_slot_held:
+                    self._gpu_slots.release()
+                if slot_held:
+                    self._slots.release()
+                entry.confirmed.set()
             with self._lock:
+                if entry.owner_fd is not None:
+                    os.close(entry.owner_fd)
+                    entry.owner_fd = None
                 self._entries.pop(execution_id, None)
-            entry.confirmed.set()
 
     def _execute(self, execution_id: str, entry: _Entry) -> None:
         row = self._require(execution_id)
@@ -405,8 +416,9 @@ class Scheduler:
             return
 
         if not self._ledger.mark_started(execution_id, _now()):
-            # A cancellation won the race; the record is already terminal or
-            # being finalised by the cancel handler.
+            # Cancellation can land during input hashing, before intent exists.
+            # Close that queued launch with never_started evidence as well.
+            self._finish(execution_id, CANCELLED, error=_cancel_error(None))
             return
 
         try:
@@ -430,56 +442,107 @@ class Scheduler:
             "ignore_sigterm": self._settings.child_ignore_sigterm,
         }
 
+        read_fd, write_fd = os.pipe()
         try:
-            process = subprocess.Popen(
-                [sys.executable, "-c", _CHILD_BOOTSTRAP, json.dumps(child_spec)],
-                start_new_session=True,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+            with self._lock:
+                if self._closed or entry.cancel_event.is_set() or self.degraded():
+                    self._finish(execution_id, CANCELLED, error=_cancel_error(None))
+                    return
+                if not self._supervision.transition(execution_id, entry.token, "queued", "intent"):
+                    raise RuntimeError("launch intent CAS failed")
+                process = subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-I",
+                        "-B",
+                        "-m",
+                        "knoted_intelligence.guardian",
+                        str(self._ledger.path),
+                        execution_id,
+                        entry.token,
+                        str(read_fd),
+                        str(self._settings.cancel_grace_seconds),
+                        json.dumps(
+                            [
+                                sys.executable,
+                                "-I",
+                                "-B",
+                                "-c",
+                                _CHILD_BOOTSTRAP,
+                                json.dumps(child_spec),
+                            ]
+                        ),
+                    ],
+                    pass_fds=(read_fd,),
+                    start_new_session=True,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                entry.process = process
+                entry.owner_fd = write_fd
+                write_fd = -1
+        finally:
+            os.close(read_fd)
+            if write_fd >= 0:
+                os.close(write_fd)
+        sent_go = False
+        while True:
+            receipt = self._supervision.receipt(execution_id)
+            if receipt:
+                break
+            with self._lock:
+                if entry.cancel_event.is_set():
+                    self._supervision.request_stop(execution_id)
+                if not sent_go and entry.owner_fd is not None and not entry.cancel_event.is_set():
+                    if self._supervision.transition(execution_id, entry.token, "ready", "go"):
+                        os.write(entry.owner_fd, b"G")
+                        sent_go = True
+            if process.poll() is not None:
+                # The guardian can commit between our first read and poll().
+                # Consume that receipt through the same success/error path.
+                receipt = self._supervision.receipt(execution_id)
+                if receipt is not None:
+                    break
+                self._finish(
+                    execution_id,
+                    FAILED,
+                    error=_failure_error("exit_unconfirmed", "supervision exit is unconfirmed"),
+                )
+                return
+            if self._closed and time.monotonic() - self._closed_at > CANCEL_CONFIRM_SECONDS:
+                return  # Persistent unknown occupancy; guardian owns further cleanup.
+            time.sleep(SLOT_POLL_SECONDS)
+        process.wait(timeout=5)
+        reason = receipt["reason"]
+        if reason == "deadline_exceeded":
+            self._finish(
+                execution_id,
+                FAILED,
+                error=_failure_error("deadline_exceeded", "execution deadline elapsed"),
             )
-        except OSError as exc:
-            # `str(OSError)` carries the interpreter path; keep it in the log.
-            logger.exception("execution %s could not start its child", execution_id)
+        elif reason in {"cancelled", "owner_eof"} or entry.cancel_event.is_set():
+            self._finish(
+                execution_id, CANCELLED, error=_cancel_error(_describe_exit(receipt["status"]))
+            )
+        elif reason != "completed" or receipt["status"] != 0:
+            status = _read_child_status(output_dir)
+            code = status.get("error_code") or "execution_failed"
             self._finish(
                 execution_id,
                 FAILED,
                 error=_failure_error(
-                    "child_start_failed",
-                    f"child process could not start ({type(exc).__name__}: "
-                    f"{exc.strerror or 'unknown error'})",
+                    code, _child_failure_message(_describe_exit(receipt["status"]), output_dir)
                 ),
             )
-            return
-
-        entry.process = process
-        # Ordering matters: publish the process handle *before* checking the
-        # cancel event. A cancel racing here either reads the handle and signals
-        # the group, or sets the event before this check and is seen here; the
-        # two orderings cannot both miss.
-        if entry.cancel_event.is_set():
-            # Cancellation arrived between `mark_started` and the spawn.
-            _signal_group(process.pid, signal.SIGTERM)
-        _stdout, stderr = process.communicate()
-        status = _describe_exit(process.returncode)
-
-        if entry.cancel_event.is_set():
-            self._finish(execution_id, CANCELLED, error=_cancel_error(status))
-            return
-        if process.returncode != 0:
-            tail = stderr.decode("utf-8", errors="replace").strip()[-STDERR_TAIL_BYTES:]
-            if tail:
-                # The traceback names absolute paths; it belongs in the server log,
-                # not in a record the worker reads.
-                logger.warning("execution %s child stderr: %s", execution_id, tail)
-            reason = _child_failure_message(status, output_dir)
+        elif _now() > row.deadline:
             self._finish(
                 execution_id,
                 FAILED,
-                error=_failure_error("execution_failed", reason),
+                error=_failure_error("deadline_exceeded", "execution deadline elapsed"),
             )
-            return
-        self._register_artifact(execution_id, output_dir, artifact_object_id)
+        else:
+            self._register_artifact(execution_id, output_dir, artifact_object_id)
 
     def _register_artifact(
         self, execution_id: str, output_dir: Path, artifact_object_id: str
@@ -533,19 +596,36 @@ class Scheduler:
         error: ExecutionErrorDetail | None = None,
         result: ExecutionResultDetail | None = None,
     ) -> bool:
-        return self._ledger.finish(
+        entry = self._entries.get(execution_id)
+        if entry and self._supervision.phase(execution_id) == "queued":
+            self._supervision.complete(execution_id, entry.token, "never_started", None)
+        proven = self._supervision.receipt(execution_id) is not None
+        changed = self._ledger.finish(
             execution_id,
             state,
             _now(),
             from_states=IN_FLIGHT_STATES,
             error=error,
             result=result,
+            compute_exit_confirmed=proven,
         )
+        if changed and proven:
+            with self._lock:
+                self._unresolved.discard(execution_id)
+        return changed
+
+    def record(self, execution_id: str) -> ExecutionRow:
+        self.reconcile()
+        return self._require(execution_id)
 
     def _require(self, execution_id: str) -> ExecutionRow:
         row = self._ledger.get(execution_id)
         if row is None:  # pragma: no cover - the row is written before we get here
             raise ExecutionNotFound(f"execution {execution_id} is unknown")
+        if row.compute_exit_confirmed and self._supervision.receipt(execution_id) is None:
+            with self._lock:
+                self._unresolved.add(execution_id)
+            raise ExecutionUnavailable("persisted execution proof failed validation")
         return row
 
 
@@ -594,17 +674,6 @@ def _read_child_status(output_dir: Path) -> dict[str, Any]:
     except (OSError, ValueError):  # pragma: no cover - the child died before writing
         return {}
     return payload if isinstance(payload, dict) else {}
-
-
-def _signal_group(pid: int, signum: int) -> None:
-    """Signals the whole child process group, tolerating an already-dead child."""
-
-    try:
-        os.killpg(pid, signum)
-    except ProcessLookupError:
-        pass
-    except PermissionError:  # pragma: no cover - same user by construction
-        logger.warning("no permission to signal process group %d", pid)
 
 
 def _describe_exit(returncode: int | None) -> str:
@@ -680,6 +749,7 @@ def child_main(spec_json: str) -> int:
                 **identity,
                 "phase": "failed",
                 "error_class": type(exc).__name__,
+                "error_code": getattr(exc, "code", "execution_failed"),
                 # An exception opts in to a worker-facing message by exposing
                 # `public_message`; everything else stays in the server log.
                 "error_message": _public_error_message(exc),
@@ -705,6 +775,10 @@ def _compute(spec: dict[str, Any]) -> dict[str, Any]:
     depends on.
     """
 
+    from .embedding import bge
+    from .parsing import models as parsing_models
+    from .parsing import parse_document
+
     base: dict[str, Any] = {
         "kind": spec["kind"],
         "source_version": spec["source_version"],
@@ -713,7 +787,14 @@ def _compute(spec: dict[str, Any]) -> dict[str, Any]:
         "child_pid": os.getpid(),
     }
     if spec["kind"] == "parse":
-        document = parse_document(
+        from .parsing.pdf import parse_pdf_image
+
+        parser = (
+            parse_pdf_image
+            if spec["options_revision"] == parsing_models.OPTIONS_REVISION
+            else parse_document
+        )
+        document = parser(
             Path(spec["input_path"]),
             options_revision=spec["options_revision"],
         )
@@ -769,6 +850,8 @@ def _read_embed_texts(path: Path) -> list[str]:
     trimmed, and an empty object is a stable ``empty_input`` failure instead of
     an execution that succeeds with zero vectors.
     """
+
+    from .embedding import bge
 
     size = path.stat().st_size
     if size > bge.MAX_INPUT_BYTES:

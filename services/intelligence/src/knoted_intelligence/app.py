@@ -24,7 +24,7 @@ from uuid import UUID
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import executor
@@ -32,6 +32,7 @@ from .config import Settings
 from .executor import ExecutionSpec, Scheduler
 from .ledger import ExecutionRow, Ledger
 from .staging import StagingError, ensure_object_id
+from .supervision import InstanceLock
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,7 @@ class ExecutionRecord(BaseModel):
     execution_id: UUID
     kind: ExecutionKind
     state: ExecutionState
+    compute_exit_confirmed: StrictBool = False
     input_sha256: str
     source_version: int
     options_revision: str
@@ -121,6 +123,17 @@ class ExecutionRecord(BaseModel):
     started_at: datetime | None
     finished_at: datetime | None
     error: ApiError | None
+
+    @model_validator(mode="after")
+    def _terminal_proof(self) -> ExecutionRecord:
+        if self.compute_exit_confirmed and self.state not in {
+            ExecutionState.SUCCEEDED,
+            ExecutionState.FAILED,
+            ExecutionState.CANCELLED,
+            ExecutionState.INTERRUPTED,
+        }:
+            raise ValueError("compute_exit_confirmed requires a terminal state")
+        return self
 
 
 class ExecutionResult(BaseModel):
@@ -157,20 +170,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> Iterator[None]:
         settings.prepare()
-        # Opening the ledger recovers rows a previous process left in flight:
-        # `running`/`cancel_requested` become `interrupted`, never resumed.
-        ledger.open()
-        logger.info(
-            "intelligence ready: ledger=%s staging=%s slots=%d",
-            ledger.path,
-            settings.staging_dir,
-            settings.max_slots,
-        )
+        ownership = InstanceLock(settings.state_dir)
+        ownership.acquire()
         try:
-            yield
-        finally:
-            scheduler.shutdown()
+            ledger.open()
+            scheduler.recover()
+            try:
+                yield
+            finally:
+                if scheduler.shutdown():
+                    ledger.close()
+                    ownership.close()
+        except BaseException:
             ledger.close()
+            ownership.close()
+            raise
 
     app = FastAPI(
         title="Knoted Intelligence Internal API",
@@ -200,10 +214,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get(f"{EXECUTIONS_PATH}/{{execution_id}}", response_model=ExecutionRecord)
     def get_execution(execution_id: UUID) -> ExecutionRecord:
-        row = ledger.get(str(execution_id))
-        if row is None:
-            raise executor.ExecutionNotFound(f"execution {execution_id} is unknown")
-        return _record(row)
+        return _record(scheduler.record(str(execution_id)))
 
     @app.post(f"{EXECUTIONS_PATH}/{{execution_id}}/cancel", response_model=ExecutionRecord)
     def cancel_execution(execution_id: UUID) -> ExecutionRecord:
@@ -229,7 +240,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def get_health() -> HealthStatus:
         # Degraded means at least one cancellation has not been confirmed: a
         # child is still alive after the supervisor signalled its group.
-        degraded = ledger.stuck_cancel_count() > 0
+        degraded = scheduler.degraded() or ledger.stuck_cancel_count() > 0
         return HealthStatus(
             status=HealthState.DEGRADED if degraded else HealthState.OK,
             active_executions=ledger.active_count(),
@@ -250,6 +261,7 @@ def _record(row: ExecutionRow) -> ExecutionRecord:
         execution_id=UUID(row.execution_id),
         kind=ExecutionKind(row.kind),
         state=ExecutionState(row.state),
+        compute_exit_confirmed=row.compute_exit_confirmed,
         input_sha256=row.input_sha256,
         source_version=row.source_version,
         options_revision=row.options_revision,
@@ -283,6 +295,7 @@ def _error_response(
 def _install_error_handlers(app: FastAPI) -> None:
     statuses = {
         executor.ExecutionNotFound: 404,
+        executor.ExecutionUnavailable: 503,
         executor.ExecutionConflict: 409,
         executor.ExecutionFinished: 409,
         executor.ExecutionNotFinished: 409,

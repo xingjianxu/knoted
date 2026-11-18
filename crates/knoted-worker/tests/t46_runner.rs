@@ -44,10 +44,7 @@ async fn t46_dispatcher_captures_after_scan_via_shared_queue() {
 }
 
 fn temp() -> std::path::PathBuf {
-    let p = std::path::PathBuf::from(format!(
-        "/data/knoted-dev/tasks/t46/tmp/{}",
-        uuid::Uuid::new_v4()
-    ));
+    let p = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&p).unwrap();
     p
 }
@@ -177,10 +174,17 @@ async fn t46_later_binary_formats_never_become_text_success() {
         WorkerRunner::with_context(ctx.clone(), "t46-format", Dispatcher { ctx: ctx.clone() });
     Box::pin(runner.step()).await.unwrap();
     Box::pin(runner.step()).await.unwrap();
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs WHERE kind='file.extract'")
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs WHERE kind='file.extract' AND payload->>'parser_revision'='rust-text-v1'")
         .fetch_one(ctx.pool())
         .await
         .unwrap();
+    let parser: String = sqlx::query_scalar(
+        "SELECT payload->>'parser_revision' FROM jobs WHERE kind='file.extract'",
+    )
+    .fetch_one(ctx.pool())
+    .await
+    .unwrap();
+    assert_eq!(parser, knoted_core::files::pdf::PARSER_REVISION);
     db.drop().await;
     std::fs::remove_dir_all(root).unwrap();
     std::fs::remove_dir_all(staging).unwrap();

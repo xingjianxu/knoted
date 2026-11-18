@@ -23,6 +23,8 @@ pub const EXTRACT_JOB_KIND: &str = "file.extract";
 pub enum DomainError {
     #[error("extraction ownership or source observation expired")]
     Stale,
+    #[error("Python execution deadline elapsed before publication")]
+    DeadlineExceeded,
     #[error(transparent)]
     Database(#[from] sqlx::Error),
     #[error(transparent)]
@@ -53,8 +55,8 @@ impl ExtractionInput {
         })
     }
 }
-fn options_hash() -> String {
-    Sha256Hex::digest(text::OPTIONS_REVISION.as_bytes()).to_string()
+fn options_hash(revision: &str) -> String {
+    Sha256Hex::digest(revision.as_bytes()).to_string()
 }
 /// Caller holds the source lock. Existing successes are immutable and do not
 /// depend on a metadata version or the scan generation which later observed it.
@@ -67,11 +69,18 @@ pub async fn enqueue(
             .bind(source_id)
             .fetch_optional(&mut **tx)
             .await?;
-    if !row.is_some_and(|r| text::supports(&r.0)) {
+    let Some((path,)) = row else {
         return Ok(());
-    }
+    };
+    let (parser_revision, options_revision) = if text::supports(&path) {
+        (text::PARSER_REVISION, text::OPTIONS_REVISION)
+    } else if super::pdf::supports(&path) {
+        (super::pdf::PARSER_REVISION, super::pdf::OPTIONS_REVISION)
+    } else {
+        return Ok(());
+    };
     let input:ExtractionInput=sqlx::query_as("SELECT id AS source_id,root_id,content_version,sha256 AS input_sha256,input_object_id,size,observation_version,captured_scan_id,observation FROM file_sources WHERE id=$1").bind(source_id).fetch_one(&mut **tx).await?;
-    let exists:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM file_extractions WHERE source_id=$1 AND content_version=$2 AND parser_revision=$3 AND options_hash=$4)").bind(source_id).bind(input.content_version).bind(text::PARSER_REVISION).bind(options_hash()).fetch_one(&mut **tx).await?;
+    let exists:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM file_extractions WHERE source_id=$1 AND content_version=$2 AND parser_revision=$3 AND options_hash=$4)").bind(source_id).bind(input.content_version).bind(parser_revision).bind(options_hash(options_revision)).fetch_one(&mut **tx).await?;
     if exists {
         return Ok(());
     }
@@ -88,8 +97,8 @@ pub async fn enqueue(
     .bind(EXTRACT_JOB_KIND)
     .bind(source_id.to_string())
     .bind(input.content_version.to_string())
-    .bind(text::PARSER_REVISION)
-    .bind(options_hash())
+    .bind(parser_revision)
+    .bind(options_hash(options_revision))
     .fetch_one(&mut **tx)
     .await?;
     if failed {
@@ -104,12 +113,12 @@ pub async fn enqueue(
         input.content_version,
         input.observation_version,
         input.captured_scan_id,
-        text::PARSER_REVISION,
-        options_hash()
+        parser_revision,
+        options_hash(options_revision)
     ));
     spec.payload = json!(input);
-    spec.payload["parser_revision"] = json!(text::PARSER_REVISION);
-    spec.payload["options_hash"] = json!(options_hash());
+    spec.payload["parser_revision"] = json!(parser_revision);
+    spec.payload["options_hash"] = json!(options_hash(options_revision));
     jobs::enqueue(tx, spec).await?;
     Ok(())
 }
@@ -132,7 +141,7 @@ pub async fn publish(
         return Err(DomainError::Stale);
     }
     let mut tx = ctx.pool().begin().await?;
-    let result = publish_inner(ctx, &mut tx, lease, input, document).await;
+    let result = publish_inner(ctx, &mut tx, lease, input, document, None).await;
     match result {
         Ok(()) => {
             tx.commit().await?;
@@ -150,8 +159,33 @@ async fn publish_inner(
     lease: &Lease,
     input: &ExtractionInput,
     document: &ExtractedDocument,
+    attempt: Option<&IntelligenceAttempt>,
 ) -> Result<(), DomainError> {
     lock_lease(tx, lease).await?;
+    let (parser_revision, options_revision, execution_id) = if let Some(attempt) = attempt {
+        let payload: Value = sqlx::query_scalar("SELECT payload FROM jobs WHERE id=$1")
+            .bind(lease.job_id)
+            .fetch_one(&mut **tx)
+            .await?;
+        let entries = decode_attempts(&payload)?;
+        if !entries
+            .iter()
+            .any(|a| a.lease_token == lease.token && a.request == attempt.request)
+            || attempt.request.input_sha256.as_str() != input.input_sha256
+            || attempt.request.input_object_id.as_str() != input.input_object_id
+            || attempt.request.source_version != input.content_version
+            || attempt.request.options_revision != super::pdf::OPTIONS_REVISION
+        {
+            return Err(DomainError::Stale);
+        }
+        (
+            super::pdf::PARSER_REVISION,
+            super::pdf::OPTIONS_REVISION,
+            Some(attempt.request.execution_id),
+        )
+    } else {
+        (text::PARSER_REVISION, text::OPTIONS_REVISION, None)
+    };
     let root:Option<PublicationRoot>=sqlx::query_as("SELECT configured_path,paused_reason,scan_token,generation,last_complete_generation FROM file_roots WHERE id=$1 FOR UPDATE").bind(input.root_id).fetch_optional(&mut **tx).await?;
     let Some(root) = root else {
         return Err(DomainError::Stale);
@@ -168,11 +202,106 @@ async fn publish_inner(
     if valid != Some(true) {
         return Err(DomainError::Stale);
     }
-    let inserted:Option<Uuid>=sqlx::query_scalar("INSERT INTO file_extractions(source_id,content_version,input_sha256,parser_revision,options_hash,job_id,blocks) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(source_id,content_version,parser_revision,options_hash) DO NOTHING RETURNING id")
- .bind(input.source_id).bind(input.content_version).bind(&input.input_sha256).bind(text::PARSER_REVISION).bind(options_hash()).bind(lease.job_id).bind(sqlx::types::Json(&document.blocks)).fetch_optional(&mut **tx).await?;
+    let inserted:Option<Uuid>=sqlx::query_scalar("INSERT INTO file_extractions(source_id,content_version,input_sha256,parser_revision,options_hash,job_id,blocks,execution_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(source_id,content_version,parser_revision,options_hash) DO NOTHING RETURNING id")
+ .bind(input.source_id).bind(input.content_version).bind(&input.input_sha256).bind(parser_revision).bind(options_hash(options_revision)).bind(lease.job_id).bind(sqlx::types::Json(&document.blocks)).bind(execution_id).fetch_optional(&mut **tx).await?;
     if let Some(id) = inserted {
         sqlx::query("INSERT INTO outbox(job_id,topic,payload) VALUES($1,'file.extracted',$2)").bind(lease.job_id).bind(json!({"extraction_id":id,"source_id":input.source_id,"source_version":input.content_version})).execute(&mut **tx).await?;
     }
     lock_lease(tx, lease).await?;
+    if let Some(attempt) = attempt {
+        // clock_timestamp observes wall time after every lock/write, unlike
+        // transaction-start now(). Any late result rolls back both rows.
+        let expired: bool = sqlx::query_scalar("SELECT clock_timestamp() >= $1")
+            .bind(attempt.request.deadline)
+            .fetch_one(&mut **tx)
+            .await?;
+        if expired {
+            return Err(DomainError::DeadlineExceeded);
+        }
+    }
+    Ok(())
+}
+
+pub const SUPERVISION_REVISION: &str = "guardian-exit-v1";
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntelligenceAttempt {
+    pub attempt: i32,
+    pub lease_token: Uuid,
+    pub protocol_revision: String,
+    pub request: crate::intelligence::ExecutionRequest,
+}
+/// Persist before POST while the exact live job lease is locked. A network
+/// retry reuses the first request, including its original deadline.
+pub async fn register_attempt(
+    pool: &sqlx::PgPool,
+    lease: &Lease,
+    request: crate::intelligence::ExecutionRequest,
+) -> Result<IntelligenceAttempt, DomainError> {
+    let mut tx = pool.begin().await?;
+    lock_lease(&mut tx, lease).await?;
+    let mut payload: Value =
+        sqlx::query_scalar("SELECT payload FROM jobs WHERE id=$1 AND kind='file.extract'")
+            .bind(lease.job_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    let mut attempts = decode_attempts(&payload)?;
+    if let Some(existing) = attempts.iter().find(|a| a.lease_token == lease.token) {
+        return Ok(existing.clone());
+    }
+    let entry = IntelligenceAttempt {
+        attempt: lease.attempt,
+        lease_token: lease.token,
+        protocol_revision: SUPERVISION_REVISION.into(),
+        request,
+    };
+    attempts.push(entry.clone());
+    payload["intelligence_attempts"] = json!(attempts);
+    sqlx::query("UPDATE jobs SET payload=$2 WHERE id=$1")
+        .bind(lease.job_id)
+        .bind(payload)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(entry)
+}
+fn decode_attempts(payload: &Value) -> Result<Vec<IntelligenceAttempt>, DomainError> {
+    let entries: Vec<IntelligenceAttempt> = match payload.get("intelligence_attempts") {
+        None => Vec::new(),
+        Some(value) => serde_json::from_value(value.clone()).map_err(|_| DomainError::Stale)?,
+    };
+    if entries
+        .iter()
+        .any(|a| a.protocol_revision != SUPERVISION_REVISION)
+    {
+        return Err(DomainError::Stale);
+    }
+    Ok(entries)
+}
+pub async fn load_attempts(
+    pool: &sqlx::PgPool,
+    job_id: Uuid,
+) -> Result<Vec<IntelligenceAttempt>, DomainError> {
+    let payload: Value = sqlx::query_scalar("SELECT payload FROM jobs WHERE id=$1")
+        .bind(job_id)
+        .fetch_one(pool)
+        .await?;
+    decode_attempts(&payload)
+}
+
+/// Python publication retains the exact same source/lease/observation fence.
+pub async fn publish_python(
+    ctx: &AppContext,
+    lease: &Lease,
+    input: &ExtractionInput,
+    document: &ExtractedDocument,
+    attempt: &IntelligenceAttempt,
+) -> Result<(), DomainError> {
+    if !ctx.files().enabled || document.truncated {
+        return Err(DomainError::Stale);
+    }
+    let mut tx = ctx.pool().begin().await?;
+    publish_inner(ctx, &mut tx, lease, input, document, Some(attempt)).await?;
+    tx.commit().await?;
     Ok(())
 }

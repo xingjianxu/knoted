@@ -55,7 +55,7 @@ sqlx = { version = "0.8", default-features = false, features = [
     "macros",
     "json",
 ] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "=0.10.4"

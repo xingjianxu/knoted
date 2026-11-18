@@ -41,6 +41,7 @@ script_dir=$(cd "${BASH_SOURCE[0]%/*}" && pwd)
 instance_root=${KNOTED_INSTANCE_ROOT:-/data/knoted-dev/service}
 runtime_root=${KNOTED_RUNTIME_ROOT:-/data/knoted-dev/runtime/current}
 api_port=${KNOTED_API_PORT:-15602}
+intelligence_port=${KNOTED_INTELLIGENCE_PORT:-15603}
 https_port=${KNOTED_HTTPS_PORT:-15601}
 domain=${KNOTED_HTTPS_DOMAIN:-wlab.132140.xyz}
 # 开发/测试库由宿主用户直接创建与管理（ADR 0004）：沿用本机 trust 认证，
@@ -112,6 +113,20 @@ verify_runtime() {
   test -s "$runtime_root/share/knoted/web/index.html" || die "运行根缺少 share/knoted/web/index.html"
   test -n "$(find "$runtime_root/share/knoted/migrations" -maxdepth 1 -name '*.sql' -type f -print -quit 2>/dev/null)" ||
     die "运行根缺少 share/knoted/migrations/*.sql"
+  local python_root="$runtime_root/share/knoted/intelligence" required
+  test -x "$runtime_root/bin/knoted-intelligence" || die "Python 产物缺少可执行入口"
+  test -x "$python_root/python/bin/python3.12" || die "Python 产物缺少固定解释器"
+  for required in BUILD.json requirements.txt uv.lock \
+    python/lib/python3.12/os.py \
+    python/lib/python3.12/site-packages/knoted_intelligence/app.py \
+    python/lib/python3.12/site-packages/knoted_intelligence/guardian.py \
+    python/lib/python3.12/site-packages/knoted_intelligence/supervision.py \
+    python/lib/python3.12/site-packages/knoted_intelligence/parsing/pdf.py \
+    python/lib/python3.12/site-packages/docling/document_converter.py \
+    python/lib/python3.12/site-packages/torch/__init__.py \
+    python/lib/python3.12/site-packages/onnxruntime/__init__.py; do
+    test -s "$python_root/$required" || die "Python 产物缺少 $required"
+  done
   local unexpected
   unexpected=$(cd "$runtime_root" && find bin share ! -type d ! -type f -print -quit)
   test -z "$unexpected" || die "运行根含非普通文件（拒绝符号链接与特殊文件）：$unexpected"
@@ -152,7 +167,7 @@ check_ports() {
     return 0
   fi
   local port
-  for port in "$api_port"; do
+  for port in "$api_port" "$intelligence_port"; do
     if ss -H -ltn "sport = :$port" | grep -q .; then
       die "端口 $port 已被占用；先停止占用者（本实例用 pnpm pc down）"
     fi
@@ -168,7 +183,8 @@ command_prepare() {
   require_tools
   prepare_instance_root
   install -d -m 0700 "$config_dir" "$state_dir" \
-    "$logs_dir" "$assets_dir" "$staging_dir" "$backups_dir"
+    "$logs_dir" "$assets_dir" "$staging_dir" "$backups_dir" \
+    "$state_dir/intelligence" "$instance_root/cache/intelligence" "$instance_root/tmp/intelligence"
 
   if [ -L "$config_file" ]; then
     log "替换旧的 Nix store 配置链接：$config_file"
@@ -176,6 +192,7 @@ command_prepare() {
 
   render_template "$script_dir/knoted.toml.tmpl" "$config_file" \
     @API_PORT@ "$api_port" \
+    @INTELLIGENCE_PORT@ "$intelligence_port" \
     @DATABASE_URL@ "$database_url" \
     @DOMAIN@ "$domain" \
     @HTTPS_PORT@ "$https_port" \
@@ -211,6 +228,34 @@ command_worker() {
   exec "$runtime_root/bin/knoted-worker" --config "$config_file"
 }
 
+command_intelligence() {
+  guard_worktree
+  test -r "$config_file" || die "缺少运行配置；先完成 prepare"
+  test -d "${KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR:-}" || die "缺少 Docling 只读模型根配置"
+  test -d "${KNOTED_INTELLIGENCE_BGE_M3_DIR:-}" || die "缺少 BGE-M3 只读模型根配置"
+  # Whitelist the child environment: no PostgreSQL credentials or test hooks.
+  exec env -i PATH="$PATH" HOME="$state_dir/intelligence" \
+    NIX_LD="${NIX_LD:-}" NIX_LD_LIBRARY_PATH="${NIX_LD_LIBRARY_PATH:-}" \
+    LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" \
+    KNOTED_INTELLIGENCE_HOST=127.0.0.1 KNOTED_INTELLIGENCE_PORT="$intelligence_port" \
+    KNOTED_INTELLIGENCE_STATE_DIR="$state_dir/intelligence" \
+    KNOTED_INTELLIGENCE_STAGING_DIR="$staging_dir" \
+    XDG_CACHE_HOME="$instance_root/cache/intelligence" TMPDIR="$instance_root/tmp/intelligence" \
+    KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR="$KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR" \
+    KNOTED_INTELLIGENCE_BGE_M3_DIR="$KNOTED_INTELLIGENCE_BGE_M3_DIR" \
+    KNOTED_INTELLIGENCE_DOCLING_DEVICE=cpu KNOTED_INTELLIGENCE_GPU_SLOTS=1 \
+    CUDA_VISIBLE_DEVICES= KNOTED_EMBED_GPU_UUID= \
+    "$runtime_root/bin/knoted-intelligence"
+}
+
+command_probe_intelligence() {
+  local response
+  response=$(curl -fsS --max-time 3 "http://127.0.0.1:$intelligence_port/internal/v1/health") || return 1
+  "$runtime_root/share/knoted/intelligence/python/bin/python3.12" -I -B -c \
+    'import json,sys; data=json.loads(sys.argv[1]); sys.exit(0 if data.get("status")=="ok" else 1)' "$response" || \
+    die "intelligence 未就绪（degraded 或无效响应）"
+}
+
 command_probe_api() {
   curl -fsS --max-time 3 "http://127.0.0.1:$api_port/health/ready" >/dev/null
 }
@@ -231,10 +276,12 @@ prepare) command_prepare ;;
 migrate) command_migrate ;;
 api) command_api ;;
 worker) command_worker ;;
+intelligence) command_intelligence ;;
+probe-intelligence) command_probe_intelligence ;;
 probe-api) command_probe_api ;;
 paths) command_paths ;;
 *)
-  echo "usage: service.sh {prepare|migrate|api|worker|probe-api|paths}" >&2
+  echo "usage: service.sh {prepare|migrate|api|worker|intelligence|probe-api|probe-intelligence|paths}" >&2
   exit 2
   ;;
 esac
