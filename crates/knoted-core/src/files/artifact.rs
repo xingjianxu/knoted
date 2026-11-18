@@ -1,4 +1,4 @@
-//! Bounded, digest-verified reads shared by Python parse adapters.
+//! Bounded, digest-verified reads shared by Python execution adapters.
 use super::{Sha256Hex, safe_fs};
 use crate::{
     context::AppContext,
@@ -9,12 +9,12 @@ use std::{fs::File, io::Read};
 pub const MAX_ARTIFACT_BYTES: u64 = 128 * 1024 * 1024;
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("invalid or incomplete parse artifact")]
+    #[error("invalid or incomplete execution artifact")]
     Invalid,
-    #[error("parse artifact storage unavailable")]
+    #[error("execution artifact storage unavailable")]
     Io(#[from] std::io::Error),
 }
-pub(super) async fn read_bytes(
+pub(crate) async fn read_bytes(
     ctx: &AppContext,
     request: &ExecutionRequest,
     result: &ExecutionResult,
@@ -23,7 +23,7 @@ pub(super) async fn read_bytes(
         return Err(Error::Invalid);
     }
     for (key, expected) in [
-        ("kind", "parse".to_owned()),
+        ("kind", request.kind.to_string()),
         ("source_version", request.source_version.to_string()),
         ("input_sha256", request.input_sha256.to_string()),
         ("options_revision", request.options_revision.clone()),
