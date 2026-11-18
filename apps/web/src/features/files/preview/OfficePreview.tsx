@@ -1,47 +1,12 @@
-import { useId, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { Alert, Button, Spinner } from "@bixlab/mtone";
-import { ApiRequestError, type ApiClient, type components } from "@knoted/api-client";
+import { ApiRequestError, type ApiClient } from "@knoted/api-client";
 import { PREVIEW_BYTES, type FileSource } from "./inspect";
-
-type Editor = { destroyEditor(): void };
-type DocsApi = {
-    DocEditor: new (id: string, config: components["schemas"]["OfficeEditorConfig"] & {
-        width: string;
-        height: string;
-        events: { onDocumentReady(): void; onError(): void };
-    }) => Editor;
-};
-let sdkLoad: Promise<DocsApi> | undefined;
-function loadSdk(origin: string): Promise<DocsApi> {
-    // One immutable built origin per page; retry only a failed script load.
-    sdkLoad ??= new Promise<DocsApi>((resolve, reject) => {
-        const script = document.createElement("script");
-        script.src = `${origin}/web-apps/apps/api/documents/api.js`;
-        script.async = true;
-        function fail() {
-            script.remove();
-            reject(new Error("Office SDK unavailable"));
-        }
-        script.onerror = fail;
-        script.onload = () => {
-            const sdk = (window as Window & { DocsAPI?: DocsApi }).DocsAPI;
-            if (typeof sdk?.DocEditor === "function") resolve(sdk);
-            else fail();
-        };
-        document.head.append(script);
-    }).catch(error => {
-        sdkLoad = undefined;
-        throw error;
-    });
-    return sdkLoad;
-}
 
 const previewEndpoint = "/files/{fileId}/office-preview";
 const unavailable = "Office 预览失败，请重试或下载原文件。";
-function destroy(editor?: Editor) {
-    // Teardown failures must not stop the host removal or lease revocation.
-    try { editor?.destroyEditor(); } catch { /* The SDK host is removed separately. */ }
-}
+const timedOut = "Office 预览启动超时，请重试或下载原文件。";
+const startupLimit = 45_000;
 
 type Result = { kind: "loading" | "ready" } | { kind: "error"; message: string };
 export function OfficePreview({ api, file, disposeRef, onUnauthorized }: {
@@ -50,13 +15,14 @@ export function OfficePreview({ api, file, disposeRef, onUnauthorized }: {
     disposeRef: RefObject<(() => void) | null>;
     onUnauthorized: () => void;
 }) {
-    const { KNOTED_OFFICE_ORIGIN: origin } = import.meta.env;
+    const origin = import.meta.env.KNOTED_OFFICE_ORIGIN;
     const { id: fileId, content_version: version } = file;
     const disabled = file.status !== "present" ? "来源已丢失，无法预览。" :
         file.size > PREVIEW_BYTES ? "预览限 50 MiB，请下载原文件。" :
-        !origin ? "Office 预览未启用，请下载原文件。" : null;
+        !origin ? "Office 预览未启用，请下载原文件。" :
+        !("credentialless" in HTMLIFrameElement.prototype) || typeof MessageChannel !== "function"
+            ? "当前浏览器不支持无凭据隔离，无法使用 Office 预览。请下载原文件。" : null;
     const host = useRef<HTMLDivElement>(null);
-    const hostId = useId();
     const [attempt, setAttempt] = useState(0);
     const [state, setState] = useState<{ api: ApiClient; attempt: number; result: Result }>();
     const current: Result = state?.api === api && state.attempt === attempt ? state.result : { kind: "loading" };
@@ -64,72 +30,59 @@ export function OfficePreview({ api, file, disposeRef, onUnauthorized }: {
     useLayoutEffect(() => {
         if (disabled || !host.current) return;
         const container = host.current;
-        let stopped = false;
+        let phase: "opening" | "creating" | "starting" | "ready" | "stopped" = "opening";
         let previewId: string | undefined;
-        let editor: Editor | undefined;
-        let mount: HTMLDivElement | undefined;
+        let frame: HTMLIFrameElement | undefined;
+        let port: MessagePort | undefined;
+        const deadline = performance.now() + startupLimit;
         function revoke() {
             if (!previewId) return;
             const id = previewId;
             previewId = undefined;
-            // No abort signal: the request remains valid after this owner exits.
             void api.raw.DELETE(previewEndpoint, {
                 params: { path: { fileId }, query: { preview_id: id } },
-            }).catch(() => { /* Session/TTL still bounds an unreachable revoke. */ });
+            }).catch(() => { /* Session/TTL bounds an unreachable revoke. */ });
         }
         function stop() {
-            if (stopped) return;
-            stopped = true;
-            destroy(editor);
-            editor = undefined;
-            mount?.remove();
-            mount = undefined;
+            if (phase === "stopped") return;
+            phase = "stopped";
+            clearTimeout(timer);
+            port?.close();
+            port = undefined;
+            frame?.remove(); // The only owned browsing context; never touch the vendor's iframe.
+            frame = undefined;
             revoke();
         }
         disposeRef.current = stop;
         function fail(message: string) {
-            if (stopped) return;
+            if (phase === "stopped") return;
             stop();
             setState({ api, attempt, result: { kind: "error", message } });
         }
-        async function load() {
-            if (stopped) return;
+        function expired() {
+            if (phase === "ready" || performance.now() < deadline) return false;
+            fail(timedOut);
+            return true;
+        }
+        async function create(channel: MessagePort) {
             try {
-                // A dispatched POST may create a lease even if the dialog closes.
-                // Await its receipt without aborting so this owner can revoke its own ID.
+                // A dispatched POST may create a lease after close/timeout. Keep the
+                // receipt observable so this generation can revoke its own ID.
                 const { data, response } = await api.raw.POST(previewEndpoint, {
                     params: { path: { fileId } }, body: { expected_content_version: version },
                 });
                 previewId = data?.preview_id;
-                if (stopped) { revoke(); return; }
+                if (phase === "stopped") { revoke(); return; }
+                if (expired()) return;
                 if (!data || !previewId || response.status !== 201) { fail(unavailable); return; }
                 if (data.document_server_origin !== origin) {
                     fail("Office 预览来源不匹配，请下载原文件。");
                     return;
                 }
-                const sdk = await loadSdk(origin);
-                if (stopped) return;
-                // SDK code owns this subtree, including replacing its placeholder.
-                mount = document.createElement("div");
-                const placeholder = document.createElement("div");
-                placeholder.id = hostId;
-                mount.className = "h-full";
-                mount.append(placeholder);
-                container.append(mount);
-                const created = new sdk.DocEditor(hostId, {
-                    ...data.config,
-                    width: "100%", height: "100%",
-                    events: {
-                        onDocumentReady() {
-                            if (!stopped) setState({ api, attempt, result: { kind: "ready" } });
-                        },
-                        onError() { fail(unavailable); },
-                    },
-                });
-                if (stopped) destroy(created); // A constructor can invoke onError synchronously.
-                else editor = created;
+                phase = "starting";
+                channel.postMessage({ type: "init", origin, config: data.config });
             } catch (error) {
-                if (stopped) return;
+                if (phase === "stopped") return;
                 if (error instanceof ApiRequestError && error.status === 401) {
                     stop();
                     onUnauthorized();
@@ -138,13 +91,53 @@ export function OfficePreview({ api, file, disposeRef, onUnauthorized }: {
                 }
             }
         }
-        // Don't spend a lease in StrictMode's setup/cleanup probe.
-        queueMicrotask(() => { void load(); });
+        function connect() {
+            if (phase === "stopped" || expired()) return;
+            const target = frame?.contentWindow;
+            if (!target || port) { fail(unavailable); return; } // Never reuse a reloaded/navigated host.
+            const channel = new MessageChannel();
+            port = channel.port1;
+            channel.port1.onmessage = ({ data }: MessageEvent<unknown>) => {
+                if (phase === "stopped" || expired() || !data || typeof data !== "object" ||
+                    !Object.hasOwn(data, "type") || Object.keys(data).length !== 1) return;
+                const { type } = data as { type: unknown };
+                if (type === "connected" && phase === "opening") {
+                    phase = "creating";
+                    void create(channel.port1);
+                } else if (type === "ready" && phase === "starting") {
+                    phase = "ready";
+                    clearTimeout(timer);
+                    setState({ api, attempt, result: { kind: "ready" } });
+                } else if (type === "error" && (phase === "starting" || phase === "ready")) {
+                    fail(unavailable);
+                }
+            };
+            try {
+                target.postMessage({ type: "knoted-office-connect" }, window.location.origin, [channel.port2]);
+            } catch {
+                channel.port2.close();
+                fail(unavailable);
+            }
+        }
+        const timer = setTimeout(() => fail(timedOut), startupLimit);
+        // Don't start a browsing context in StrictMode's discarded setup probe.
+        queueMicrotask(() => {
+            if (phase === "stopped" || expired()) return;
+            const element = document.createElement("iframe") as HTMLIFrameElement & { credentialless: boolean };
+            element.credentialless = true;
+            if (element.credentialless !== true) { fail(unavailable); return; }
+            element.title = "Office 只读预览";
+            element.className = "h-full w-full border-0";
+            element.addEventListener("load", connect);
+            element.src = "/office-preview.html";
+            frame = element;
+            container.append(element);
+        });
         return () => {
             stop();
             disposeRef.current = null;
         };
-    }, [api, attempt, disabled, disposeRef, fileId, hostId, onUnauthorized, origin, version]);
+    }, [api, attempt, disabled, disposeRef, fileId, onUnauthorized, origin, version]);
 
     if (disabled) return <Alert tone="warning">{disabled}</Alert>;
     return <>
