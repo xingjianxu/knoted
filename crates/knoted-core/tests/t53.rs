@@ -316,7 +316,9 @@ async fn t53_2_accepted_engine_task_is_not_published() {
             "searchableAttributes": ["title", "body"],
             "filterableAttributes": ["source_type", "source_id", "source_version",
                 "project_id", "tags", "archived", "deleted", "path", "format"],
-            "sortableAttributes": ["updated_at", "version"]
+            "sortableAttributes": ["updated_at", "version", "id"],
+            "pagination": {"maxTotalHits": 10000},
+            "rankingRules": ["sort", "words", "typo", "proximity", "attributeRank", "wordPosition", "exactness"]
         })))
         .mount(&server)
         .await;
@@ -388,7 +390,9 @@ async fn t53_2_accepted_engine_task_is_not_published() {
             "searchableAttributes": ["title", "body"],
             "filterableAttributes": ["source_type", "source_id", "source_version",
                 "project_id", "tags", "archived", "deleted", "path", "format"],
-            "sortableAttributes": ["updated_at", "version"]
+            "sortableAttributes": ["updated_at", "version", "id"],
+            "pagination": {"maxTotalHits": 10000},
+            "rankingRules": ["sort", "words", "typo", "proximity", "attributeRank", "wordPosition", "exactness"]
         })))
         .mount(&server)
         .await;
@@ -817,7 +821,9 @@ async fn t53_9_permanent_engine_rejection_ends_in_failed() {
                 "searchableAttributes": ["title", "body"],
                 "filterableAttributes": ["source_type", "source_id", "source_version",
                     "project_id", "tags", "archived", "deleted", "path", "format"],
-                "sortableAttributes": ["updated_at", "version"]
+                "sortableAttributes": ["updated_at", "version", "id"],
+            "pagination": {"maxTotalHits": 10000},
+            "rankingRules": ["sort", "words", "typo", "proximity", "attributeRank", "wordPosition", "exactness"]
             }),
         ),
     ] {

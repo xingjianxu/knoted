@@ -40,9 +40,10 @@ pub const PUBLISH_JOB_KIND: &str = "fulltext.publish";
 pub const CLEANUP_JOB_KIND: &str = "fulltext.cleanup";
 /// The only engine this ledger knows; a new engine gets its own card.
 pub const ENGINE: &str = "meilisearch";
+pub(crate) const MAX_SEARCH_HITS: usize = 10_000;
 
 const MAX_TITLE_BYTES: usize = 2048;
-const MAX_BODY_BYTES: usize = 1024 * 1024;
+pub(crate) const MAX_BODY_BYTES: usize = 1024 * 1024;
 const MAX_TAGS: usize = 64;
 const MAX_TAG_BYTES: usize = 256;
 const MAX_PATH_BYTES: usize = 4096;
@@ -67,7 +68,18 @@ const FILTERABLE_ATTRIBUTES: &[&str] = &[
     "format",
 ];
 /// Sort keys; `version` mirrors `source_version` with a sort-friendly name.
-const SORTABLE_ATTRIBUTES: &[&str] = &["updated_at", "version"];
+const SORTABLE_ATTRIBUTES: &[&str] = &["updated_at", "version", "id"];
+// An explicit timestamp sort leads relevance. With no sort parameter, Meili
+// skips that rule and applies the normal relevance criteria.
+const RANKING_RULES: &[&str] = &[
+    "sort",
+    "words",
+    "typo",
+    "proximity",
+    "attributeRank",
+    "wordPosition",
+    "exactness",
+];
 
 /// A kind of searchable source. The spellings match the shared source registry
 /// (`chat_message`, not `chat`) so T54/T57 need no translation layer.
@@ -284,6 +296,21 @@ pub async fn publish_fulltext(
     ctx: &AppContext,
     document: SourceDocument,
 ) -> Result<Publication, DomainError> {
+    if !ctx.search().enabled {
+        return Err(DomainError::Disabled);
+    }
+    let mut tx = ctx.pool().begin().await?;
+    let publication = publish_fulltext_in(ctx, &mut tx, document).await?;
+    tx.commit().await?;
+    Ok(publication)
+}
+
+/// Writes a projection and its job inside the source event consumer's transaction.
+pub(crate) async fn publish_fulltext_in(
+    ctx: &AppContext,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    document: SourceDocument,
+) -> Result<Publication, DomainError> {
     let config = ctx.search();
     if !config.enabled {
         return Err(DomainError::Disabled);
@@ -294,8 +321,7 @@ pub async fn publish_fulltext(
         document.source_id,
         document.source_version,
     );
-    let mut tx = ctx.pool().begin().await?;
-    lock_source(&mut tx, document.source_type, document.source_id).await?;
+    lock_source(tx, document.source_type, document.source_id).await?;
 
     let current: Option<(Uuid, i64)> = sqlx::query_as(
         "SELECT id, source_version FROM source_documents \
@@ -303,7 +329,7 @@ pub async fn publish_fulltext(
     )
     .bind(document.source_type.as_str())
     .bind(document.source_id)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(&mut **tx)
     .await?;
 
     let document_id = match current {
@@ -319,11 +345,11 @@ pub async fn publish_fulltext(
                  WHERE id=$1 AND superseded_at IS NULL",
             )
             .bind(id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
-            insert_document(&mut tx, &document).await?
+            insert_document(tx, &document).await?
         }
-        None => insert_document(&mut tx, &document).await?,
+        None => insert_document(tx, &document).await?,
     };
 
     let existing: Option<(Uuid, String)> = sqlx::query_as(
@@ -333,7 +359,7 @@ pub async fn publish_fulltext(
     .bind(ENGINE)
     .bind(&config.index_uid)
     .bind(&key)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(&mut **tx)
     .await?;
 
     let (publication_id, needs_job) = match existing {
@@ -343,14 +369,14 @@ pub async fn publish_fulltext(
             // job is still queued/running the publish call stays idempotent.
             let retry = status == PublicationStatus::Failed.as_str()
                 || (status != PublicationStatus::Published.as_str()
-                    && owning_job_terminal(&mut tx, id).await?);
+                    && owning_job_terminal(tx, id).await?);
             if retry {
                 sqlx::query(
                     "UPDATE fulltext_publications SET status='pending', meili_task_uid=NULL, \
                      last_error=NULL, attempts=attempts+1, updated_at=now() WHERE id=$1",
                 )
                 .bind(id)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await?;
             }
             (id, retry)
@@ -364,7 +390,7 @@ pub async fn publish_fulltext(
             .bind(ENGINE)
             .bind(&config.index_uid)
             .bind(&key)
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut **tx)
             .await?;
             (id, true)
         }
@@ -378,21 +404,19 @@ pub async fn publish_fulltext(
         let attempts: i32 =
             sqlx::query_scalar("SELECT attempts FROM fulltext_publications WHERE id=$1")
                 .bind(publication_id)
-                .fetch_one(&mut *tx)
+                .fetch_one(&mut **tx)
                 .await?;
         spec.idempotency_key = Some(format!("{key}:{}:{attempts}", config.index_uid));
         spec.payload = json!({ "publication_id": publication_id });
-        let outcome = jobs::enqueue(&mut tx, spec).await?;
+        let outcome = jobs::enqueue(tx, spec).await?;
         sqlx::query("UPDATE fulltext_publications SET job_id=$2, updated_at=now() WHERE id=$1")
             .bind(publication_id)
             .bind(outcome.job.id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
     }
 
-    let publication = load_publication_tx(&mut tx, publication_id).await?;
-    tx.commit().await?;
-    Ok(publication)
+    load_publication_tx(tx, publication_id).await
 }
 
 async fn insert_document(
@@ -612,7 +636,7 @@ fn engine_document(record: &PublicationRecord) -> Value {
         "deleted": record.deleted,
         "path": record.path,
         "format": record.format,
-        "updated_at": record.updated_at.timestamp(),
+        "updated_at": record.updated_at.timestamp_micros(),
     })
 }
 
@@ -850,6 +874,73 @@ impl EngineTask {
     }
 }
 
+#[derive(Deserialize)]
+pub(crate) struct Candidate {
+    #[serde(rename = "id")]
+    pub key: String,
+    #[serde(rename = "_formatted")]
+    pub formatted: CandidateText,
+    #[serde(rename = "_rankingScore")]
+    pub score: Option<f64>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct CandidateText {
+    pub body: String,
+}
+
+impl MeiliClient {
+    pub(crate) async fn search_candidates(
+        &self,
+        index: &str,
+        query: &str,
+        filter: &str,
+        sort: &[&str],
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<Candidate>, DomainError> {
+        #[derive(Deserialize)]
+        struct SearchResponse {
+            hits: Vec<Candidate>,
+        }
+        let response = self
+            .request(reqwest::Method::POST, &format!("indexes/{index}/search"))
+            .json(&json!({
+                "q": query,
+                "filter": filter,
+                "sort": sort,
+                "offset": offset,
+                "limit": limit,
+                "attributesToRetrieve": ["id"],
+                "attributesToCrop": ["body:30"],
+                "showRankingScore": true,
+            }))
+            .send()
+            .await
+            .map_err(|_| DomainError::Unavailable)?;
+        let status = response.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            let body: Value = response
+                .json()
+                .await
+                .map_err(|_| DomainError::Unavailable)?;
+            if body["code"] == "index_not_found" {
+                // A new instance may not have received its first publication.
+                return Ok(Vec::new());
+            }
+        } else if status.is_success() {
+            let body: SearchResponse = response
+                .json()
+                .await
+                .map_err(|_| DomainError::Unavailable)?;
+            if body.hits.len() <= limit {
+                return Ok(body.hits);
+            }
+        }
+        Err(DomainError::Unavailable)
+    }
+}
+
 fn task_uid(body: &Value) -> Result<i64, DomainError> {
     body["taskUid"]
         .as_i64()
@@ -861,6 +952,8 @@ fn engine_settings() -> Value {
         "searchableAttributes": SEARCHABLE_ATTRIBUTES,
         "filterableAttributes": FILTERABLE_ATTRIBUTES,
         "sortableAttributes": SORTABLE_ATTRIBUTES,
+        "pagination": { "maxTotalHits": MAX_SEARCH_HITS },
+        "rankingRules": RANKING_RULES,
     })
 }
 
@@ -874,6 +967,8 @@ fn settings_match(settings: &Value) -> bool {
     has_all("searchableAttributes", SEARCHABLE_ATTRIBUTES)
         && has_all("filterableAttributes", FILTERABLE_ATTRIBUTES)
         && has_all("sortableAttributes", SORTABLE_ATTRIBUTES)
+        && settings["pagination"]["maxTotalHits"] == json!(MAX_SEARCH_HITS)
+        && settings["rankingRules"] == json!(RANKING_RULES)
 }
 
 /// Runs one full-text job. Called by the worker dispatcher; tests call it
