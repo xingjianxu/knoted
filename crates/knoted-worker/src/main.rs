@@ -37,6 +37,7 @@ async fn main() -> ExitCode {
     let path = config_path.unwrap_or_else(AppConfig::config_path_from_env);
     match AppConfig::load_for_process(&path, ProcessKind::Worker) {
         Ok(config) => {
+            let search_api_key = config.search_api_key();
             let Some(database) = config.database else {
                 eprintln!("knoted-worker: database configuration required");
                 return ExitCode::FAILURE;
@@ -54,7 +55,9 @@ async fn main() -> ExitCode {
             }
             let ctx = AppContext::new(pool)
                 .with_files(config.files)
-                .with_intelligence(config.intelligence);
+                .with_intelligence(config.intelligence)
+                .with_search(config.search)
+                .with_search_api_key(search_api_key);
             tokio::select! {
                 _ = knoted_worker::handlers::note_history::run(ctx.clone()) => unreachable!(),
                 _ = knoted_worker::handlers::trash::run(ctx.clone()) => unreachable!(),
