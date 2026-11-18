@@ -132,7 +132,7 @@ fn problem(id: RequestId, error: DomainError) -> Response {
             "model_provider_unavailable",
             "configured model provider unavailable",
         ),
-        DomainError::Database(_) | DomainError::Queue(_) => (
+        DomainError::Database(_) | DomainError::Queue(_) | DomainError::Context(_) => (
             StatusCode::SERVICE_UNAVAILABLE,
             "dependency_unavailable",
             "chat storage unavailable",
