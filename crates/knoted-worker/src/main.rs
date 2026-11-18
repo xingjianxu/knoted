@@ -53,12 +53,21 @@ async fn main() -> ExitCode {
                 eprintln!("knoted-worker: schema not ready; run migrations before starting");
                 return ExitCode::FAILURE;
             }
+            let Ok(chat_providers) =
+                knoted_core::rag::providers::ProviderRegistry::new(config.chat)
+            else {
+                eprintln!("knoted-worker: model provider registry unavailable");
+                return ExitCode::FAILURE;
+            };
             let ctx = AppContext::new(pool)
                 .with_files(config.files)
                 .with_intelligence(config.intelligence)
+                .with_chat_providers(std::sync::Arc::new(chat_providers))
                 .with_search(config.search)
+                .with_vectors_enabled(config.vectors.enabled)
                 .with_search_api_key(search_api_key);
             tokio::select! {
+                _ = knoted_worker::handlers::fulltext::project(ctx.clone()), if ctx.search().enabled => unreachable!(),
                 _ = knoted_worker::handlers::note_history::run(ctx.clone()) => unreachable!(),
                 _ = knoted_worker::handlers::trash::run(ctx.clone()) => unreachable!(),
                 _ = knoted_worker::handlers::scan::run(ctx) => ExitCode::SUCCESS,

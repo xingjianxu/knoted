@@ -80,3 +80,15 @@ P2/P3 采纳：提交前复核当前版本、`t53_4` 补 `record_published` 栅�
 - 未实现 `/search`（T54）、索引 generation 重建与前端（T55）。
 - 引擎中可能短暂保留被取代版本的文档；统一搜索必须按 PG 当前版本/删除状态复核（T54 验收项）。
 - 中文分词质量取决于 Meilisearch 的 charabia 构建；部署必须使用含全语言 tokenizer 的构建（官方 release），否则只能命中词首前缀。
+
+
+## 主线复核与 dev 发布验收
+
+本节记录第 2 次交付，更新上文实现分支的部署判断。
+
+- 代码先经 [PR #187](https://github.com/xingjianxu/knoted/pull/187) 合入，再由 [PR #192](https://github.com/xingjianxu/knoted/pull/192) 修复人工重试和聊天消息键。两条新测试在原代码分别观察到终态任务不可恢复和约束错误 23514。重新提交同一文档键后只保留一个发布账本，新任务 UID 为已确认成功的 UID。迁移 0017 允许 `chat_message_` 键，保留既有键约束。
+- `cargo test --locked -p knoted-core --test t53` 在 PR 和主线均 exit 0，15 passed / 0 failed。PR 的 `cargo test --workspace --locked` 整轮复跑 exit 0，日志共 443 个 passed（含嵌套子进程报告）。首轮在 T46 捕获场景偶发失败，单例和整轮复跑通过。T47 真实 OCR 测试补齐既有共享模型路径后通过。
+- `cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings` 均 exit 0，`node --test tests/pc/service.test.mjs` 39 passed / 0 failed。独立复核无阻塞。详细原始输出存于 `/data/knoted-dev/tasks/t53/evidence/`。
+- dev 部署前停止本实例两个写入进程并验证无在途任务，备份 PostgreSQL 与 assets 且重算摘要。固定提交 `de8fbcfbe48441e69a872b6d2193c52cbd625b47` 从 Git 归档构建 API/Worker，复用经 Git 差异验证的 Web/Python 字节。校验 38,325 项，清单 SHA-256 为 `87129c2aefa8af59b716b104ff3ad98192613f8ec76e1ce341e4d1e1a8102246`。备份和部署结果保存在本机任务证据，API 和 Worker 的执行路径均指向该 SHA。共享 Caddy、OnlyOffice 和 PostgreSQL PID 前后一致。
+- 迁移 0016 和 0017 应用成功。pcwrap 以 `KNOTED_SEARCH_ENABLED=1` 渲染全文检索配置，API HTTPS/Python readiness 都通过。一个带中文长句的合成聊天投影经真实 Worker 从队列发布，账本返回 `published:851:succeeded`。实际 Meilisearch task 851 为 `succeeded`，查询「知识管理」只命中该文档键一次。
+- 验收使用宿主现有回环 Meilisearch 1.56.1。持久化服务管理仍由 [#186](https://github.com/xingjianxu/knoted/issues/186) 跟踪。T54 将接入真实业务投影和搜索 API。重启本 dev 编排时显式传入 `KNOTED_SEARCH_ENABLED=1`。如引擎有访问密钥，`KNOTED_SEARCH_CREDENTIAL_FILE` 接受持有 `[secrets].meilisearch` 的受保护 TOML 文件路径。

@@ -52,6 +52,7 @@ impl Engine {
             base_url: self.base.clone(),
             index_uid: self.index.clone(),
             api_key_credential: None,
+            ..SearchConfig::default()
         }
     }
 
@@ -316,7 +317,9 @@ async fn t53_2_accepted_engine_task_is_not_published() {
             "searchableAttributes": ["title", "body"],
             "filterableAttributes": ["source_type", "source_id", "source_version",
                 "project_id", "tags", "archived", "deleted", "path", "format"],
-            "sortableAttributes": ["updated_at", "version"]
+            "sortableAttributes": ["updated_at", "version", "id"],
+            "pagination": {"maxTotalHits": 10000},
+            "rankingRules": ["sort", "words", "typo", "proximity", "attributeRank", "wordPosition", "exactness"]
         })))
         .mount(&server)
         .await;
@@ -343,6 +346,7 @@ async fn t53_2_accepted_engine_task_is_not_published() {
         base_url: server.uri(),
         index_uid: index.into(),
         api_key_credential: None,
+        ..SearchConfig::default()
     });
     let source = Uuid::new_v4();
     let publication = meili::publish_fulltext(&ctx, document(source, 1, "会议纪要正文"))
@@ -388,7 +392,9 @@ async fn t53_2_accepted_engine_task_is_not_published() {
             "searchableAttributes": ["title", "body"],
             "filterableAttributes": ["source_type", "source_id", "source_version",
                 "project_id", "tags", "archived", "deleted", "path", "format"],
-            "sortableAttributes": ["updated_at", "version"]
+            "sortableAttributes": ["updated_at", "version", "id"],
+            "pagination": {"maxTotalHits": 10000},
+            "rankingRules": ["sort", "words", "typo", "proximity", "attributeRank", "wordPosition", "exactness"]
         })))
         .mount(&server)
         .await;
@@ -817,7 +823,9 @@ async fn t53_9_permanent_engine_rejection_ends_in_failed() {
                 "searchableAttributes": ["title", "body"],
                 "filterableAttributes": ["source_type", "source_id", "source_version",
                     "project_id", "tags", "archived", "deleted", "path", "format"],
-                "sortableAttributes": ["updated_at", "version"]
+                "sortableAttributes": ["updated_at", "version", "id"],
+            "pagination": {"maxTotalHits": 10000},
+            "rankingRules": ["sort", "words", "typo", "proximity", "attributeRank", "wordPosition", "exactness"]
             }),
         ),
     ] {
@@ -843,6 +851,7 @@ async fn t53_9_permanent_engine_rejection_ends_in_failed() {
         base_url: server.uri(),
         index_uid: index.into(),
         api_key_credential: None,
+        ..SearchConfig::default()
     });
     let source = Uuid::new_v4();
     let publication = meili::publish_fulltext(&ctx, document(source, 1, "被拒绝的会议纪要"))
@@ -1010,9 +1019,123 @@ fn t53_13_client_debug_hides_the_api_key() {
         base_url: "http://127.0.0.1:15605".into(),
         index_uid: "knoted_documents".into(),
         api_key_credential: None,
+        ..SearchConfig::default()
     };
     let client = meili::MeiliClient::new(&config, Some("sentinel-secret")).unwrap();
     let debug = format!("{client:?}");
     assert!(!debug.contains("sentinel-secret"), "{debug}");
     assert!(debug.contains("api_key_set: true"), "{debug}");
+}
+
+#[tokio::test]
+async fn t53_14_manual_retry_replaces_a_failed_engine_task() {
+    use wiremock::matchers::{body_partial_json, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    let db = TestDb::create().await.unwrap();
+    let index = "knoted_t53_terminal";
+    let ctx = AppContext::new(db.pool.clone()).with_search(SearchConfig {
+        enabled: true,
+        base_url: server.uri(),
+        index_uid: index.into(),
+        api_key_credential: None,
+        ..SearchConfig::default()
+    });
+    let publication = meili::publish_fulltext(&ctx, document(Uuid::new_v4(), 1, "retry"))
+        .await
+        .unwrap();
+
+    for (suffix, body) in [
+        (
+            format!("/indexes/{index}"),
+            json!({ "uid": index, "primaryKey": "id" }),
+        ),
+        (
+            format!("/indexes/{index}/settings"),
+            json!({
+                "searchableAttributes": ["title", "body"],
+                "filterableAttributes": ["source_type", "source_id", "source_version",
+                    "project_id", "tags", "archived", "deleted", "path", "format"],
+                "sortableAttributes": ["updated_at", "version", "id"],
+                "pagination": {"maxTotalHits": 10000},
+                "rankingRules": ["sort", "words", "typo", "proximity", "attributeRank", "wordPosition", "exactness"]
+            }),
+        ),
+        ("/tasks/7".into(), json!({ "uid": 7, "status": "failed" })),
+        (
+            "/tasks/8".into(),
+            json!({ "uid": 8, "status": "succeeded" }),
+        ),
+    ] {
+        Mock::given(method("GET"))
+            .and(path(suffix))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+    }
+    let submit = |uid| {
+        Mock::given(method("PUT"))
+            .and(path(format!("/indexes/{index}/documents")))
+            .and(body_partial_json(
+                json!([{ "id": publication.document_key }]),
+            ))
+            .respond_with(ResponseTemplate::new(202).set_body_json(json!({ "taskUid": uid })))
+            .expect(1)
+    };
+
+    let initial_submit = submit(7).mount_as_scoped(&server).await;
+    let (lease, job) = claim_publication(&ctx, publication.id).await;
+    let failure = execute(&ctx, &lease, &job).await;
+    assert!(matches!(failure, ExecutionOutcome::PermanentFailure { .. }));
+    let failed: (String, Option<i64>) =
+        sqlx::query_as("SELECT status, meili_task_uid FROM fulltext_publications WHERE id=$1")
+            .bind(publication.id)
+            .fetch_one(ctx.pool())
+            .await
+            .unwrap();
+    assert_eq!(failed, ("failed".into(), Some(7)));
+    drop(initial_submit);
+    jobs::service::finish_execution(
+        &ctx,
+        jobs::FinishExecution {
+            job_id: lease.job_id,
+            lease_token: lease.token,
+            outcome: failure,
+            cancel_confirmed: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let retried = jobs::service::retry_failed(&ctx, job.id).await.unwrap();
+    let (lease, job) = claim_job(&ctx, retried.id).await;
+    submit(8).mount(&server).await;
+    assert_eq!(
+        execute(&ctx, &lease, &job).await,
+        ExecutionOutcome::Succeeded
+    );
+    let published: (String, Option<i64>, String) = sqlx::query_as(
+        "SELECT status, meili_task_uid, document_key FROM fulltext_publications WHERE id=$1",
+    )
+    .bind(publication.id)
+    .fetch_one(ctx.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        published,
+        ("published".into(), Some(8), publication.document_key)
+    );
+}
+
+#[tokio::test]
+async fn t53_15_chat_message_document_key_passes_database_validation() {
+    let engine = Engine::new();
+    let db = TestDb::create().await.unwrap();
+    let ctx = AppContext::new(db.pool.clone()).with_search(engine.config());
+    let mut message = document(Uuid::new_v4(), 1, "chat message");
+    message.source_type = SourceType::ChatMessage;
+    let key = meili::document_key(message.source_type, message.source_id, 1);
+    let publication = meili::publish_fulltext(&ctx, message).await.unwrap();
+    assert_eq!(publication.document_key, key);
 }

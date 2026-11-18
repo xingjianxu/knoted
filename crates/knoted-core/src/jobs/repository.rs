@@ -196,7 +196,10 @@ pub async fn load(pool: &PgPool, job_id: Uuid) -> Result<Option<Job>, DbError> {
 /// holds, so a running job keeps it until the worker confirms. Returns `None`
 /// when the job does not exist or is already `cancel_requested`/terminal: those
 /// states are left untouched and the caller reads the row to report it.
-pub async fn request_cancel(pool: &PgPool, job_id: Uuid) -> Result<Option<Job>, DbError> {
+pub async fn request_cancel<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    job_id: Uuid,
+) -> Result<Option<Job>, DbError> {
     Ok(sqlx::query_as(
         "UPDATE jobs SET state = CASE \
                  WHEN state IN ('queued', 'retry_wait') THEN 'cancelled' \
@@ -206,7 +209,7 @@ pub async fn request_cancel(pool: &PgPool, job_id: Uuid) -> Result<Option<Job>, 
          RETURNING *",
     )
     .bind(job_id)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?)
 }
 

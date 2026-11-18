@@ -4417,6 +4417,10 @@ components:
           type:
             - number
             - "null"
+        session_id:
+          type: string
+          format: uuid
+          description: 仅聊天消息命中提供所属会话 ID，用于跳转到历史消息。
     SearchResponse:
       type: object
       additionalProperties: false
