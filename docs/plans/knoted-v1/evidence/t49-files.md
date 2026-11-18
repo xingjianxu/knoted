@@ -1,3 +1,5 @@
+> 阶段 A/B 历史记录保留；整卡主线/dev交付与清理见文末最终记录。
+
 # T49 文件浏览、备注标签与下载：阶段 A 与 B
 
 阶段 A 历史状态：**NEEDS_CONTEXT**。以下 A 记录保留当时的验证范围；上游等待已由末尾阶段 B 记录取代。T49 自身的主线集成及真实 dev 全格式验收仍由主 Agent 完成，不能据此标记整卡 DONE。
@@ -89,3 +91,51 @@ B 定向测试保留 15 次 jsdom scrollTo 提示（新增默认路由往返增�
 - `r1-product-red.log/.exit=1`：修正测试操作后 5 failed/19 passed；明确出现标签失效 422、空串变 null 及多发未改字段。
 - `r1-green.log/.exit=0`：产品修复后 24 passed；`r1-typecheck`、`r1-lint` 的 `.exit` 均 0。原有 scrollTo 提示保持记录。
 - 冻结 sourcehash：`b3e08dc4c3014ce65a4ed1838ecac38a122ee48c628f8074c423add3f819e5dd`，逐文件摘要为 `/data/knoted-dev/tasks/t49/r1-frozen-source-manifest.json`。主 Agent 对冻结分支独立跑完整 Web 并定向复审 I1；本轮 Rust/API/Python 未改，沿用其修前完整组合证据，不重复模型或全量 Rust。整卡集成及实际运行验收仍待主 Agent 完成。
+
+## 最终主线与 dev 交付（2026-11-18）
+
+PR [#161](https://github.com/xingjianxu/knoted/pull/161) 普通merge至
+`8ffb2404d0fe44446ebe4020ad65499f5946b2a8`，dev同SHA、schema15；Issue #134自动关闭。
+A876a9eb，B1f1501e，R1de4eef5仅修可选PATCH字段，最后普通merge已验证上游文档为dc935d6。
+独立SpecPASS / QualityAPPROVED，唯一I1 ADDRESSED，无新增Critical/Important。
+仅变化字段进入一次PATCH/CAS，纯备注不携带软删旧标签、纯标签不改写原空字符串备注，
+显式rebase后重新比较，两字段真改仍原子提交。原compressed JSX/#143/Vite提示保留Minor。
+
+| 实际门禁 | 结果 | 原始记录（任务49日志） |
+|---|---|---|
+| 父完整 `cargo test --workspace --locked` | 407顶层 +8嵌套通过，1既有ignored | `parent-b-final-cargo-test.log` |
+| fmt / clippy / API check + verify | 全0，83operations/29examples/14invalid rejected | `parent-b-final-*` |
+| R1父typecheck/lint/全Web/build | 全0，272 tests /18files | `parent-r1-*` |
+| 修复覆盖 | 有效RED5失败/19通过→GREEN24通过 | `r1-product-red`、`r1-green` |
+| 主线Rust/Web定向、fmt/clippy、实际主线Python导入 | 12 Rust、31 Web均通过，其余0 | `main-*` / `evidence/main-verification.json` |
+
+R1仅Web，Rust/API/Python与父完整快照字节不变，未重复模型全套。
+19路径最终源码hash：`b3e08dc4c3014ce65a4ed1838ecac38a122ee48c628f8074c423add3f819e5dd`，
+父逐文件核验/主线树一致。父第一次命令漏传模型目录，T47pipeline报artifacts_unset/exit101，
+原`parent-b-*`记录保留；补齐已批准只读模型根/CPU/emptyGPU后完整`parent-b-final`实际全0。
+R1初轮两个MultiSelect测试操作错误也保留，未算作产品RED，未修改产品掩盖环境错误。
+
+固定产物38320文件，清单SHA256
+`4acdfaecd47820b6702642371aa548a823bd959cfa5a8aedda5186100f4747f2`。
+consistent PG/assets/staging/native SQLite备份位于
+`/data/knoted-dev/service/backups/20261118T031102Z-t49-/`。
+三进程固定exe、HTTPS/internal健康、CPU/只读模型、loopback和共享服务身份不变；
+不重做字节未变的T47打包器搬移/ELF审计，不作跨宿主运行闭包承诺。
+
+真实验证使用独占UUID样本与内存会话，不拦截API、不改原件、不输出凭据：
+
+- `live-api` exit0，12 checks全部true：匿名list/detail/content401、真实游标、备注标签联合CAS/no-op/invalid-tag回滚/旧版本409、源字段和路径注入拒绝、CSRF403、当前字节及安全headers、原件SHA不变、generic tags推进旧草稿栅栏、missing只读/下载404和明确relink目标元数据。自有标签/备注/会话/两源清理成功。
+- `live-browser-r1` exit0，7 checks全部true：列表打开真实详情、草稿不自动提交、显式保存只改元数据、中文文件名原件88字节实际保存且SHA正确、missing编辑/下载禁用、确认relink并导航目标、撤销真实会话后content401→安全login redirect/草稿与详情卸载。全部cleanup flags为true。
+- 第一轮`live-browser`在启动Chrome时失败，先创建的两自有源已missing；最小无会话/无DB探针复现长UUID TMP下ProcessSingleton Socket path too long，短任务tmp通过。仅修私有验收工具的Chromium TMPDIR，普通下载仍独占UUID目录；确认无活Chrome后清理两份已知私有缓存，所有自有会话已撤销。失败原log/exit1与`browser-launch-failure-cleanup.json`保留，非产品回归。
+- `live-full-format` exit0：UTF8.txt、PDF、PNG/JPEG/WebP、DOCX/XLSX/PPTX八个真实fresh来源全部出现在list/detail；逐份实际鉴权下载字节/大小/SHA/metadata ETag/attachment/octet-stream/nosniff/private-no-store一致，逐格式匿名401。各有一次成功提取/一次成功工作；清理后八源missing/fresh=false、全局file jobs0、intelligence active0、无取消。JSON位于`evidence/full-format-6ff63a99-a06f-4209-be7a-a69374a4407e/`。
+
+最后`final-runtime-audit` exit0：24个Python持久执行均GET echo及退出证明有效，
+16成功/5既有输入失败/1取消/2中断（含T47/T48历史）；健康active0、staging无.part，
+完整38320文件运行后仍精确，共享服务不变。全局0present/35missing、成功提取27、
+既有预期failed jobs7、文件任务active0、Passkey1。
+正常清理本任务WT/已合并本地与远程分支，27636个忽略文件均node_modules/dist等
+可重建产物，未知0，其他任务WT保留；见`evidence/worktree-cleanup.json`。
+
+以上原始JSON/log/.exit保存在`/data/knoted-dev/tasks/t49/`。下载完整缓冲最多100MiB，
+扫描不稳定可保守503，不能承诺外部文件系统永不在最后校验后再改变；不提供Range/304。
+T50预览限额是独立能力，未给普通原件下载加入50MiB限制。检索/RAG仍未开放。
