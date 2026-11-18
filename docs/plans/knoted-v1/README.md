@@ -80,10 +80,10 @@
 | [T51](tasks/T51.md) | OnlyOffice授权后端 | T49, T15 | done（PR [#181](https://github.com/xingjianxu/knoted/pull/181)，主线/dev 后端验收 `dadbef7`；[证据](evidence/t51-office-authorization.md)） |
 | [T52](tasks/T52.md) | OnlyOffice网页接入 | T51, T50 | done（PR [#183](https://github.com/xingjianxu/knoted/pull/183)，主线/dev `4e72231`；[证据](evidence/t52-office-preview.md)） |
 | [T53](tasks/T53.md) | 全文索引发布 | T07, T48, T36 | done（主线与 dev 真实发布；[证据](evidence/t53-fulltext.md)） |
-| [T54](tasks/T54.md) | 统一搜索接口 | T53, T37 | pending |
-| [T55](tasks/T55.md) | 搜索界面 | T54, T19 | pending |
+| [T54](tasks/T54.md) | 统一搜索接口 | T53, T37 | done（dev 验收，见任务卡） |
+| [T55](tasks/T55.md) | 搜索界面 | T54, T19 | done（dev 浏览器验收，见任务卡） |
 | [T56](tasks/T56.md) | 索引任务状态与重试 | T08, T54 | pending |
-| [T57](tasks/T57.md) | 分块和定位 | T48, T22, T36, T53 | pending |
+| [T57](tasks/T57.md) | 分块和定位 | T48, T22, T36, T53 | done（dev 真实词法验收，见任务卡） |
 | [T58](tasks/T58.md) | 嵌入批处理适配 | T11, T57 | pending |
 | [T59](tasks/T59.md) | pgvector存储与检索 | T58 | pending |
 | [T60](tasks/T60.md) | 混合检索和范围 | T59, T54 | pending |

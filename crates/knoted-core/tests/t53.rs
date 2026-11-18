@@ -52,6 +52,7 @@ impl Engine {
             base_url: self.base.clone(),
             index_uid: self.index.clone(),
             api_key_credential: None,
+            ..SearchConfig::default()
         }
     }
 
@@ -345,6 +346,7 @@ async fn t53_2_accepted_engine_task_is_not_published() {
         base_url: server.uri(),
         index_uid: index.into(),
         api_key_credential: None,
+        ..SearchConfig::default()
     });
     let source = Uuid::new_v4();
     let publication = meili::publish_fulltext(&ctx, document(source, 1, "会议纪要正文"))
@@ -849,6 +851,7 @@ async fn t53_9_permanent_engine_rejection_ends_in_failed() {
         base_url: server.uri(),
         index_uid: index.into(),
         api_key_credential: None,
+        ..SearchConfig::default()
     });
     let source = Uuid::new_v4();
     let publication = meili::publish_fulltext(&ctx, document(source, 1, "被拒绝的会议纪要"))
@@ -1016,6 +1019,7 @@ fn t53_13_client_debug_hides_the_api_key() {
         base_url: "http://127.0.0.1:15605".into(),
         index_uid: "knoted_documents".into(),
         api_key_credential: None,
+        ..SearchConfig::default()
     };
     let client = meili::MeiliClient::new(&config, Some("sentinel-secret")).unwrap();
     let debug = format!("{client:?}");
@@ -1036,6 +1040,7 @@ async fn t53_14_manual_retry_replaces_a_failed_engine_task() {
         base_url: server.uri(),
         index_uid: index.into(),
         api_key_credential: None,
+        ..SearchConfig::default()
     });
     let publication = meili::publish_fulltext(&ctx, document(Uuid::new_v4(), 1, "retry"))
         .await

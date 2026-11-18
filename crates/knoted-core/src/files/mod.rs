@@ -26,7 +26,7 @@ pub mod pdf;
 
 pub mod office;
 
-mod artifact;
+pub(crate) mod artifact;
 
 pub mod browse;
 
