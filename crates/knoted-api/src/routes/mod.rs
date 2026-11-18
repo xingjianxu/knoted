@@ -6,6 +6,7 @@ pub mod auth;
 pub mod dashboard;
 pub mod files;
 pub mod health;
+pub mod jobs;
 pub mod links;
 pub mod notes;
 pub mod office;
@@ -38,6 +39,7 @@ pub fn router(ctx: AppContext, auth: AuthConfig) -> Router {
                 .merge(notes::router(auth.clone(), ctx.clone()))
                 .merge(links::router(auth.clone(), ctx.clone()))
                 .merge(files::router(auth.clone(), ctx.clone()))
+                .merge(jobs::router(auth.clone(), ctx.clone()))
                 .merge(search::router(ctx.clone()))
                 .merge(office::router(auth.clone(), ctx.clone()))
                 .merge(projects::router(auth.clone(), ctx.clone()))
