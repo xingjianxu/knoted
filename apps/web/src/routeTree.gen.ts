@@ -17,6 +17,7 @@ import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated.
 import { Route as AuthenticatedFilesRouteImport } from './routes/_authenticated.files'
 import { Route as AuthenticatedNotesRouteImport } from './routes/_authenticated.notes'
 import { Route as AuthenticatedProjectsRouteImport } from './routes/_authenticated.projects'
+import { Route as AuthenticatedSearchRouteImport } from './routes/_authenticated.search'
 import { Route as AuthenticatedTasksRouteImport } from './routes/_authenticated.tasks'
 import { Route as AuthenticatedTrashRouteImport } from './routes/_authenticated.trash'
 import { Route as AuthenticatedFilesIndexRouteImport } from './routes/_authenticated.files.index'
@@ -66,6 +67,11 @@ const AuthenticatedNotesRoute = AuthenticatedNotesRouteImport.update({
 const AuthenticatedProjectsRoute = AuthenticatedProjectsRouteImport.update({
   id: '/projects',
   path: '/projects',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedSearchRoute = AuthenticatedSearchRouteImport.update({
+  id: '/search',
+  path: '/search',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
 const AuthenticatedTasksRoute = AuthenticatedTasksRouteImport.update({
@@ -138,6 +144,7 @@ export interface FileRoutesByFullPath {
   '/files': typeof AuthenticatedFilesRouteWithChildren
   '/notes': typeof AuthenticatedNotesRouteWithChildren
   '/projects': typeof AuthenticatedProjectsRouteWithChildren
+  '/search': typeof AuthenticatedSearchRoute
   '/tasks': typeof AuthenticatedTasksRouteWithChildren
   '/trash': typeof AuthenticatedTrashRoute
   '/files/$fileId': typeof AuthenticatedFilesFileIdRoute
@@ -154,6 +161,7 @@ export interface FileRoutesByTo {
   '/bootstrap': typeof BootstrapRoute
   '/login': typeof LoginRoute
   '/recovery': typeof RecoveryRoute
+  '/search': typeof AuthenticatedSearchRoute
   '/trash': typeof AuthenticatedTrashRoute
   '/': typeof AuthenticatedIndexRoute
   '/files/$fileId': typeof AuthenticatedFilesFileIdRoute
@@ -175,6 +183,7 @@ export interface FileRoutesById {
   '/_authenticated/files': typeof AuthenticatedFilesRouteWithChildren
   '/_authenticated/notes': typeof AuthenticatedNotesRouteWithChildren
   '/_authenticated/projects': typeof AuthenticatedProjectsRouteWithChildren
+  '/_authenticated/search': typeof AuthenticatedSearchRoute
   '/_authenticated/tasks': typeof AuthenticatedTasksRouteWithChildren
   '/_authenticated/trash': typeof AuthenticatedTrashRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
@@ -198,6 +207,7 @@ export interface FileRouteTypes {
     | '/files'
     | '/notes'
     | '/projects'
+    | '/search'
     | '/tasks'
     | '/trash'
     | '/files/$fileId'
@@ -214,6 +224,7 @@ export interface FileRouteTypes {
     | '/bootstrap'
     | '/login'
     | '/recovery'
+    | '/search'
     | '/trash'
     | '/'
     | '/files/$fileId'
@@ -234,6 +245,7 @@ export interface FileRouteTypes {
     | '/_authenticated/files'
     | '/_authenticated/notes'
     | '/_authenticated/projects'
+    | '/_authenticated/search'
     | '/_authenticated/tasks'
     | '/_authenticated/trash'
     | '/_authenticated/'
@@ -311,6 +323,13 @@ declare module '@tanstack/react-router' {
       path: '/projects'
       fullPath: '/projects'
       preLoaderRoute: typeof AuthenticatedProjectsRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/search': {
+      id: '/_authenticated/search'
+      path: '/search'
+      fullPath: '/search'
+      preLoaderRoute: typeof AuthenticatedSearchRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/tasks': {
@@ -451,6 +470,7 @@ interface AuthenticatedRouteChildren {
   AuthenticatedFilesRoute: typeof AuthenticatedFilesRouteWithChildren
   AuthenticatedNotesRoute: typeof AuthenticatedNotesRouteWithChildren
   AuthenticatedProjectsRoute: typeof AuthenticatedProjectsRouteWithChildren
+  AuthenticatedSearchRoute: typeof AuthenticatedSearchRoute
   AuthenticatedTasksRoute: typeof AuthenticatedTasksRouteWithChildren
   AuthenticatedTrashRoute: typeof AuthenticatedTrashRoute
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
@@ -461,6 +481,7 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedFilesRoute: AuthenticatedFilesRouteWithChildren,
   AuthenticatedNotesRoute: AuthenticatedNotesRouteWithChildren,
   AuthenticatedProjectsRoute: AuthenticatedProjectsRouteWithChildren,
+  AuthenticatedSearchRoute: AuthenticatedSearchRoute,
   AuthenticatedTasksRoute: AuthenticatedTasksRouteWithChildren,
   AuthenticatedTrashRoute: AuthenticatedTrashRoute,
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
