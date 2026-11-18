@@ -1,12 +1,12 @@
 # RFC：一致性备份与隔离恢复
 
 - Date: 2026-11-19
-- Status: Draft
+- Status: Resolved
 - Owner: 用户 Xingjian Xu
 - Related issue: [#220](https://github.com/xingjianxu/knoted/issues/220)
 - Related tasks: [T68 一致性备份](../plans/knoted-v1/tasks/T68.md)、[T69 隔离恢复](../plans/knoted-v1/tasks/T69.md)
 - Related ADRs: [0003 测试编排](../decisions/0003-test-instance-process-management.md)、[0004 数据库归属](../decisions/0004-database-owned-by-host-user.md)、[0007 计算退出证明](../decisions/0007-execution-exit-confirmation.md)
-- Decision record: 待人工确认。
+- Decision record: [ADR 0011](../decisions/0011-consistent-backup-and-isolated-restore.md)。
 
 ## 问题与目标
 
@@ -32,7 +32,7 @@
 
 ## 影响与迁移
 
-维护准入按读写行为划分。会话续期与 `GET /auth/session` 的 CSRF 轮换分支可能写入。聊天 `POST /events` 可以在使用无续期鉴权时继续回放。图片上传在请求断开后仍需持锁。Worker 的扫描与向量调度、聊天终态补偿、索引投递、历史维护和回收各自需要纳入准入，图片回收需覆盖数据库退役与文件删除的整个过程。管理命令发放凭据也使用同一准入。确认方案后，在 T68 计划补齐 API、core 和 Worker 的接入文件及验证范围。
+维护准入按读写行为划分。会话续期与 `GET /auth/session` 的 CSRF 轮换分支可能写入。聊天 `POST /events` 可以在使用无续期鉴权时继续回放。图片上传在请求断开后仍需持锁。Worker 的扫描与向量调度、聊天终态补偿、索引投递、历史维护和回收各自需要纳入准入，图片回收需覆盖数据库退役与文件删除的整个过程。管理命令发放凭据也使用同一准入。接入文件与验证范围见 T68 计划。
 
 锁连接与业务连接需分配独立预算，避免小连接池互相等待。备份失败将由事务或连接结束释放独占锁。隔离目标保留诊断，后续重试选择新的空目标。数据库认证、测试实例编排和应用路径管理沿用既有 ADR。
 
@@ -51,3 +51,5 @@
 2026-11-19 提出推荐方案，等待用户确认。当前记录为设计和只读研究。
 
 2026-11-19 并行预审补充锁后快照、已发布任务的收束条件、资产清单和恢复 Worker 的隔离边界。
+
+2026-11-19 维护者在本任务会话确认 PR #221 的修订方案，记录为 ADR 0011。T70 生产接入保留单独授权。
