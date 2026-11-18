@@ -1030,13 +1030,16 @@ async fn publish_once(
     publication_id: Uuid,
 ) -> Result<(), DomainError> {
     let client = MeiliClient::from_context(ctx)?;
-    let record = load_record(ctx.pool(), publication_id)
+    let mut record = load_record(ctx.pool(), publication_id)
         .await?
         // The projection was cleaned up with an older superseded version: the
         // work is moot rather than broken, so the job is cancelled quietly.
         .ok_or(DomainError::Stale)?;
-    if !owns_publication(ctx, lease, job, &record).await? {
-        return Err(DomainError::Stale);
+    if record.job_id != Some(lease.job_id) {
+        rebind_publication(ctx, lease, job, &record).await?;
+        record = load_record(ctx.pool(), publication_id)
+            .await?
+            .ok_or(DomainError::Stale)?;
     }
     match PublicationStatus::parse(&record.status) {
         // Replaying a finished publication is a no-op, not a second document.
@@ -1081,39 +1084,38 @@ async fn publish_once(
     }
 }
 
-/// Whether this attempt may write the ledger row.
-///
-/// A takeover keeps the same job id, so the lease fence alone rejects it. A
-/// platform-level manual retry (`jobs::service::retry_failed`) is a new job with
-/// the same payload linked through `retry_of`; the ledger is rebound to it once
-/// the original job is terminal, otherwise a retried publication could never
-/// run.
-async fn owns_publication(
+/// A platform retry owns a new job and submits the same document key again.
+async fn rebind_publication(
     ctx: &AppContext,
     lease: &Lease,
     job: &Job,
     record: &PublicationRecord,
-) -> Result<bool, DomainError> {
-    if record.job_id == Some(lease.job_id) {
-        return Ok(true);
-    }
-    let Some(original) = record.job_id else {
-        return Ok(false);
-    };
+) -> Result<(), DomainError> {
+    let original = record.job_id.ok_or(DomainError::Stale)?;
     if job.retry_of != Some(original) {
-        return Ok(false);
+        return Err(DomainError::Stale);
     }
     let updated = sqlx::query(
-        "UPDATE fulltext_publications p SET job_id=$2, updated_at=now() \
-         FROM jobs original WHERE p.id=$1 AND p.job_id=$3 AND original.id=$3 \
-         AND original.state IN ('failed','cancelled')",
+        "UPDATE fulltext_publications p SET job_id=$2, updated_at=now(), \
+         status=CASE WHEN p.status IN ('published','superseded') THEN p.status ELSE 'pending' END, \
+         meili_task_uid=CASE WHEN p.status IN ('published','superseded') THEN p.meili_task_uid END, \
+         last_error=NULL \
+         FROM jobs original, jobs retry \
+         WHERE p.id=$1 AND p.job_id=$3 AND original.id=$3 \
+         AND original.state IN ('failed','cancelled') \
+         AND retry.id=$2 AND retry.lease_token=$4 AND retry.state='running' \
+         AND retry.lease_expires_at>clock_timestamp()",
     )
     .bind(record.id)
     .bind(lease.job_id)
     .bind(original)
+    .bind(lease.token)
     .execute(ctx.pool())
     .await?;
-    Ok(updated.rows_affected() == 1)
+    if updated.rows_affected() == 0 {
+        return Err(DomainError::Stale);
+    }
+    Ok(())
 }
 
 /// Whether the projection is still the current version of its source.
