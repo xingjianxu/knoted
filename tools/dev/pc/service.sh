@@ -19,6 +19,7 @@
 #   KNOTED_OFFICE_ORIGIN / KNOTED_OFFICE_JWT_SECRET_FILE  可选，必须同时提供；只记录凭据路径
 #   KNOTED_VECTORS_ENABLED=1  启用固定模型向量发布
 #   KNOTED_SEARCH_ENABLED=1 / KNOTED_SEARCH_CREDENTIAL_FILE  启用本机索引；可选 [secrets].meilisearch 凭据文件
+#   KNOTED_CHAT_LOCAL_BASE_URL / KNOTED_CHAT_LOCAL_MODEL / KNOTED_CHAT_LOCAL_CREDENTIAL_FILE  本机模型，可选，必须同时提供
 set -euo pipefail
 # 与 tools/dev/build-artifact.sh 一致：清单排序必须固定字节序，否则 locale 会改变 sort 结果。
 export LC_ALL=C
@@ -209,6 +210,41 @@ search_config_block() {
   fi
 }
 
+chat_local_config_block() {
+  local base_url=${KNOTED_CHAT_LOCAL_BASE_URL:-} model=${KNOTED_CHAT_LOCAL_MODEL:-}
+  local path=${KNOTED_CHAT_LOCAL_CREDENTIAL_FILE:-}
+  if [[ -z $base_url && -z $model && -z $path ]]; then
+    return 0
+  fi
+  if [[ -z $base_url || -z $model || $path != /* ]]; then
+    die "KNOTED_CHAT_LOCAL_BASE_URL、KNOTED_CHAT_LOCAL_MODEL 与绝对 KNOTED_CHAT_LOCAL_CREDENTIAL_FILE 必须一起提供"
+  fi
+  local value
+  for value in "$base_url" "$model" "$path"; do
+    if [[ $value == *['"\']* || $value =~ [[:cntrl:]] ]]; then
+      die "KNOTED_CHAT_LOCAL 配置包含不安全的 TOML 字符"
+    fi
+  done
+
+  # Use the WHATWG URL parsing already available in pcwrap's Node runtime.
+  # Suppress parser diagnostics because a malformed URL could include userinfo.
+  command -v node >/dev/null || die "KNOTED_CHAT_LOCAL 配置需要 node 校验回环 URL"
+  if ! node - >/dev/null 2>&1 <<'JS'
+const url = new URL(process.env.KNOTED_CHAT_LOCAL_BASE_URL);
+const model = process.env.KNOTED_CHAT_LOCAL_MODEL;
+const loopback = url.hostname === "[::1]" || /^127(?:\.[0-9]+){3}$/.test(url.hostname);
+if (!loopback || !["http:", "https:"].includes(url.protocol) || url.username || url.password ||
+    /[?#]/.test(url.href) || /\p{Cc}|^\p{White_Space}|\p{White_Space}$/u.test(model)) {
+  process.exitCode = 1;
+}
+JS
+  then
+    die "KNOTED_CHAT_LOCAL_BASE_URL 必须是无凭据、查询和片段的 HTTP(S) 回环地址，KNOTED_CHAT_LOCAL_MODEL 不得含控制字符或首尾空白"
+  fi
+
+  printf '\n[chat.local]\nbase_url = "%s"\nmodel = "%s"\ncredential_file = "%s"\n' "$base_url" "$model" "$path"
+}
+
 command_prepare() {
   # 顺序：守卫 → 验产物 → 验依赖 → 建目录 → 渲染，失败时不留半个实例。
   guard_worktree
@@ -216,9 +252,10 @@ command_prepare() {
   revision=$(verify_runtime)
   log "固定产物 revision=$revision"
   require_tools
-  local office search vectors=''
+  local office search chat_local vectors=''
   office=$(office_config_block)
   search=$(search_config_block)
+  chat_local=$(chat_local_config_block)
   case "${KNOTED_VECTORS_ENABLED:-0}" in
     0) ;;
     1) vectors=$'\n[vectors]\nenabled = true' ;;
@@ -244,7 +281,8 @@ command_prepare() {
     @STAGING_ROOT@ "$instance_root/staging" \
     @OFFICE_CONFIG@ "$office" \
     @SEARCH_CONFIG@ "$search" \
-    @VECTORS_CONFIG@ "$vectors"
+    @VECTORS_CONFIG@ "$vectors" \
+    @CHAT_LOCAL_CONFIG@ "$chat_local"
 
   check_ports
   log "prepare 完成：配置 $config_file；HTTPS 由宿主 Caddy 管理"
