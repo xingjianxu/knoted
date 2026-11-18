@@ -171,7 +171,12 @@ fn problem(id: RequestId, error: DomainError) -> Response {
             "payload_too_large",
             "chat message too large",
         ),
-        DomainError::Database(_) | DomainError::Queue(_) => (
+        DomainError::ProviderUnavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "model_provider_unavailable",
+            "configured model provider unavailable",
+        ),
+        DomainError::Database(_) | DomainError::Queue(_) | DomainError::Context(_) => (
             StatusCode::SERVICE_UNAVAILABLE,
             "dependency_unavailable",
             "chat storage unavailable",

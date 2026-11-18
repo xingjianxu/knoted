@@ -1,3 +1,9 @@
+ALTER TABLE generation_runs
+    ADD COLUMN input_tokens integer CHECK (input_tokens BETWEEN 1 AND 28672),
+    ADD COLUMN output_token_budget integer CHECK (output_token_budget = 4096),
+    ADD CONSTRAINT generation_budget_pair
+        CHECK ((input_tokens IS NULL) = (output_token_budget IS NULL));
+
 CREATE TABLE rag_source_visibility (
     source_type text NOT NULL CHECK (source_type IN ('file','note','task')),
     source_id uuid NOT NULL,
@@ -41,15 +47,31 @@ FOR EACH ROW WHEN ((OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL)
                    OR OLD.version<>NEW.version)
 EXECUTE FUNCTION rag_source_hidden('task');
 
-CREATE TRIGGER rag_file_hidden AFTER UPDATE OF status,content_version ON file_sources
+CREATE TRIGGER rag_file_hidden AFTER UPDATE OF status,content_fresh,content_version ON file_sources
 FOR EACH ROW WHEN ((OLD.status='present' AND NEW.status='missing')
+                   OR (OLD.content_fresh AND NOT NEW.content_fresh)
                    OR OLD.content_version<>NEW.content_version)
 EXECUTE FUNCTION rag_source_hidden('file');
 
-CREATE FUNCTION rag_project_tasks_hidden() RETURNS trigger
+CREATE FUNCTION rag_file_extraction_changed() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
-    PERFORM rag_bump_visibility('task',id) FROM tasks WHERE project_id=NEW.id;
+    PERFORM rag_bump_visibility('file',NEW.source_id);
+    RETURN NEW;
+END
+$$;
+
+CREATE TRIGGER rag_file_extraction_changed AFTER INSERT ON file_extractions
+FOR EACH ROW EXECUTE FUNCTION rag_file_extraction_changed();
+
+CREATE FUNCTION rag_project_tasks_hidden() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+    task_id uuid;
+BEGIN
+    FOR task_id IN SELECT id FROM tasks WHERE project_id=NEW.id ORDER BY id LOOP
+        PERFORM rag_bump_visibility('task',task_id);
+    END LOOP;
     RETURN NEW;
 END
 $$;

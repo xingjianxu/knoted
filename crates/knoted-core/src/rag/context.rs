@@ -10,7 +10,7 @@ use crate::{context::AppContext, search::meili::SourceType};
 
 pub const CONTEXT_TOKENS: usize = 32 * 1024;
 pub const OUTPUT_TOKENS: usize = 4 * 1024;
-const MESSAGE_FRAMING_TOKENS: usize = 12;
+const MESSAGE_FRAMING_TOKENS: usize = 16;
 const RUN_FRAMING_TOKENS: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -32,6 +32,7 @@ pub struct HistoryTurn {
 
 #[derive(Debug)]
 pub struct ContextEvidence {
+    pub chunk_id: Uuid,
     pub text: String,
     pub dependency: SourceDependency,
 }
@@ -157,6 +158,9 @@ pub async fn verify_generation_sources(
     tx: &mut PgConnection,
     dependencies: &[SourceDependency],
 ) -> Result<(), ContextError> {
+    if dependencies.is_empty() {
+        return Ok(());
+    }
     // Mutations bump the same rows in their own transaction. Hold a share lock
     // through this short state transition, never while streaming the model.
     let kinds: Vec<_> = dependencies

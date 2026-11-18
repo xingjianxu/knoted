@@ -101,10 +101,17 @@ async fn run_server(args: Vec<String>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let Ok(chat_providers) =
+        knoted_core::rag::providers::ProviderRegistry::new(config.chat.clone())
+    else {
+        tracing::error!("model provider registry unavailable");
+        return ExitCode::FAILURE;
+    };
     let ctx = AppContext::new(pool)
         .with_asset_root(config.assets.root.clone())
         .with_files(config.files.clone())
         .with_office(config.office.as_ref(), config.auth())
+        .with_chat_providers(std::sync::Arc::new(chat_providers))
         .with_search(config.search.clone())
         .with_search_api_key(config.search_api_key());
 
