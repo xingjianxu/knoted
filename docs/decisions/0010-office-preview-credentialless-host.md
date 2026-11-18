@@ -5,7 +5,7 @@
 - Decision owner: Knoted 项目维护者
 - Confirmation: 2026-11-18 当前 T51/T52 会话，维护者在「浏览器隔离」中选择「在 Knoted 隔离 (Recommended)」，接受不支持 `credentialless` 的浏览器关闭 Office 预览、保留普通下载。
 - Related issues: [#180](https://github.com/xingjianxu/knoted/issues/180)
-- Related PRs: 尚未创建
+- Related PRs: [#183](https://github.com/xingjianxu/knoted/pull/183)
 - Supersedes: 无；细化 [ADR 0008](0008-office-preview-authorization.md) 网页边界
 - Superseded by: 无
 
