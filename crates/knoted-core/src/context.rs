@@ -83,6 +83,7 @@ pub struct AppContext {
     files: crate::config::FilesConfig,
     intelligence: crate::config::IntelligenceConfig,
     search: crate::config::SearchConfig,
+    vectors_enabled: bool,
     search_api_key: Option<String>,
     office: Option<Arc<crate::files::office::PreviewStore>>,
 }
@@ -97,6 +98,7 @@ impl AppContext {
             files: crate::config::FilesConfig::default(),
             intelligence: crate::config::IntelligenceConfig::default(),
             search: crate::config::SearchConfig::default(),
+            vectors_enabled: false,
             search_api_key: None,
             office: None,
         }
@@ -132,6 +134,14 @@ impl AppContext {
     }
     pub fn files(&self) -> &crate::config::FilesConfig {
         &self.files
+    }
+
+    pub fn with_vectors_enabled(mut self, enabled: bool) -> Self {
+        self.vectors_enabled = enabled;
+        self
+    }
+    pub fn vectors_enabled(&self) -> bool {
+        self.vectors_enabled
     }
 
     pub fn with_search(mut self, config: crate::config::SearchConfig) -> Self {
