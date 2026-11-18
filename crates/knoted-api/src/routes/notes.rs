@@ -108,7 +108,7 @@ fn json_error(id: RequestId, error: JsonRejection) -> Response {
         bad(id)
     }
 }
-fn error(id: RequestId, error: DomainError) -> Response {
+pub(super) fn error(id: RequestId, error: DomainError) -> Response {
     let (status, code, message) = match &error {
         DomainError::NotFound => (StatusCode::NOT_FOUND, "not_found", "note not found"),
         DomainError::Conflict { .. } => (

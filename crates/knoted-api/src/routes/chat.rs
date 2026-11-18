@@ -27,6 +27,7 @@ use knoted_core::{
     rag::{
         chat::{self, ChatEvent, ChatScope, DomainError},
         citations::{self, CitationError, GetCitationSnapshots},
+        save_note::{self, SaveAnswer, SaveError},
     },
 };
 use serde::{Deserialize, Deserializer, Serialize};
@@ -46,8 +47,65 @@ pub fn router(auth: AuthConfig, ctx: AppContext) -> Router<AppContext> {
         .route("/chat/runs/{run_id}/cancel", post(cancel))
         .route("/chat/runs/{run_id}/retry", post(retry))
         .route("/chat/messages/{message_id}/citations", get(list_citations))
+        .route("/chat/messages/{message_id}/save-note", post(save_answer))
         .route_layer(from_fn_with_state(auth, require_csrf))
         .route_layer(from_fn_with_state(ctx, require_session))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SaveNoteRequest {
+    title: String,
+    parent_id: Option<Uuid>,
+}
+
+#[derive(Serialize)]
+struct SaveNoteResponse {
+    note_id: Uuid,
+}
+
+async fn save_answer(
+    State(ctx): State<AppContext>,
+    Extension(actor): Extension<CurrentSession>,
+    id: RequestId,
+    path: Result<Path<Uuid>, PathRejection>,
+    headers: HeaderMap,
+    body: Result<Json<SaveNoteRequest>, JsonRejection>,
+) -> Response {
+    let Ok(Path(message_id)) = path else {
+        return bad(id);
+    };
+    let Json(body) = match body {
+        Ok(body) => body,
+        Err(error) => return json_error(id, error),
+    };
+    let Some(key) = idempotency_key(&headers) else {
+        return bad(id);
+    };
+    let result = save_note::save_answer_as_note(
+        &ctx,
+        SaveAnswer {
+            user_id: actor.session.user_id,
+            message_id,
+            title: body.title,
+            parent_id: body.parent_id,
+            idempotency_key: key.into(),
+        },
+    )
+    .await;
+    match result {
+        Ok(note_id) => data(StatusCode::CREATED, SaveNoteResponse { note_id }, None),
+        Err(SaveError::BadKey) => bad(id),
+        Err(SaveError::NotFound) => problem(id, DomainError::NotFound),
+        Err(SaveError::Conflict) => problem(
+            id,
+            DomainError::Conflict {
+                current_version: None,
+            },
+        ),
+        Err(SaveError::Note(error)) => super::notes::error(id, error),
+        Err(SaveError::Database(error)) => problem(id, DomainError::Database(error)),
+    }
 }
 
 #[derive(Deserialize)]
@@ -320,6 +378,10 @@ async fn delete(
     }
 }
 
+fn idempotency_key(headers: &HeaderMap) -> Option<&str> {
+    headers.get("idempotency-key")?.to_str().ok()
+}
+
 async fn submit(
     State(ctx): State<AppContext>,
     Extension(actor): Extension<CurrentSession>,
@@ -335,10 +397,7 @@ async fn submit(
         Ok(body) => body,
         Err(error) => return json_error(id, error),
     };
-    let Some(key) = headers
-        .get("idempotency-key")
-        .and_then(|value| value.to_str().ok())
-    else {
+    let Some(key) = idempotency_key(&headers) else {
         return bad(id);
     };
     match chat::submit_message(

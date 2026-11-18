@@ -80,7 +80,7 @@ function closedStream(...frames: Event[]) {
 }
 
 async function openApp(
-  handle: (path: string, request: Request) => Response | Promise<Response> | undefined,
+  handle: (path: string, request: Request) => Response | Promise<Response | undefined> | undefined,
   start = `/chat/${sessionA}`,
 ) {
   document.cookie = `knoted_csrf=${fixtureCsrf}; path=/`;
@@ -364,4 +364,65 @@ it("creates a session with an explicit named external service and submits the se
   await screen.findByText("已完成");
   const submission = view.requests.find(toMessages);
   expect(await submission?.json()).toEqual({ content: question.body, scope: { types: ["note"] } });
+});
+
+it("t66_5 saves only a complete answer and reuses the key on retry", async () => {
+  const attempts: Array<{ key: string | null; body: unknown }> = [];
+  const noteID = "d47ce8bd-1203-468f-832b-9e43509782d5";
+  const partialID = "7af7728e-c8d1-4eb0-812d-72551251c552";
+  const parentID = "738433a7-19bd-432a-8b16-699f2bde28a3";
+  await openApp(async (path, request) => {
+    if (path === `/chat/sessions/${sessionA}`) {
+      return json(session(sessionA, [{ ...answer, id: partialID, body: "部分答复", incomplete: true }, question, answer]));
+    }
+    if (path === "/notes") return json({
+      items: [{
+        id: parentID, parent_id: null, title: "目标父页", document: { blocks: [] },
+        format_version: 1, content_version: 1, position: 0, deleted_at: null,
+        created_at: timestamp, updated_at: timestamp,
+      }],
+      next_cursor: null,
+    });
+    if (path === `/chat/messages/${answerID}/save-note`) {
+      expect(request.headers.get("x-csrf-token")).toBe(fixtureCsrf);
+      attempts.push({ key: request.headers.get("idempotency-key"), body: await request.json() });
+      return attempts.length === 1
+        ? json({ code: "dependency_unavailable", message: "fixture", request_id: runID }, 503)
+        : json({ note_id: noteID }, 201);
+    }
+  });
+
+  await screen.findByText(answer.body);
+  const action = screen.getByRole("button", { name: "存为笔记" });
+  expect(within(action.closest("li")!).getByText(answer.body)).toBeInTheDocument();
+  fireEvent.click(action);
+  const dialog = await screen.findByRole("dialog", { name: "存为笔记" });
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "标题" }), { target: { value: "项目风险" } });
+  fireEvent.click(await within(dialog).findByRole("combobox", { name: "父页" }));
+  const parentOption = await screen.findByRole("option", { name: "目标父页" });
+  fireEvent.pointerDown(parentOption, { pointerType: "mouse" });
+  fireEvent.click(parentOption);
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent("保存失败");
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  expect(await screen.findByRole("link", { name: "打开笔记" })).toHaveAttribute("href", `/notes/${noteID}`);
+  expect(attempts).toHaveLength(2);
+  expect(attempts[0]?.key).toBeTruthy();
+  expect(attempts[0]?.body).toEqual({ title: "项目风险", parent_id: parentID });
+  expect(attempts[1]).toEqual(attempts[0]);
+});
+
+it("t66_6 can save to the root when the parent list cannot load", async () => {
+  const noteID = "698c0bbc-e2df-4008-888f-d240ce890318";
+  await openApp((path) => {
+    if (path === `/chat/sessions/${sessionA}`) return json(session(sessionA, [question, answer]));
+    if (path === "/notes") return json({ code: "dependency_unavailable", message: "fixture", request_id: runID }, 503);
+    if (path === `/chat/messages/${answerID}/save-note`) return json({ note_id: noteID }, 201);
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "存为笔记" }));
+  const dialog = await screen.findByRole("dialog", { name: "存为笔记" });
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "标题" }), { target: { value: "主页笔记" } });
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent("无法读取笔记目录");
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  expect(await screen.findByRole("link", { name: "打开笔记" })).toHaveAttribute("href", `/notes/${noteID}`);
 });
