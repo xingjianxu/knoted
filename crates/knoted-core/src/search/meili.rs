@@ -677,7 +677,7 @@ impl MeiliClient {
         MeiliClient::new(ctx.search(), ctx.search_api_key())
     }
 
-    fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
+    pub(crate) fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
         let builder = self.http.request(method, format!("{}/{path}", self.base));
         match &self.api_key {
             Some(key) => builder.bearer_auth(key),
@@ -685,7 +685,10 @@ impl MeiliClient {
         }
     }
 
-    async fn send(&self, request: reqwest::RequestBuilder) -> Result<Value, DomainError> {
+    pub(crate) async fn send(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<Value, DomainError> {
         let response = request.send().await.map_err(|_| DomainError::Unavailable)?;
         let status = response.status();
         let body: Value = response.json().await.unwrap_or(Value::Null);
@@ -710,6 +713,14 @@ impl MeiliClient {
     /// write is waited for, so "the index exists" always means "the index can
     /// answer with the fields T54 filters and sorts on".
     pub async fn ensure_index(&self, uid: &str) -> Result<(), DomainError> {
+        self.ensure_index_settings(uid, &engine_settings()).await
+    }
+
+    pub(crate) async fn ensure_index_settings(
+        &self,
+        uid: &str,
+        expected: &Value,
+    ) -> Result<(), DomainError> {
         let response = self
             .request(reqwest::Method::GET, &format!("indexes/{uid}"))
             .send()
@@ -761,11 +772,11 @@ impl MeiliClient {
         if !status.is_success() {
             return Err(DomainError::Unavailable);
         }
-        if !settings_match(&settings) {
+        if !settings_match(&settings, expected) {
             let body = self
                 .send(
                     self.request(reqwest::Method::PATCH, &format!("indexes/{uid}/settings"))
-                        .json(&engine_settings()),
+                        .json(expected),
                 )
                 .await?;
             self.require_task(task_uid(&body)?).await?;
@@ -785,10 +796,18 @@ impl MeiliClient {
 
     /// Upserts one document and returns the engine task id.
     pub async fn submit_document(&self, uid: &str, document: Value) -> Result<i64, DomainError> {
+        self.submit_documents(uid, &[document]).await
+    }
+
+    pub(crate) async fn submit_documents(
+        &self,
+        uid: &str,
+        documents: &[Value],
+    ) -> Result<i64, DomainError> {
         let body = self
             .send(
                 self.request(reqwest::Method::PUT, &format!("indexes/{uid}/documents"))
-                    .json(&[document]),
+                    .json(documents),
             )
             .await?;
         task_uid(&body)
@@ -865,15 +884,15 @@ fn engine_settings() -> Value {
 }
 
 /// Whether the engine already carries the fields this protocol depends on.
-fn settings_match(settings: &Value) -> bool {
-    let has_all = |field: &str, expected: &[&str]| {
-        settings[field]
-            .as_array()
-            .is_some_and(|values| expected.iter().all(|value| values.contains(&json!(value))))
-    };
-    has_all("searchableAttributes", SEARCHABLE_ATTRIBUTES)
-        && has_all("filterableAttributes", FILTERABLE_ATTRIBUTES)
-        && has_all("sortableAttributes", SORTABLE_ATTRIBUTES)
+fn settings_match(settings: &Value, expected: &Value) -> bool {
+    expected.as_object().is_some_and(|fields| {
+        fields.iter().all(|(field, value)| match value.as_array() {
+            Some(wanted) => settings[field]
+                .as_array()
+                .is_some_and(|actual| wanted.iter().all(|element| actual.contains(element))),
+            None => settings[field] == *value,
+        })
+    })
 }
 
 /// Runs one full-text job. Called by the worker dispatcher; tests call it
@@ -935,13 +954,16 @@ async fn publish_once(
     publication_id: Uuid,
 ) -> Result<(), DomainError> {
     let client = MeiliClient::from_context(ctx)?;
-    let record = load_record(ctx.pool(), publication_id)
+    let mut record = load_record(ctx.pool(), publication_id)
         .await?
         // The projection was cleaned up with an older superseded version: the
         // work is moot rather than broken, so the job is cancelled quietly.
         .ok_or(DomainError::Stale)?;
-    if !owns_publication(ctx, lease, job, &record).await? {
-        return Err(DomainError::Stale);
+    if record.job_id != Some(lease.job_id) {
+        rebind_publication(ctx, lease, job, &record).await?;
+        record = load_record(ctx.pool(), publication_id)
+            .await?
+            .ok_or(DomainError::Stale)?;
     }
     match PublicationStatus::parse(&record.status) {
         // Replaying a finished publication is a no-op, not a second document.
@@ -986,39 +1008,38 @@ async fn publish_once(
     }
 }
 
-/// Whether this attempt may write the ledger row.
-///
-/// A takeover keeps the same job id, so the lease fence alone rejects it. A
-/// platform-level manual retry (`jobs::service::retry_failed`) is a new job with
-/// the same payload linked through `retry_of`; the ledger is rebound to it once
-/// the original job is terminal, otherwise a retried publication could never
-/// run.
-async fn owns_publication(
+/// A platform retry owns a new job and submits the same document key again.
+async fn rebind_publication(
     ctx: &AppContext,
     lease: &Lease,
     job: &Job,
     record: &PublicationRecord,
-) -> Result<bool, DomainError> {
-    if record.job_id == Some(lease.job_id) {
-        return Ok(true);
-    }
-    let Some(original) = record.job_id else {
-        return Ok(false);
-    };
+) -> Result<(), DomainError> {
+    let original = record.job_id.ok_or(DomainError::Stale)?;
     if job.retry_of != Some(original) {
-        return Ok(false);
+        return Err(DomainError::Stale);
     }
     let updated = sqlx::query(
-        "UPDATE fulltext_publications p SET job_id=$2, updated_at=now() \
-         FROM jobs original WHERE p.id=$1 AND p.job_id=$3 AND original.id=$3 \
-         AND original.state IN ('failed','cancelled')",
+        "UPDATE fulltext_publications p SET job_id=$2, updated_at=now(), \
+         status=CASE WHEN p.status IN ('published','superseded') THEN p.status ELSE 'pending' END, \
+         meili_task_uid=CASE WHEN p.status IN ('published','superseded') THEN p.meili_task_uid END, \
+         last_error=NULL \
+         FROM jobs original, jobs retry \
+         WHERE p.id=$1 AND p.job_id=$3 AND original.id=$3 \
+         AND original.state IN ('failed','cancelled') \
+         AND retry.id=$2 AND retry.lease_token=$4 AND retry.state='running' \
+         AND retry.lease_expires_at>clock_timestamp()",
     )
     .bind(record.id)
     .bind(lease.job_id)
     .bind(original)
+    .bind(lease.token)
     .execute(ctx.pool())
     .await?;
-    Ok(updated.rows_affected() == 1)
+    if updated.rows_affected() == 0 {
+        return Err(DomainError::Stale);
+    }
+    Ok(())
 }
 
 /// Whether the projection is still the current version of its source.

@@ -770,7 +770,7 @@ def _compute(spec: dict[str, Any]) -> dict[str, Any]:
 
     ``parse`` runs the locked Docling/RapidOCR adapter (:mod:`parsing`).
     ``embed`` runs the locked dense BGE-M3 adapter (:mod:`embedding.bge`) on the
-    staged input object, which is UTF-8 text with one text per non-blank line.
+    staged input object, using the format named by its options revision.
     The artifact layouts and the metadata below are the part the protocol
     depends on.
     """
@@ -831,8 +831,14 @@ def _compute(spec: dict[str, Any]) -> dict[str, Any]:
         parsing_models.check_artifact_size(len(json.dumps(payload, sort_keys=True).encode("utf-8")))
         return payload
     if spec["kind"] == "embed":
-        texts = _read_embed_texts(Path(spec["input_path"]))
-        vectors = bge.embed_dense(texts)
+        from .embedding import service
+
+        path = Path(spec["input_path"])
+        if spec["options_revision"].startswith(service.OPTIONS_PREFIX):
+            result = service.embed_chunks(path, spec["options_revision"])
+        else:
+            texts = _read_embed_texts(path)
+            result = {"text_count": len(texts), "vectors": bge.embed_dense(texts)}
         return {
             **base,
             "model": bge.MODEL_REPO,
@@ -842,8 +848,7 @@ def _compute(spec: dict[str, Any]) -> dict[str, Any]:
             "dtype": bge.OUTPUT_DTYPE,
             "device": bge.loaded_device(),
             "lock": bge.lock_summary(),
-            "text_count": len(texts),
-            "vectors": vectors,
+            **result,
         }
     raise ValueError(f"unsupported execution kind {spec['kind']!r}")
 
@@ -851,8 +856,7 @@ def _compute(spec: dict[str, Any]) -> dict[str, Any]:
 def _read_embed_texts(path: Path) -> list[str]:
     """Reads the embed input object: UTF-8 text, one text per non-blank line.
 
-    T11 defines this provisional wire format; the batch/chunk adapter (T58)
-    owns the final one. Blank lines are separators, surrounding whitespace is
+    This format preserves T11 executions. Blank lines are separators, surrounding whitespace is
     trimmed, and an empty object is a stable ``empty_input`` failure instead of
     an execution that succeeds with zero vectors.
     """

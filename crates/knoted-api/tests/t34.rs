@@ -914,13 +914,15 @@ async fn t34_migration_empty_upgrade_and_unknown_rows_preserved() {
     let old = include_str!("../../../migrations/0009_t33_projects.sql");
     let old = &old[old.find("CREATE TABLE tasks (").unwrap()..];
     for populated in [false, true] {
-        // The replay starts from the T33 shape. Later cards add tables that
-        // reference `tasks`, so those are dropped first; a new dependent table
-        // must be listed here rather than hidden behind CASCADE.
-        sqlx::raw_sql("DROP TABLE IF EXISTS activity_revisions, activities, tasks")
-            .execute(&h.db.pool)
-            .await
-            .unwrap();
+        // The replay starts from the T33 shape. List each later dependency
+        // explicitly instead of hiding dependencies behind CASCADE.
+        sqlx::raw_sql(
+            "DROP VIEW IF EXISTS current_rag_sources, rag_source_snapshots;
+             DROP TABLE IF EXISTS activity_revisions, activities, tasks",
+        )
+        .execute(&h.db.pool)
+        .await
+        .unwrap();
         sqlx::raw_sql(old).execute(&h.db.pool).await.unwrap();
         if populated {
             let id = Uuid::new_v4();
