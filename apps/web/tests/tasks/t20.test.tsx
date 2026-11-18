@@ -206,12 +206,12 @@ describe("t20 auth routes", () => {
     expect(safeReturnTo("/search?q=%E7%AC%94%E8%AE%B0&type=note")).toBe("/search?q=%E7%AC%94%E8%AE%B0&type=note");
     expect(safeReturnTo("/search//evil.example")).toBe("/");
   });
-  it("enables implemented navigation entries and leaves chat disabled", async () => {
+  it("enables implemented navigation entries", async () => {
     loggedIn = true;
     await mount("/");
     expect(await screen.findByRole("button", { name: "文件" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "搜索" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: /问答/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "问答" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "笔记" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "项目" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "事项" })).toBeEnabled();

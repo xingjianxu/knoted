@@ -176,6 +176,9 @@ function prepareEnv({ runtimeRoot, instanceRoot, certDir, apiPort, httpsPort, in
     KNOTED_SEARCH_CREDENTIAL_FILE: "",
     KNOTED_OFFICE_ORIGIN: "",
     KNOTED_OFFICE_JWT_SECRET_FILE: "",
+    KNOTED_CHAT_LOCAL_BASE_URL: "",
+    KNOTED_CHAT_LOCAL_MODEL: "",
+    KNOTED_CHAT_LOCAL_CREDENTIAL_FILE: "",
     DATABASE_URL: "postgres://dev@127.0.0.1:5432/dev",
     ...extra,
   };
@@ -269,6 +272,7 @@ describe("prepare", () => {
     assert.ok(toml.includes(`staging_root = "${fixture.instanceRoot}/staging"`));
     assert.match(toml, /\[files\]\nenabled = true/);
     assert.doesNotMatch(toml, /^\[office\]$/m);
+    assert.doesNotMatch(toml, /^\[chat(?:\.|\])/m);
 
     assert.equal(statSync(join(fixture.instanceRoot, "config/knoted.toml")).mode & 0o777, 0o600);
     assert.equal(statSync(join(fixture.instanceRoot, "state")).mode & 0o777, 0o700);
@@ -304,6 +308,58 @@ describe("prepare", () => {
       });
       assert.equal(result.status, 1);
       assert.equal(existsSync(join(fixture.instanceRoot, "config/knoted.toml")), false);
+    }
+  });
+
+  it("显式配置回环模型并只记录绝对凭据路径", async () => {
+    const fixture = await fullFixture();
+    const path = join(fixture.base, "not-created model credential");
+    for (const url of ["http://127.42.0.2:15604/v1", "https://[0:0:0:0:0:0:0:1]:15604/models"]) {
+      const result = run("bash", [serviceScript, "prepare"], {
+        env: prepareEnv(fixture, {
+          KNOTED_CHAT_LOCAL_BASE_URL: url,
+          KNOTED_CHAT_LOCAL_MODEL: "strata/model&variant",
+          KNOTED_CHAT_LOCAL_CREDENTIAL_FILE: path,
+        }),
+      });
+      assert.equal(result.status, 0, result.stderr);
+      const config = readFileSync(join(fixture.instanceRoot, "config/knoted.toml"), "utf8");
+      assert.ok(config.includes(`[chat.local]\nbase_url = "${url}"\nmodel = "strata/model&variant"\ncredential_file = "${path}"\n`));
+      assert.equal(existsSync(path), false);
+    }
+  });
+
+  it("拒绝缺项、非回环端点和不安全的 TOML 值，错误不回显配置值", async () => {
+    const fixture = await fullFixture();
+    const valid = {
+      KNOTED_CHAT_LOCAL_BASE_URL: "http://127.0.0.1:15604",
+      KNOTED_CHAT_LOCAL_MODEL: "test-model",
+      KNOTED_CHAT_LOCAL_CREDENTIAL_FILE: join(fixture.base, "model-credential"),
+    };
+    for (const override of [
+      { KNOTED_CHAT_LOCAL_BASE_URL: "" },
+      { KNOTED_CHAT_LOCAL_MODEL: "" },
+      { KNOTED_CHAT_LOCAL_CREDENTIAL_FILE: "" },
+      { KNOTED_CHAT_LOCAL_BASE_URL: "https://localhost:15604" },
+      { KNOTED_CHAT_LOCAL_BASE_URL: "https://127.0.0.1.example.test" },
+      { KNOTED_CHAT_LOCAL_BASE_URL: "http://[::ffff:127.0.0.1]:15604" },
+      { KNOTED_CHAT_LOCAL_BASE_URL: "ftp://127.0.0.1:15604" },
+      { KNOTED_CHAT_LOCAL_BASE_URL: "http://user:must-not-appear@127.0.0.1:15604" },
+      { KNOTED_CHAT_LOCAL_BASE_URL: "http://127.0.0.1:65536" },
+      { KNOTED_CHAT_LOCAL_BASE_URL: "http://127.0.0.1:15604?" },
+      { KNOTED_CHAT_LOCAL_BASE_URL: "http://127.0.0.1:15604#" },
+      { KNOTED_CHAT_LOCAL_MODEL: " leading-space" },
+      { KNOTED_CHAT_LOCAL_MODEL: 'bad"\n[extra]' },
+      { KNOTED_CHAT_LOCAL_CREDENTIAL_FILE: "relative-path" },
+      { KNOTED_CHAT_LOCAL_CREDENTIAL_FILE: "/path\\invalid" },
+    ]) {
+      const result = run("bash", [serviceScript, "prepare"], {
+        env: prepareEnv(fixture, { ...valid, ...override }),
+      });
+      assert.equal(result.status, 1, JSON.stringify(Object.keys(override)));
+      assert.match(result.stderr, /KNOTED_CHAT_LOCAL/);
+      assert.doesNotMatch(result.stdout + result.stderr, /must-not-appear/);
+      assert.equal(existsSync(fixture.instanceRoot), false);
     }
   });
 
