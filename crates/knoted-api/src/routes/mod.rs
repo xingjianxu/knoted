@@ -3,6 +3,7 @@
 pub mod activities;
 pub mod assets;
 pub mod auth;
+pub mod chat;
 pub mod dashboard;
 pub mod files;
 pub mod health;
@@ -34,6 +35,7 @@ pub fn router(ctx: AppContext, auth: AuthConfig) -> Router {
             "/api/v1",
             auth::router(auth.clone(), ctx.clone())
                 .merge(sessions::router(auth.clone(), ctx.clone()))
+                .merge(chat::router(auth.clone(), ctx.clone()))
                 .merge(notes::router(auth.clone(), ctx.clone()))
                 .merge(links::router(auth.clone(), ctx.clone()))
                 .merge(files::router(auth.clone(), ctx.clone()))
