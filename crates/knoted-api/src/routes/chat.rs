@@ -24,7 +24,10 @@ use axum::{
 use knoted_core::{
     config::AuthConfig,
     context::AppContext,
-    rag::chat::{self, ChatEvent, ChatScope, DomainError},
+    rag::{
+        chat::{self, ChatEvent, ChatScope, DomainError},
+        citations::{self, CitationError, GetCitationSnapshots},
+    },
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use std::{collections::VecDeque, convert::Infallible, time::Duration};
@@ -42,8 +45,49 @@ pub fn router(auth: AuthConfig, ctx: AppContext) -> Router<AppContext> {
         .route("/chat/runs/{run_id}/events", post(stream))
         .route("/chat/runs/{run_id}/cancel", post(cancel))
         .route("/chat/runs/{run_id}/retry", post(retry))
+        .route("/chat/messages/{message_id}/citations", get(list_citations))
         .route_layer(from_fn_with_state(auth, require_csrf))
         .route_layer(from_fn_with_state(ctx, require_session))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CitationQuery {
+    cursor: Option<String>,
+    limit: Option<u32>,
+}
+
+async fn list_citations(
+    State(ctx): State<AppContext>,
+    Extension(actor): Extension<CurrentSession>,
+    id: RequestId,
+    path: Result<Path<Uuid>, PathRejection>,
+    query: Result<Query<CitationQuery>, QueryRejection>,
+) -> Response {
+    let (Ok(Path(message_id)), Ok(Query(query))) = (path, query) else {
+        return bad(id);
+    };
+    match citations::get_citation_snapshots(
+        &ctx,
+        GetCitationSnapshots {
+            user_id: actor.session.user_id,
+            message_id,
+            cursor: query.cursor,
+            limit: query.limit,
+        },
+    )
+    .await
+    {
+        Ok(page) => data(StatusCode::OK, page, None),
+        Err(CitationError::NotFound) => problem(id, DomainError::NotFound),
+        Err(CitationError::BadQuery) => bad(id),
+        Err(CitationError::Database(_) | CitationError::Invalid) => ApiErrorBody::new(
+            "dependency_unavailable",
+            "citation storage unavailable",
+            id.get(),
+        )
+        .into_response(StatusCode::SERVICE_UNAVAILABLE),
+    }
 }
 
 #[derive(Deserialize)]
@@ -132,7 +176,7 @@ fn problem(id: RequestId, error: DomainError) -> Response {
             "model_provider_unavailable",
             "configured model provider unavailable",
         ),
-        DomainError::Database(_) | DomainError::Queue(_) => (
+        DomainError::Database(_) | DomainError::Queue(_) | DomainError::Context(_) => (
             StatusCode::SERVICE_UNAVAILABLE,
             "dependency_unavailable",
             "chat storage unavailable",

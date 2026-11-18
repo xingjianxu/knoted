@@ -360,3 +360,28 @@ credential_file = "{}"
     let err = AppConfig::load(&path).unwrap_err();
     assert!(!format!("{err:?} {err}").contains(&marker));
 }
+
+#[test]
+fn t61_external_registry_accepts_only_api_provider_names() {
+    use knoted_core::rag::providers::{ChatProvidersConfig, ProviderConfig, ProviderRegistry};
+    use std::path::PathBuf;
+    for (name, accepted) in [
+        ("-outside", false),
+        ("_outside", false),
+        ("outside-1", true),
+    ] {
+        let config = ChatProvidersConfig {
+            local: None,
+            external: [(
+                name.into(),
+                ProviderConfig {
+                    base_url: "https://example.invalid".into(),
+                    model: "fixture-model".into(),
+                    credential_file: PathBuf::from("/run/knoted/fixture.key"),
+                },
+            )]
+            .into(),
+        };
+        assert_eq!(ProviderRegistry::new(config).is_ok(), accepted);
+    }
+}

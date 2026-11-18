@@ -36,7 +36,10 @@ impl ChatProvidersConfig {
             local.api_url(true)?;
         }
         for (name, spec) in &self.external {
-            if name.is_empty()
+            if !name
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric)
                 || name == "local"
                 || !name
                     .bytes()

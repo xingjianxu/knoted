@@ -16,6 +16,7 @@ use reqwest::{
     header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderValue},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 
 pub const CONTEXT_WINDOW: usize = 32 * 1024;
@@ -230,6 +231,20 @@ pub struct HttpChatProvider {
     base: Url,
     auth: HeaderValue,
     http: Client,
+}
+
+impl HttpChatProvider {
+    /// Identifies the canonical inference endpoint and model without using
+    /// credential bytes or the credential-file path.
+    pub(crate) fn stop_identity(&self) -> String {
+        let mut hash = Sha256::new();
+        hash.update(b"knoted-chat-stop-v1");
+        for value in [self.base.as_str(), self.model.as_str()] {
+            hash.update((value.len() as u64).to_be_bytes());
+            hash.update(value.as_bytes());
+        }
+        format!("{:x}", hash.finalize())
+    }
 }
 
 impl fmt::Debug for HttpChatProvider {

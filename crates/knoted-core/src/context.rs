@@ -86,6 +86,9 @@ pub struct AppContext {
     vectors_enabled: bool,
     search_api_key: Option<String>,
     chat_providers: Option<Arc<crate::rag::providers::ProviderRegistry>>,
+    // One admitted generation per instance. Keep its terminal receipt across
+    // the worker runner dropping the provider future to drive cancellation.
+    chat_terminal_receipt: Arc<Mutex<Option<(uuid::Uuid, uuid::Uuid)>>>,
     office: Option<Arc<crate::files::office::PreviewStore>>,
 }
 
@@ -102,6 +105,7 @@ impl AppContext {
             vectors_enabled: false,
             search_api_key: None,
             chat_providers: None,
+            chat_terminal_receipt: Arc::default(),
             office: None,
         }
     }
@@ -166,6 +170,21 @@ impl AppContext {
 
     pub fn chat_providers(&self) -> Option<&crate::rag::providers::ProviderRegistry> {
         self.chat_providers.as_deref()
+    }
+
+    pub(crate) fn remember_chat_terminal(&self, lease: &crate::jobs::Lease) {
+        *self
+            .chat_terminal_receipt
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some((lease.job_id, lease.token));
+    }
+
+    pub(crate) fn received_chat_terminal(&self, lease: &crate::jobs::Lease) -> bool {
+        *self
+            .chat_terminal_receipt
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            == Some((lease.job_id, lease.token))
     }
 
     /// Installs the search engine's API key from the credential file. The value

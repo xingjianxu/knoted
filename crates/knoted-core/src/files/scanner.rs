@@ -415,11 +415,8 @@ pub async fn enqueue_scan(ctx: &AppContext) -> Result<bool, DomainError> {
         return Ok(false);
     }
     let mut tx = ctx.pool().begin().await?;
-    // Serialize enqueue decisions, including the first scan before a root row
-    // exists. Schema-scoped key also keeps independent test instances isolated.
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':file.scan.enqueue',0))").execute(&mut *tx).await?;
-    let busy:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs WHERE kind=$1 AND state IN ('queued','running','retry_wait','cancel_requested'))").bind(SCAN_JOB_KIND).fetch_one(&mut *tx).await?;
-    if busy {
+    lock_scan_enqueue(&mut tx).await?;
+    if scan_pending(&mut tx).await? {
         return Ok(false);
     }
     crate::jobs::enqueue(&mut tx, crate::jobs::JobSpec::new(SCAN_JOB_KIND))
@@ -431,6 +428,106 @@ pub async fn enqueue_scan(ctx: &AppContext) -> Result<bool, DomainError> {
     tx.commit().await?;
     Ok(true)
 }
+
+/// Manual, scheduled and retried scans all compete for the same root slot.
+pub(crate) async fn lock_scan_enqueue(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':file.scan.enqueue',0))",
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn scan_pending(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM jobs WHERE kind=$1
+         AND state IN ('queued','running','retry_wait','cancel_requested'))",
+    )
+    .bind(SCAN_JOB_KIND)
+    .fetch_one(&mut **tx)
+    .await
+}
+
+pub struct ManualScan {
+    pub owner_id: Uuid,
+    pub idempotency_key: String,
+    pub force: bool,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ManualScanError {
+    #[error("file scanning is disabled")]
+    Disabled,
+    #[error("a file scan is already pending")]
+    Pending,
+    #[error("scan idempotency key conflicts with the submitted options")]
+    KeyConflict,
+    #[error("scan queue unavailable")]
+    Unavailable,
+}
+
+/// All scans read the complete root. The force flag records the submitted
+/// options so a key cannot be replayed with a different request.
+pub async fn request_scan(
+    ctx: &AppContext,
+    input: ManualScan,
+) -> Result<crate::jobs::Job, ManualScanError> {
+    let unavailable = |_| ManualScanError::Unavailable;
+    let mut tx = ctx.pool().begin().await.map_err(unavailable)?;
+    lock_scan_enqueue(&mut tx).await.map_err(unavailable)?;
+    let key = format!("manual-scan:{}:{}", input.owner_id, input.idempotency_key);
+    let previous: Option<crate::jobs::Job> =
+        sqlx::query_as("SELECT * FROM jobs WHERE kind=$1 AND idempotency_key=$2")
+            .bind(SCAN_JOB_KIND)
+            .bind(&key)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(unavailable)?;
+    if let Some(previous) = previous.as_ref()
+        && previous.created_at > ctx.now() - chrono::Duration::days(7)
+    {
+        tx.commit().await.map_err(unavailable)?;
+        if previous
+            .payload
+            .get("force")
+            .and_then(serde_json::Value::as_bool)
+            != Some(input.force)
+        {
+            return Err(ManualScanError::KeyConflict);
+        }
+        return Ok(previous.clone());
+    }
+    if !ctx.files().enabled {
+        tx.rollback().await.map_err(unavailable)?;
+        return Err(ManualScanError::Disabled);
+    }
+    if scan_pending(&mut tx).await.map_err(unavailable)? {
+        tx.rollback().await.map_err(unavailable)?;
+        return Err(ManualScanError::Pending);
+    }
+    if let Some(expired) = previous {
+        sqlx::query("UPDATE jobs SET idempotency_key=NULL WHERE id=$1")
+            .bind(expired.id)
+            .execute(&mut *tx)
+            .await
+            .map_err(unavailable)?;
+    }
+    let mut spec = crate::jobs::JobSpec::new(SCAN_JOB_KIND);
+    spec.idempotency_key = Some(key);
+    spec.payload = serde_json::json!({ "force": input.force });
+    let job = crate::jobs::enqueue(&mut tx, spec)
+        .await
+        .map_err(|_| ManualScanError::Unavailable)?
+        .job;
+    tx.commit().await.map_err(unavailable)?;
+    Ok(job)
+}
+
 pub async fn registered_identity(ctx: &AppContext) -> Result<Option<Identity>, DomainError> {
     let value: Option<Option<Json<Identity>>> =
         sqlx::query_scalar("SELECT identity FROM file_roots WHERE singleton")
