@@ -1,6 +1,6 @@
 # T39—T50 过程裁决与代价
 
-按会话账本的记录顺序归档，供整阶段最终审查核对。这里既有已通过主线/dev 验收的决定，也有尚在草稿准备中的实现选择；不构成新的 Accepted ADR，不替代 [T47 补充退出契约](../../../rfcs/2026-11-18-t47-execution-exit-confirmation.md) 的独立人工确认。完整任务状态以 [索引](../README.md) 为准。
+按会话账本的记录顺序归档，供整阶段最终审查核对。这里保留了等待期准备选择与之后主线/dev 验收的历史；不构成新的 Accepted ADR，不替代 [T47 补充退出契约](../../../rfcs/2026-11-18-t47-execution-exit-confirmation.md) 的独立人工确认。完整任务状态以 [索引](../README.md) 为准。
 
 | 顺序 | 裁决与依据 | 代价及适用边界 | 证据 |
 |---|---|---|---|
@@ -17,9 +17,9 @@
 | 11 | PPTX 包括隐藏与空白幻灯片，保留原始 1-based 序号；DOCX/XLSX 无可靠页码时为 NULL，Office bbox 均不虚构。 | 隐藏幻灯片正文可能被提取；不是放映可见性或页面渲染结果承诺。 | [PR #159](https://github.com/xingjianxu/knoted/pull/159) |
 | 12 | Office 内部预算绑定选项身份：4096 parts、单 part 32MiB、展开总量 128MiB、压缩比 200、XML 50 万节点/深度 64、XML 及输出文本各 16MiB、实际 cells/blocks 各 10 万。原 100MiB/900秒边界保持。 | 大型、高压缩比或复杂合法 Office 可能被拒绝；超限是明确失败，不返回截断内容，也不冒充原 Spec 已给出的新限额。 | [PR #159](https://github.com/xingjianxu/knoted/pull/159) |
 | 13 | XLSX 仅输出已存公式缓存并标注来源；无缓存不求值、不变零；保守拒绝外部/结构引用公式，DOCX/PPTX 不支持的正文表达拒绝。 | 缓存仍可能陈旧，一些合法公式工作簿不支持；不是 Office 数值/日期显示格式，不执行公式/宏/外链。 | [PR #159](https://github.com/xingjianxu/knoted/pull/159) |
-| 14 | T50 首版支持 PDF、静态 PNG/JPEG/WebP 和严格转义文本；APNG/动画 WebP/未知容器拒绝预览但保留普通下载。 | 合法动画只能下载；不能先相信小画布，再让大帧绕过解码前 40M 像素守卫。此项仍为准备阶段选择。 | [草稿 PR #162](https://github.com/xingjianxu/knoted/pull/162)、[预览限额](../indexing-and-rag.md) |
-| 15 | 预览绑定所选来源、内容版本、元数据 ETag/version、摘要和格式；ETag 不符时保守刷新/重试，不新增版本参数。 | 元数据-only 修改可能触发额外的 50MiB 有界取回，不应误称正文改变或重新解析。此项仍为准备阶段选择。 | [草稿 PR #162](https://github.com/xingjianxu/knoted/pull/162)、[双版本契约](../../../decisions/0006-file-pipeline-and-aggregate-contracts.md) |
-| 16 | T50 文件选择镜像 Rust ASCII 小写与 Path 扩展语义，隐藏的仅扩展名 `.txt` 和 Unicode 大小写折叠变体不能扩大白名单。 | 这些名称保持仅下载；不将前端通用 Unicode lower-case 当作后端选择规则。 | [草稿 PR #162](https://github.com/xingjianxu/knoted/pull/162) |
+| 14 | T50 首版支持 PDF、静态 PNG/JPEG/WebP 和严格转义文本；APNG/动画 WebP/未知容器拒绝预览但保留普通下载。 | 合法动画只能下载；不能先相信小画布，再让大帧绕过解码前 40M 像素守卫。此项现已通过完整 T50 验收。 | [PR #162](https://github.com/xingjianxu/knoted/pull/162)、[预览限额](../indexing-and-rag.md) |
+| 15 | 预览绑定所选来源、内容版本、元数据 ETag/version、摘要和格式；ETag 不符时保守刷新/重试，不新增版本参数。 | 元数据-only 修改可能触发额外的 50MiB 有界取回，不应误称正文改变或重新解析。此项现已通过完整 T50 验收。 | [PR #162](https://github.com/xingjianxu/knoted/pull/162)、[双版本契约](../../../decisions/0006-file-pipeline-and-aggregate-contracts.md) |
+| 16 | T50 文件选择镜像 Rust ASCII 小写与 Path 扩展语义，隐藏的仅扩展名 `.txt` 和 Unicode 大小写折叠变体不能扩大白名单。 | 这些名称保持仅下载；不将前端通用 Unicode lower-case 当作后端选择规则。 | [PR #162](https://github.com/xingjianxu/knoted/pull/162) |
 | 17 | T47 Worker 的真实停机需要启用既有 Tokio signal feature；主 Agent 离线仅补必需的 signal-hook-registry 1.4.8 传递锁项，不升级既有包，不另写手工信号处理库。此项窄化替代初期锁字节不变的准备假设。 | 增加一项传递依赖并需完整 Rust 复验；不扩展公开接口、宿主权限或其他依赖治理范围。 | [T47 B 计划](../../2026-11-18-t47-execution.md)、[ADR0007](../../../decisions/0007-execution-exit-confirmation.md) |
 | 18 | Office 持久 parser_revision 使用既有 policy 加 `:docx/:xlsx/:pptx` 绑定原扩展格式，选项/预算摘要保持；暂存名不推断格式。 | 同内容改扩展可能新增语义提取，避免错误复用旧成功或耗尽失败预算；备注/标签及同格式元数据仍复用。没有新增公开或存储字段。 | [T48](t48-office.md) |
 | 19 | 在 stdlib 分配完整 ZipInfo 前按实际中央目录条目计数；本正文子集仅接受连续 ZIP32 目录，明确拒绝 ZIP64/多盘/自解压前缀/尾垃圾。 | 一些合法小型 Office 的特殊容器封装可能不支持；仍保留100MiB/4096与既有机器错误码，不引入另一个归档引擎或依赖。 | [T48](t48-office.md) |
