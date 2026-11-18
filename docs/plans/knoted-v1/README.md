@@ -87,7 +87,7 @@
 | [T58](tasks/T58.md) | 嵌入批处理适配 | T11, T57 | done（dev 固定模型执行，见任务卡） |
 | [T59](tasks/T59.md) | pgvector存储与检索 | T58 | done（见任务卡验收） |
 | [T60](tasks/T60.md) | 混合检索和范围 | T59, T54 | done（见任务卡验收） |
-| [T61](tasks/T61.md) | 模型服务适配器 | T12, T60 | blocked（实现已合入 `867b004`，真实 Strata 凭据授权待确认） |
+| [T61](tasks/T61.md) | 模型服务适配器 | T12, T60 | done（[真实 Strata dev 验收](evidence/t61-providers.md#真实-strata-dev-验收)） |
 | [T62](tasks/T62.md) | 会话消息与生成队列 | T61, T15, T08 | done（见[主线与 dev 验收](evidence/t61-t65-integration.md)） |
 | [T63](tasks/T63.md) | 上下文预算与依赖 | T62 | done（见[主线与 dev 验收](evidence/t61-t65-integration.md)） |
 | [T64](tasks/T64.md) | 引用快照与验证 | T63 | done（见[主线与 dev 验收](evidence/t61-t65-integration.md)） |
