@@ -87,3 +87,92 @@ it("does not allow the same relink UUID with different casing",async()=>{
 it("accepts a pristine same-version projection when a tag was soft-deleted",async()=>{
  const h=setup();render(view(h.bundle));await screen.findByLabelText("文件备注");expect(screen.getByText(b,{exact:true})).toBeInTheDocument();act(()=>h.bundle.queryClient.setQueryData(queryKeys.files.detail(a),{...file(),tag_ids:[]}));await waitFor(()=>expect(screen.queryByText(b,{exact:true})).not.toBeInTheDocument());expect(screen.getByRole("button",{name:"保存备注和标签"})).toBeDisabled();
 });
+
+// Exercise the default router-owned ApiClient/onUnauthorized through actual
+// loopback HTTP. Only relative Request URLs need a browser-origin adapter in
+// Node; fetch, createQueryClient and the production callback stay unmocked.
+it.each(["list", "detail", "content", "list-page", "logout"] as const)("default router handles %s session exit and removes this file session", async (endpoint) => {
+ const { createServer } = await import("node:http");
+ let reject = false;
+ let pendingContent: import("node:http").ServerResponse | undefined;
+ const seen: string[] = [];
+ const server = createServer((request, response) => {
+  const path = new URL(request.url!, "http://localhost").pathname;
+  seen.push(path);
+  const reply = (data: unknown, status = 200) => {
+   response.writeHead(status, { "content-type": "application/json" });
+   response.end(JSON.stringify(data));
+  };
+  if (path === "/api/v1/auth/session") {
+   reply({ session: { id: a, user_id: b, current: true }, csrf_token: "test-csrf-value-long" });
+   return;
+  }
+  if (path === "/api/v1/auth/logout") { response.writeHead(204); response.end(); return; }
+  const denied = (endpoint === "list" || endpoint === "list-page") ? "/api/v1/files" : `/api/v1/files/${a}${endpoint === "content" ? "/content" : ""}`;
+  if (reject && path === denied) {
+   reply({ code: "unauthorized", message: "expired", request_id: a }, 401);
+  } else if (path.endsWith("/content")) {
+   pendingContent = response;
+  } else if (path === "/api/v1/files") {
+   reply({ items: [file()], next_cursor: null });
+  } else if (path === `/api/v1/files/${a}`) {
+   reply(file());
+  } else if (path === "/api/v1/tags") {
+   reply({ items: [], next_cursor: null });
+  } else {
+   reply({}, 404);
+  }
+ });
+ await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+ const address = server.address() as import("node:net").AddressInfo;
+ const NativeRequest = globalThis.Request;
+ class OriginRequest extends NativeRequest {
+  constructor(input: RequestInfo | URL, init?: RequestInit) {
+   super(typeof input === "string" ? new URL(input, `http://127.0.0.1:${address.port}`) : input, init);
+  }
+ }
+ vi.stubGlobal("Request", OriginRequest);
+ const createUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:late-session");
+ const startPath = endpoint === "list-page" ? "/files" : `/files/${a}`;
+ const router = createAppRouter({ history: createMemoryHistory({ initialEntries: [startPath] }) });
+ const bundle = router.options.context!;
+ const rendered = render(<UiProvider><App router={router} /></UiProvider>);
+ try {
+  await act(async () => router.load());
+  if (endpoint === "list-page") await screen.findByRole("button", { name: "打开文件 alpha.txt" });
+  else fireEvent.change(await screen.findByLabelText("文件备注"), { target: { value: "private unsaved session draft" } });
+  if (endpoint !== "content" && endpoint !== "list-page") {
+   fireEvent.click(screen.getByRole("button", { name: "下载原文件" }));
+   await waitFor(() => expect(pendingContent).toBeDefined());
+  }
+  reject = true;
+  if (endpoint === "logout") fireEvent.click(screen.getByRole("button", { name: "退出登录" }));
+  else if (endpoint === "content") fireEvent.click(screen.getByRole("button", { name: "下载原文件" }));
+  else {
+   await act(async () => {
+    await bundle.queryClient.invalidateQueries({ queryKey: (endpoint === "list" || endpoint === "list-page") ? ["files", "list"] : queryKeys.files.detail(a) });
+   });
+  }
+  await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
+  expect(router.state.location.search).toMatchObject({ redirect: endpoint === "logout" ? "/" : startPath });
+  expect(screen.queryByDisplayValue("private unsaved session draft")).not.toBeInTheDocument();
+  expect(bundle.queryClient.getQueryData(queryKeys.files.detail(a))).toBeUndefined();
+  if (pendingContent) {
+   await waitFor(() => expect(pendingContent!.destroyed).toBe(true));
+   pendingContent.end("late content must not download");
+  }
+  expect(createUrl).not.toHaveBeenCalled();
+  if (endpoint !== "list-page") expect(seen).toContain(`/api/v1/files/${a}/content`);
+  reject = false;
+  await act(async () => router.navigate({ to: "/files/$fileId", params: { fileId: a } }));
+  expect(await screen.findByLabelText("文件备注")).toHaveValue("original");
+ } finally {
+  rendered.unmount();
+  await bundle.queryClient.cancelQueries();
+  bundle.queryClient.clear();
+  createUrl.mockRestore();
+  vi.stubGlobal("Request", NativeRequest);
+  server.closeAllConnections();
+  await new Promise<void>((resolve, rejectClose) => server.close(error => error ? rejectClose(error) : resolve()));
+ }
+});

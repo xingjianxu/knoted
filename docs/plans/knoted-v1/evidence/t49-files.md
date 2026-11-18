@@ -1,6 +1,6 @@
-# T49 文件浏览、备注标签与下载：阶段 A
+# T49 文件浏览、备注标签与下载：阶段 A 与 B
 
-状态：**NEEDS_CONTEXT**。本证据只涵盖隔离分支的阶段 A 实施及本地验证；T47/T48 整条执行链、独立审查、主线集成、真实 dev 全格式验收均未完成，不能据此标记 T49 DONE。
+阶段 A 历史状态：**NEEDS_CONTEXT**。以下 A 记录保留当时的验证范围；上游等待已由末尾阶段 B 记录取代。T49 自身的主线集成及真实 dev 全格式验收仍由主 Agent 完成，不能据此标记整卡 DONE。
 
 - Issue：[#134](https://github.com/xingjianxu/knoted/issues/134)，由主 Agent 维护。
 - 基线：`ef04fa6ec4892135fb36955bdb1cf616bdce879a`；任务分支 `feat/t49`。
@@ -51,3 +51,28 @@ Rust 计数使用主 Agent 的 `count-rust.py` 区分顶层和嵌套子测试，
 ## 阶段 B 待办
 
 待 T47/T48 真实上游集成及明确批准的退出协议落地，再由主 Agent 安排独立审查、全格式源扫描→采集→解析→浏览/下载的运行验收和 T49 最终主线/dev/文案/状态回填。当前不部署、不触碰真实批准源根、不写远程、不清理工作区。
+
+
+## 阶段 B：默认认证连接及能力文案收口
+
+- 恢复基线：`3c2f34dd59c482f17840c21a088eb2c113d84067`（父 Agent 普通 merge 已验证的 T48 主线 `c936e0a9b8b4cfc9c8cdee9749fb038f3648cbf3`，保留 A）。T47/ADR0007 与 T48 整卡完成为父 Agent 提供并验证的输入，不再等待旧 RFC；本实施者未访问 dev 或真实 SourceRoot。
+- 当前 whole A+B 审查基线暂为上述 `c936e0a`，父 Agent 在独立门禁结束及纯状态文档同步后记录最终基线。
+- 仅修改 Dashboard 实际能力文案及对应 t41 断言，新增 t49 默认连接回归；未改变 A 的 Router/QueryClient/ApiClient、文件业务或 Rust 字节。概览列明文本、PDF、PNG、JPEG、WebP、DOCX、XLSX、PPTX 已支持，索引仍未启用，搜索/RAG 未开放。
+- 新增 5 个真实 loopback HTTP 场景：详情页后台列表 401、详情 401、下载 401、列表页 401、主动退出登录。测试不注入 bundle，不 mock fetch/认证回调/QueryClient 模块；仅给 Node 的相对 Request URL 提供 loopback origin 适配。使用产品默认 Router→QueryClient→ApiClient，验证安全 return-to、缓存及脏草稿卸载、待响应下载连接被中止、迟到字节不生成 Blob URL、重新进入不复用旧草稿。服务、连接和查询均在 finally 关闭。此为真实 HTTP 连接回归，不是 dev Passkey 或浏览器下载运行验收。
+- 文案 RED：`b-dashboard-red.log/.exit=1`，1 failed/6 passed；改文案后与 T49 共 26 passed（T49 19、T41 7）。认证行为原已正确，新回归首次即绿，不伪称新增产品修复的 RED。
+
+以下日志均在原 logs 目录，各 `.exit=0`：
+
+| 命令 | 日志 | 结果 |
+|---|---|---|
+| `cargo test --workspace t49_` | `b-rust-targeted` | 12 passed，计数脚本结果为同名 `.count.json` |
+| `cargo fmt --check` | `b-fmt` | 通过 |
+| `cargo clippy --all-targets -- -D warnings` | `b-clippy` | 通过 |
+| `pnpm --filter @knoted/web test tests/tasks/t49.test.tsx tests/tasks/t41.test.tsx` | `b-web-targeted` | 26 passed，2 files |
+| `pnpm typecheck` | `b-typecheck` | 通过 |
+| `pnpm lint` | `b-lint` | 通过 |
+| `pnpm api:check` | `b-api-check` | 83 operations，29 examples，14 invalid rejected |
+
+B 定向测试保留 15 次 jsdom scrollTo 提示（新增默认路由往返增加调用，#143），不是测试失败。没有 Python 改动或重复模型测试；只为 Rust 测试配置父授权的解释器路径，未安装或修改其环境。全量 Rust/Web/API verify/build 由父 Agent 对冻结分支独立执行，不重复将历史 A 全量结果当作 B 组合门禁。
+
+代码与测试已冻结：`57d31c4ffd6fc85b287619adf6383ac352103f05f78dc8be2ad136fd68b1b881`，19 个 whole A+B 源码/测试文件，逐文件摘要位于 `/data/knoted-dev/tasks/t49/phase-b-frozen-source-manifest.json`。其后仅写证据并安全提交。真实 HTTPS/API/浏览器/全格式业务验收、独立审查、PR/主线/部署及清理由父 Agent 继续；本分支保留待集成。
