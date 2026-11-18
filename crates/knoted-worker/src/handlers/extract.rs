@@ -3,7 +3,7 @@ use knoted_core::{
     context::AppContext,
     files::{
         extraction::{self, ExtractionInput},
-        text,
+        office, text,
     },
     jobs::{ExecutionOutcome, Lease},
 };
@@ -12,6 +12,27 @@ pub async fn execute(
     lease: &Lease,
     job: &knoted_core::jobs::Job,
 ) -> ExecutionOutcome {
+    if job.payload["parser_revision"].as_str() == Some(office::RETIRED_DOCX_PARSER_REVISION) {
+        // Move this lease onto the runner's cancellation path. It keeps the
+        // slot until every persisted execution has a matching exit receipt.
+        loop {
+            if sqlx::query(
+                "UPDATE jobs SET state='cancel_requested',updated_at=now()
+                 WHERE id=$1 AND lease_token=$2 AND state='running'",
+            )
+            .bind(lease.job_id)
+            .bind(lease.token)
+            .execute(ctx.pool())
+            .await
+            .is_ok()
+            {
+                // A non-cancel outcome makes the runner observe the durable
+                // request and confirm it rather than reporting exit ourselves.
+                return temporary("DOCX parser revision retired");
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+    }
     if !ctx.files().enabled {
         return ExecutionOutcome::Cancelled;
     }
@@ -73,7 +94,7 @@ async fn execute_python(
     options_revision: &str,
 ) -> ExecutionOutcome {
     use knoted_core::{
-        files::{office, pdf},
+        files::pdf,
         intelligence::{ExecutionKind, ExecutionRequest, ExecutionState, IntelligenceClient},
     };
     let client = match IntelligenceClient::new(&ctx.intelligence().base_url) {

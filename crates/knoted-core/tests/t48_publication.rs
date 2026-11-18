@@ -81,6 +81,75 @@ async fn t48_office_capture_enqueues_its_own_identity() {
     );
 }
 
+#[tokio::test]
+async fn t48_docx_capture_does_not_reuse_an_old_success() {
+    const OLD: &str = "office-ooxml-body-v2-hidden-slides-included-cache-only:docx";
+    const NEW: &str = "office-ooxml-body-v3:docx";
+    let (db, ctx, root, _staging, input) = source_fixture(3).await;
+    let object = capture_stable(&ctx, input.clone()).await.unwrap();
+    sqlx::query(
+        "UPDATE jobs SET payload=jsonb_set(payload,'{parser_revision}',to_jsonb($1::text)) WHERE kind='file.extract'",
+    )
+    .bind(OLD)
+    .execute(ctx.pool())
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO file_extractions(source_id,content_version,input_sha256,parser_revision,options_hash,job_id,blocks)
+         SELECT s.id,s.content_version,s.sha256,$1,j.payload->>'options_hash',j.id,'[]'
+         FROM file_sources s JOIN jobs j ON j.payload->>'source_id'=s.id::text
+         WHERE j.kind='file.extract'",
+    )
+    .bind(OLD)
+    .execute(ctx.pool())
+    .await
+    .unwrap();
+    let report = observe_root(
+        &ctx,
+        ObserveRoot {
+            path: root.path().into(),
+            cancel: Arc::default(),
+            lease: input.lease.clone(),
+            rules: Default::default(),
+        },
+    )
+    .await
+    .unwrap();
+    let scan_id = report.scan_id;
+    assert!(reconcile_complete_scan(&ctx, report).await.unwrap());
+    let next = knoted_core::files::capture::load_observation(
+        &ctx,
+        scan_id,
+        "a.docx".into(),
+        input.lease.clone(),
+    )
+    .await
+    .unwrap();
+    let captured = capture_stable(&ctx, next).await.unwrap();
+    let next_payload: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT payload FROM jobs WHERE kind='file.extract' AND payload->>'captured_scan_id'=$1",
+    )
+    .bind(scan_id.to_string())
+    .fetch_optional(ctx.pool())
+    .await
+    .unwrap();
+    let successes: Vec<(String, String)> =
+        sqlx::query_as("SELECT parser_revision,options_hash FROM file_extractions")
+            .fetch_all(ctx.pool())
+            .await
+            .unwrap();
+    db.drop().await;
+    assert!(input.metadata.identity.handle.is_some());
+    assert_eq!(captured.object_id, object.object_id);
+    let payload = next_payload.expect("old DOCX success must not suppress a new extraction");
+    assert_eq!(payload["parser_revision"], NEW);
+    assert_eq!(payload["content_version"], 1);
+    assert_eq!(payload["input_object_id"], object.object_id.as_str());
+    assert_eq!(successes.len(), 1);
+    assert_eq!(successes[0].0, OLD);
+    assert_eq!(payload["options_hash"], successes[0].1);
+}
+
 async fn extraction_fixture() -> (
     TestDb,
     AppContext,

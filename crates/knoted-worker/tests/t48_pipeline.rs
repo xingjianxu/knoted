@@ -3,8 +3,8 @@ use knoted_core::{
     config::{FilesConfig, IntelligenceConfig},
     context::AppContext,
     db::testing::TestDb,
-    files::{extraction, scanner},
-    intelligence::IntelligenceClient,
+    files::{ObjectId, Sha256Hex, extraction, office, scanner},
+    intelligence::{ExecutionKind, ExecutionRequest, IntelligenceClient},
     jobs,
 };
 use knoted_worker::{
@@ -57,6 +57,83 @@ async fn scan_once(ctx: &AppContext, runner: &WorkerRunner<Dispatcher>) {
         }
     }
 }
+#[tokio::test]
+async fn t48_retired_docx_keeps_takeover_pending_without_exit_proof() {
+    let db = TestDb::create().await.unwrap();
+    let unavailable = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let ctx = AppContext::new(db.pool.clone())
+        .with_files(FilesConfig {
+            enabled: true,
+            ..Default::default()
+        })
+        .with_intelligence(IntelligenceConfig {
+            base_url: format!("http://{}", unavailable.local_addr().unwrap()),
+        });
+    let mut tx = db.pool.begin().await.unwrap();
+    let mut spec = jobs::JobSpec::new(extraction::EXTRACT_JOB_KIND);
+    spec.payload = format!(
+        r#"{{"source_id":"{}","root_id":"{}","content_version":1,"input_sha256":"{}",
+            "input_object_id":"old-input","size":17,"observation_version":1,
+            "captured_scan_id":"{}","observation":{{}},
+            "parser_revision":"office-ooxml-body-v2-hidden-slides-included-cache-only:docx"}}"#,
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+        Sha256Hex::digest(b"example old input"),
+        uuid::Uuid::new_v4()
+    )
+    .parse()
+    .unwrap();
+    jobs::enqueue(&mut tx, spec).await.unwrap();
+    tx.commit().await.unwrap();
+    let previous = jobs::claim(&db.pool, "before-upgrade")
+        .await
+        .unwrap()
+        .unwrap();
+    let request = ExecutionRequest {
+        execution_id: uuid::Uuid::new_v4(),
+        kind: ExecutionKind::Parse,
+        input_object_id: ObjectId::parse("old-input").unwrap(),
+        input_sha256: Sha256Hex::digest(b"example old input"),
+        source_version: 1,
+        deadline: ctx.now() + Duration::from_secs(900),
+        options_revision: office::OPTIONS_REVISION.into(),
+    };
+    extraction::register_attempt(&db.pool, &previous, request.clone())
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE jobs SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+    )
+    .bind(previous.job_id)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    // Hold the port until context selection is complete, but run no server.
+    drop(unavailable);
+    let runner = WorkerRunner::with_context(ctx.clone(), "after-upgrade", Dispatcher { ctx });
+    let step = runner.step().await;
+    let state: (String, Option<uuid::Uuid>) =
+        sqlx::query_as("SELECT state,lease_token FROM jobs WHERE id=$1")
+            .bind(previous.job_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    let attempts = extraction::load_attempts(&db.pool, previous.job_id)
+        .await
+        .unwrap();
+    db.drop().await;
+    assert_eq!(
+        step.unwrap(),
+        StepOutcome::CancellationPending {
+            job_id: previous.job_id
+        }
+    );
+    assert_eq!(state.0, "cancel_requested");
+    assert!(state.1.is_some_and(|token| token != previous.token));
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0].request, request);
+}
+
 #[tokio::test]
 async fn t48_real_office_scan_capture_http_publication_and_failed_budget() {
     let db = TestDb::create().await.unwrap();
@@ -253,6 +330,81 @@ async fn t48_real_office_scan_capture_http_publication_and_failed_budget() {
             )
         ]
     );
+    // An upgrade can inherit a durable attempt from the old DOCX parser.
+    // Use an existing closed input and the real loopback supervisor to prove
+    // the replacement worker settles it without launching another execution.
+    let previous_job: uuid::Uuid = sqlx::query_scalar(
+        "SELECT job_id FROM file_extractions WHERE source_id=$1 AND parser_revision=$2",
+    )
+    .bind(successful.0)
+    .bind(office::DOCX_PARSER_REVISION)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    let payload = sqlx::query_scalar(
+        "SELECT jsonb_set(payload-'intelligence_attempts','{parser_revision}',to_jsonb($2::text))
+         FROM jobs WHERE id=$1",
+    )
+    .bind(previous_job)
+    .bind("office-ooxml-body-v2-hidden-slides-included-cache-only:docx")
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    let mut spec = jobs::JobSpec::new(extraction::EXTRACT_JOB_KIND);
+    spec.payload = payload;
+    let mut tx = db.pool.begin().await.unwrap();
+    let retired = jobs::enqueue(&mut tx, spec).await.unwrap().job;
+    tx.commit().await.unwrap();
+    let old_lease = jobs::claim(&db.pool, "old-docx").await.unwrap().unwrap();
+    assert_eq!(old_lease.job_id, retired.id);
+    let previous = extraction::load_attempts(&db.pool, previous_job)
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    let request = ExecutionRequest {
+        execution_id: uuid::Uuid::new_v4(),
+        deadline: ctx.now() + Duration::from_secs(900),
+        ..previous.request
+    };
+    extraction::register_attempt(&db.pool, &old_lease, request.clone())
+        .await
+        .unwrap();
+    client.create_execution(&request).await.unwrap();
+    sqlx::query(
+        "UPDATE jobs SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+    )
+    .bind(retired.id)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let settled = runner.step().await.unwrap();
+    assert!(
+        matches!(
+            settled,
+            StepOutcome::Finished { ref job, outcome: jobs::ExecutionOutcome::Cancelled }
+                if job.id == retired.id && job.state == "cancelled"
+        ),
+        "{settled:?}"
+    );
+    client
+        .get_execution(request.execution_id)
+        .await
+        .unwrap()
+        .verify_resource_exit(&request)
+        .unwrap();
+    let history = extraction::load_attempts(&db.pool, retired.id)
+        .await
+        .unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].request, request);
+    let published: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM file_extractions WHERE job_id=$1)")
+            .bind(retired.id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert!(!published);
     drop(service);
     db.drop().await;
 }

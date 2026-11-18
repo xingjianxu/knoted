@@ -11,7 +11,11 @@ use knoted_core::{
 use std::{path::PathBuf, sync::Arc};
 use tempfile::TempDir;
 fn temp() -> TempDir {
-    tempfile::tempdir_in("/data/knoted-dev/tasks/t44/tmp").unwrap()
+    let parent = std::env::var_os("TMPDIR").map_or_else(
+        || PathBuf::from("/data/knoted-dev/tasks/t44/tmp"),
+        PathBuf::from,
+    );
+    tempfile::tempdir_in(parent).unwrap()
 }
 async fn lease(ctx: &AppContext) -> knoted_core::jobs::Lease {
     let mut tx = ctx.pool().begin().await.unwrap();
@@ -309,6 +313,113 @@ async fn rescan(ctx: &AppContext, root: &TempDir, input: &SourceObservation) -> 
         .unwrap()
 }
 #[tokio::test]
+async fn t44_unchanged_complete_scans_reuse_closed_object_and_refresh_extraction() {
+    let (db, ctx, root, staging, input) = fixture(3).await;
+    let first = capture_stable(&ctx, input.clone()).await.unwrap();
+    let source: uuid::Uuid = sqlx::query_scalar("SELECT id FROM file_sources")
+        .fetch_one(ctx.pool())
+        .await
+        .unwrap();
+    let mut captures = Vec::new();
+    for _ in 0..2 {
+        let next = rescan(&ctx, &root, &input).await;
+        let scan = next.scan_id;
+        let object = capture_stable(&ctx, next).await.unwrap();
+        let row: (uuid::Uuid, String, uuid::Uuid, i64, i64) = sqlx::query_as(
+            "SELECT id,input_object_id,captured_scan_id,version,content_version FROM file_sources WHERE status='present'",
+        )
+        .fetch_one(ctx.pool())
+        .await
+        .unwrap();
+        let queued: Option<String> = sqlx::query_scalar(
+            "SELECT payload->>'input_object_id' FROM jobs WHERE kind='file.extract' AND payload->>'captured_scan_id'=$1",
+        )
+        .bind(scan.to_string())
+        .fetch_optional(ctx.pool())
+        .await
+        .unwrap();
+        captures.push((scan, object, row, queued, files(&staging)));
+    }
+    db.drop().await;
+    assert!(input.metadata.identity.handle.is_some());
+    let key = first.object_id.to_string();
+    let original = staging.path().join("input").join(&key);
+    assert_eq!(std::fs::read(&original).unwrap(), b"aaa");
+    for (scan, object, row, queued, staged) in captures {
+        assert_ne!(scan, input.scan_id);
+        assert_eq!(object.object_id, first.object_id);
+        assert_eq!(row, (source, key.clone(), scan, 1, 1));
+        assert_eq!(queued.as_deref(), Some(key.as_str()));
+        assert_eq!(staged.as_slice(), std::slice::from_ref(&original));
+    }
+}
+
+#[tokio::test]
+async fn t44_cross_scan_reuse_rollback_keeps_the_existing_reference() {
+    let (db, ctx, root, staging, input) = fixture(3).await;
+    let first = capture_stable(&ctx, input.clone()).await.unwrap();
+    let next = rescan(&ctx, &root, &input).await;
+    sqlx::raw_sql(
+        "CREATE FUNCTION refuse_extraction_enqueue() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN RAISE EXCEPTION 'fixture refuses extraction enqueue'; END;
+        $$;
+        CREATE TRIGGER refuse_extraction_enqueue BEFORE INSERT ON jobs FOR EACH ROW
+            WHEN (NEW.kind='file.extract') EXECUTE FUNCTION refuse_extraction_enqueue();",
+    )
+    .execute(ctx.pool())
+    .await
+    .unwrap();
+    let failure = capture_stable(&ctx, next).await;
+    let (key, scan): (String, uuid::Uuid) =
+        sqlx::query_as("SELECT input_object_id,captured_scan_id FROM file_sources")
+            .fetch_one(ctx.pool())
+            .await
+            .unwrap();
+    db.drop().await;
+    assert!(input.metadata.identity.handle.is_some());
+    assert!(matches!(
+        failure,
+        Err(knoted_core::files::capture::DomainError::Database(error))
+            if error.as_database_error().is_some_and(|e| e.message() == "fixture refuses extraction enqueue")
+    ));
+    assert_eq!(key, first.object_id.as_str());
+    assert_eq!(scan, input.scan_id);
+    let original = staging.path().join("input").join(key);
+    assert_eq!(files(&staging).as_slice(), std::slice::from_ref(&original));
+    assert_eq!(std::fs::read(original).unwrap(), b"aaa");
+}
+
+#[tokio::test]
+async fn t44_cross_scan_missing_and_damaged_objects_are_recaptured() {
+    let (db, ctx, root, staging, input) = fixture(3).await;
+    let first = capture_stable(&ctx, input.clone()).await.unwrap();
+    let directory = staging.path().join("input");
+    let first_path = directory.join(first.object_id.as_str());
+    std::fs::write(&first_path, b"bad").unwrap();
+    let next = rescan(&ctx, &root, &input).await;
+    let repaired = capture_stable(&ctx, next).await.unwrap();
+    let repaired_path = directory.join(repaired.object_id.as_str());
+    std::fs::remove_file(repaired_path).unwrap();
+    let next = rescan(&ctx, &root, &input).await;
+    let replaced = capture_stable(&ctx, next).await.unwrap();
+    let (key, versions): (String, Vec<i64>) = sqlx::query_as(
+        "SELECT input_object_id, ARRAY[version,content_version] FROM file_sources WHERE status='present'",
+    )
+    .fetch_one(ctx.pool())
+    .await
+    .unwrap();
+    db.drop().await;
+    assert!(input.metadata.identity.handle.is_some());
+    assert_ne!(first.object_id, repaired.object_id);
+    assert_ne!(repaired.object_id, replaced.object_id);
+    assert_eq!(key, replaced.object_id.as_str());
+    assert_eq!(versions, [1, 1]);
+    assert_eq!(files(&staging).len(), 2);
+    assert_eq!(std::fs::read(first_path).unwrap(), b"bad");
+    assert_eq!(std::fs::read(directory.join(key)).unwrap(), b"aaa");
+}
+
+#[tokio::test]
 async fn t44_dual_versions_idempotence_and_old_object_retention() {
     let (db, ctx, root, staging, input) = fixture(3).await;
     let first = capture_stable(&ctx, input.clone()).await.unwrap();
@@ -380,8 +491,8 @@ async fn t44_same_path_replacement_never_inherits_identity_or_registry() {
 }
 #[tokio::test]
 async fn t44_injected_same_inode_different_handle_cannot_inherit() {
-    let (db, ctx, root, _staging, input) = fixture(3).await;
-    capture_stable(&ctx, input.clone()).await.unwrap();
+    let (db, ctx, root, staging, input) = fixture(3).await;
+    let first = capture_stable(&ctx, input.clone()).await.unwrap();
     let old: uuid::Uuid = sqlx::query_scalar("SELECT id FROM file_sources")
         .fetch_one(ctx.pool())
         .await
@@ -394,13 +505,15 @@ async fn t44_injected_same_inode_different_handle_cannot_inherit() {
         .await
         .unwrap();
     let next = rescan(&ctx, &root, &input).await;
-    capture_stable(&ctx, next).await.unwrap();
+    let replacement = capture_stable(&ctx, next).await.unwrap();
     let new: uuid::Uuid = sqlx::query_scalar("SELECT id FROM file_sources WHERE status='present'")
         .fetch_one(ctx.pool())
         .await
         .unwrap();
     db.drop().await;
     assert_ne!(old, new);
+    assert_ne!(first.object_id, replacement.object_id);
+    assert_eq!(files(&staging).len(), 2);
 }
 #[tokio::test]
 async fn t44_source_observation_cas_change_during_copy_cleans_object() {

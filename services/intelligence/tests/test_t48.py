@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 from docx import Document
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from openpyxl import Workbook
 from pptx import Presentation
 from pptx.util import Inches
@@ -122,6 +124,54 @@ def test_t48_3_docx_order_nested_merged_tables_without_invented_pages(tmp_path):
     assert result.page_count is None
     assert all(b.page is None and b.bbox is None for b in result.blocks)
     assert result.source_format == "docx"
+
+
+@pytest.mark.parametrize("wrapped", ["tr", "tc"])
+def test_docx_custom_xml_table_content_cannot_succeed_partially(tmp_path, wrapped):
+    path = tmp_path / "wrapped.docx"
+    doc = Document()
+    doc.add_paragraph("before")
+    table = doc.add_table(rows=1, cols=1)
+    table.cell(0, 0).text = "table body"
+    doc.add_paragraph("after")
+    target = table.rows[0]._tr if wrapped == "tr" else table.cell(0, 0)._tc
+    wrapper = OxmlElement("w:customXml")
+    wrapper.set(qn("w:uri"), "urn:knoted:fixture")
+    wrapper.set(qn("w:element"), "wrapped")
+    target.addprevious(wrapper)
+    wrapper.append(target)
+    doc.save(path)
+    with pytest.raises(ParseError) as error:
+        parser().parse_office(path)
+    assert error.value.code == "unsupported_format"
+
+
+def test_docx_table_properties_and_range_markers_preserve_content(tmp_path):
+    path = tmp_path / "styled.docx"
+    doc = Document()
+    doc.add_paragraph("before")
+    table = doc.add_table(rows=1, cols=1)
+    table.style = "Table Grid"
+    cell = table.cell(0, 0)
+    cell.text = "table body"
+    row = table.rows[0]._tr
+    row.insert(0, OxmlElement("w:tblPrEx"))
+    height = OxmlElement("w:trHeight")
+    height.set(qn("w:val"), "360")
+    row.get_or_add_trPr().append(height)
+    for index, member in enumerate((row, cell._tc), 1):
+        start = OxmlElement("w:bookmarkStart")
+        start.set(qn("w:id"), str(index))
+        start.set(qn("w:name"), f"anchor{index}")
+        end = OxmlElement("w:bookmarkEnd")
+        end.set(qn("w:id"), str(index))
+        member.addprevious(start)
+        member.addnext(end)
+    doc.add_paragraph("after")
+    doc.save(path)
+    result = parser().parse_office(path)
+    assert [block.text for block in result.blocks] == ["before", "table body", "after"]
+    assert json.loads(result.blocks[1].structure)["path"] == "body/table:2/row:1/cell:1/paragraph:1"
 
 
 def test_formula_cache_only_never_evaluates_or_launches(tmp_path, monkeypatch):
@@ -652,7 +702,11 @@ def test_t48_execution_dispatch_uses_office_identity_on_opaque_staging(tmp_path,
     assert result["blocks"][0]["text"] == "Office中文"
     assert result["options_revision"] == mod.options_revision()
     assert result["parser"] == {
-        "parser_revision": mod.POLICY_REVISION,
+        "parser_revision": (
+            "office-ooxml-body-v3:docx"
+            if format == "docx"
+            else "office-ooxml-body-v2-hidden-slides-included-cache-only"
+        ),
         "options_revision": mod.options_revision(),
         "limits": __import__("dataclasses").asdict(mod.DEFAULT_LIMITS),
     }
@@ -764,7 +818,7 @@ def test_t48_real_http_manifest_success_and_permanent_codes(tmp_path):
             artifact = json.loads(raw)
             assert artifact["source_format"] == format
             assert artifact["options_revision"] == request["options_revision"]
-            assert artifact["parser"] == parser().parser_summary()
+            assert artifact["parser"] == parser().parser_summary(format)
             assert artifact["source_version"] == 7 and artifact["truncated"] is False
             assert artifact["page_count"] == (2 if format == "pptx" else None)
             if format == "xlsx":

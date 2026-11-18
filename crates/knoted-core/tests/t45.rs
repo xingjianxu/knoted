@@ -11,7 +11,11 @@ use knoted_core::{
 use std::{path::PathBuf, sync::Arc};
 use tempfile::TempDir;
 fn temp() -> TempDir {
-    tempfile::tempdir_in("/data/knoted-dev/tasks/t45/tmp").unwrap()
+    let parent = std::env::var_os("TMPDIR").map_or_else(
+        || PathBuf::from("/data/knoted-dev/tasks/t45/tmp"),
+        PathBuf::from,
+    );
+    tempfile::tempdir_in(parent).unwrap()
 }
 async fn lease(ctx: &AppContext) -> knoted_core::jobs::Lease {
     let mut tx = ctx.pool().begin().await.unwrap();
@@ -165,9 +169,13 @@ use knoted_core::files::identity::{RelinkSource, relink_source};
 use uuid::Uuid;
 async fn pair() -> (TestDb, AppContext, Uuid, Uuid, TempDir) {
     let db = TestDb::create().await.unwrap();
-    let ctx = AppContext::new(db.pool.clone());
     let root = Uuid::new_v4();
     let directory = temp();
+    let ctx = AppContext::new(db.pool.clone()).with_files(FilesConfig {
+        enabled: true,
+        root: Some(directory.path().into()),
+        ..Default::default()
+    });
     let identity = safe_fs::metadata(safe_fs::open_root(directory.path()).unwrap())
         .unwrap()
         .identity;
@@ -408,6 +416,79 @@ async fn t45_multiple_old_candidates_not_merged() {
 async fn snapshot(ctx: &AppContext) -> serde_json::Value {
     sqlx::query_scalar("SELECT jsonb_build_object('sources',(SELECT jsonb_agg(to_jsonb(s) ORDER BY id) FROM file_sources s),'tags',(SELECT jsonb_agg(to_jsonb(t) ORDER BY entity_id,tag_id) FROM file_tags t),'links',(SELECT jsonb_agg(to_jsonb(l) ORDER BY id) FROM entity_links l))").fetch_one(ctx.pool()).await.unwrap()
 }
+async fn relink_with_unconfigured_registered_root(enabled: bool) {
+    use knoted_core::links::service::*;
+    let (db, ctx, old, new, registered_root) = pair().await;
+    let tag = create_tag(
+        &ctx,
+        CreateTag {
+            name: "old-tag".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assign_tag(
+        &ctx,
+        ChangeEntityTag {
+            entity: Entity {
+                entity_type: EntityType::File,
+                id: old,
+            },
+            tag_id: tag.id,
+        },
+    )
+    .await
+    .unwrap();
+    create_link(
+        &ctx,
+        CreateLink {
+            source_type: EntityType::File,
+            source_id: old,
+            target_type: EntityType::File,
+            target_id: new,
+        },
+    )
+    .await
+    .unwrap();
+    let other_root = temp();
+    let configured_root = if enabled {
+        &other_root
+    } else {
+        &registered_root
+    };
+    let mismatched = AppContext::new(db.pool.clone()).with_files(FilesConfig {
+        enabled,
+        root: Some(configured_root.path().into()),
+        ..Default::default()
+    });
+    let before = snapshot(&ctx).await;
+    let rejected = relink_source(&mismatched, relink(old, new, 12)).await;
+    let after = snapshot(&ctx).await;
+    db.drop().await;
+    assert!(registered_root.path().is_dir());
+    assert!(
+        matches!(
+            rejected,
+            Err(DomainError::Conflict {
+                current_version: None
+            })
+        ),
+        "{rejected:?}"
+    );
+    // The snapshot includes both versions, notes, memberships and edges.
+    assert_eq!(after, before);
+}
+
+#[tokio::test]
+async fn t45_disabled_relink_preserves_registered_root_metadata() {
+    relink_with_unconfigured_registered_root(false).await;
+}
+
+#[tokio::test]
+async fn t45_reconfigured_relink_preserves_registered_root_metadata() {
+    relink_with_unconfigured_registered_root(true).await;
+}
+
 #[tokio::test]
 async fn t45_conflicts_are_atomic_and_release_locks() {
     let (db, ctx, old, new, _directory) = pair().await;

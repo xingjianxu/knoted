@@ -11,8 +11,9 @@ pub const PARSER_REVISION: &str = "office-ooxml-body-v2-hidden-slides-included-c
 pub const OPTIONS_REVISION: &str = "office-ooxml-body-v2-hidden-slides-included-cache-only:66f5d3305d4cda1ad981b12e95d75f4c4f4efcc31e5ca45a8985ead92f65da8a";
 // The source extension is a durable selector: renames cannot reuse a success
 // (or exhausted failure budget) produced for a different expected format.
-pub const DOCX_PARSER_REVISION: &str =
+pub const RETIRED_DOCX_PARSER_REVISION: &str =
     "office-ooxml-body-v2-hidden-slides-included-cache-only:docx";
+pub const DOCX_PARSER_REVISION: &str = "office-ooxml-body-v3:docx";
 pub const XLSX_PARSER_REVISION: &str =
     "office-ooxml-body-v2-hidden-slides-included-cache-only:xlsx";
 pub const PPTX_PARSER_REVISION: &str =
@@ -53,8 +54,13 @@ pub fn identity_for_path(path: &str) -> Option<(&'static str, &'static str)> {
 pub fn supports(path: &str) -> bool {
     identity_for_path(path).is_some()
 }
-pub fn parser_summary() -> Value {
-    json!({"parser_revision":PARSER_REVISION,"options_revision":OPTIONS_REVISION,
+fn parser_summary(source_format: &str) -> Value {
+    let parser_revision = if source_format == "docx" {
+        DOCX_PARSER_REVISION
+    } else {
+        PARSER_REVISION
+    };
+    json!({"parser_revision":parser_revision,"options_revision":OPTIONS_REVISION,
         "limits":{"members":4096,"part_bytes":33554432,"expanded_bytes":134217728,"compression_ratio":200,
         "xml_nodes":500000,"xml_depth":64,"text_bytes":16777216,"cells":100000,"blocks":100000}})
 }
@@ -185,7 +191,6 @@ pub fn decode_artifact(
         || v["source_version"].as_i64() != Some(request.source_version)
         || request.options_revision != OPTIONS_REVISION
         || v["options_revision"] != OPTIONS_REVISION
-        || v["parser"] != parser_summary()
         || v["truncated"] != false
         || !v["child_pid"].as_u64().is_some_and(|p| p > 0)
     {
@@ -193,6 +198,9 @@ pub fn decode_artifact(
     }
     let document: ExtractedDocument =
         serde_json::from_value(v.clone()).map_err(|_| Error::Invalid)?;
+    if v["parser"] != parser_summary(&document.source_format) {
+        return Err(Error::Invalid);
+    }
     match document.source_format.as_str() {
         "docx" | "xlsx" if document.page_count.is_none() => {}
         "pptx" if document.page_count.is_some_and(|n| n <= 4096) => {}

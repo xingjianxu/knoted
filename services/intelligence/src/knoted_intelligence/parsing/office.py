@@ -40,6 +40,7 @@ FORMATS = {
     "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml": "pptx",
 }
 POLICY_REVISION = "office-ooxml-body-v2-hidden-slides-included-cache-only"
+DOCX_PARSER_REVISION = "office-ooxml-body-v3:docx"
 
 
 @dataclass(frozen=True)
@@ -65,10 +66,10 @@ def options_revision(limits: OfficeLimits = DEFAULT_LIMITS) -> str:
     return POLICY_REVISION + ":" + hashlib.sha256(identity.encode()).hexdigest()
 
 
-def parser_summary() -> dict:
+def parser_summary(source_format: str) -> dict:
     """Artifact identity consumed by Rust; independent of supervision revision."""
     return {
-        "parser_revision": POLICY_REVISION,
+        "parser_revision": DOCX_PARSER_REVISION if source_format == "docx" else POLICY_REVISION,
         "options_revision": options_revision(),
         "limits": asdict(DEFAULT_LIMITS),
     }
@@ -395,6 +396,42 @@ def _docx(package: _Package, out: _Output):
     if body is None:
         _fail()
 
+    markers = {
+        W + name
+        for name in (
+            "bookmarkStart",
+            "bookmarkEnd",
+            "commentRangeStart",
+            "commentRangeEnd",
+            "customXmlDelRangeStart",
+            "customXmlDelRangeEnd",
+            "customXmlInsRangeStart",
+            "customXmlInsRangeEnd",
+            "customXmlMoveFromRangeStart",
+            "customXmlMoveFromRangeEnd",
+            "customXmlMoveToRangeStart",
+            "customXmlMoveToRangeEnd",
+            "moveFromRangeStart",
+            "moveFromRangeEnd",
+            "moveToRangeStart",
+            "moveToRangeEnd",
+            "permStart",
+            "permEnd",
+            "proofErr",
+        )
+    }
+    table_properties = {W + "tblPr", W + "tblGrid"}
+    row_properties = {W + "tblPrEx", W + "trPr"}
+
+    def table_children(container, content, properties):
+        for child in container:
+            if child.tag == content:
+                yield child
+            elif child.tag in properties:
+                continue
+            elif child.tag not in markers or len(child) or (child.text or "").strip():
+                _fail("unsupported_format")
+
     def walk(container, prefix):
         for index, node in enumerate(
             (n for n in container if n.tag not in {W + "tcPr", W + "sectPr"}), 1
@@ -403,10 +440,11 @@ def _docx(package: _Package, out: _Output):
                 out.add(_word_text(node), {"path": f"{prefix}/paragraph:{index}"})
             elif node.tag == W + "tbl":
                 table = f"{prefix}/table:{index}"
-                for row_index, row in enumerate(node.findall(W + "tr"), 1):
+                rows = table_children(node, W + "tr", table_properties)
+                for row_index, row in enumerate(rows, 1):
                     before = row.find(W + "trPr/" + W + "gridBefore")
                     column = 1 + (int(before.get(W + "val")) if before is not None else 0)
-                    for cell in row.findall(W + "tc"):
+                    for cell in table_children(row, W + "tc", row_properties):
                         merge = cell.find(W + "tcPr/" + W + "vMerge")
                         span = cell.find(W + "tcPr/" + W + "gridSpan")
                         width = int(span.get(W + "val")) if span is not None else 1

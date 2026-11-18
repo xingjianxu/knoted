@@ -235,14 +235,7 @@ impl PendingObject {
         Ok(())
     }
     fn leaf_metadata(&self) -> Result<Metadata, DomainError> {
-        let fd = fs::openat(
-            &self.directory,
-            self.name.as_str(),
-            OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        )
-        .map_err(std::io::Error::from)?;
-        Ok(safe_fs::metadata(fd)?)
+        staged_metadata(&self.directory, &self.name)
     }
     fn close(&mut self) -> Result<ObjectId, DomainError> {
         self.validate()?;
@@ -265,6 +258,16 @@ impl PendingObject {
         fs::fsync(&self.directory).map_err(std::io::Error::from)?;
         Ok(ObjectId::parse(name).expect("random controlled key"))
     }
+}
+fn staged_metadata(directory: &OwnedFd, name: &str) -> Result<Metadata, DomainError> {
+    let fd = fs::openat(
+        directory,
+        name,
+        OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(std::io::Error::from)?;
+    Ok(safe_fs::metadata(fd)?)
 }
 #[derive(sqlx::FromRow)]
 struct Source {
@@ -369,16 +372,15 @@ pub async fn capture_stable(
         sha256: Sha256Hex::parse(format!("{:x}", hash.finalize())).expect("sha256"),
         size,
     };
-    publish(ctx, &input, initial.as_ref(), &object, &mut pending).await?;
-    Ok(object)
+    publish(ctx, &input, initial.as_ref(), object, &mut pending).await
 }
 async fn publish(
     ctx: &AppContext,
     input: &SourceObservation,
     initial: Option<&Source>,
-    object: &StagedObject,
+    mut object: StagedObject,
     pending: &mut PendingObject,
-) -> Result<(), DomainError> {
+) -> Result<StagedObject, DomainError> {
     let mut tx = ctx.pool().begin().await?;
     lease_valid(&mut tx, &input.lease).await?;
     lock_observation(&mut tx, input).await?;
@@ -427,6 +429,32 @@ async fn publish(
             .execute(&mut *tx)
             .await?;
     }
+    // A new observation still took the full stable capture path. Only the
+    // locked source's prior bytes can replace this attempt's unpublished copy.
+    let reused = if let Some(previous) = current
+        .as_ref()
+        .filter(|s| same && s.sha256 == object.sha256.as_str() && s.size as u64 == object.size)
+        && let Some(previous_id) = previous
+            .input_object_id
+            .clone()
+            .and_then(|id| ObjectId::parse(id).ok())
+    {
+        let previous_object = StagedObject {
+            object_id: previous_id,
+            sha256: object.sha256.clone(),
+            size: object.size,
+        };
+        match verify_staged_object(ctx, input, &previous_object).await {
+            Ok(metadata) => {
+                object.object_id = previous_object.object_id;
+                Some(metadata)
+            }
+            Err(DomainError::Cancelled) => return Err(DomainError::Cancelled),
+            Err(_) => None, // Keep the new capture if the previous object cannot be verified.
+        }
+    } else {
+        None
+    };
     let changed = current
         .as_ref()
         .is_some_and(|s| s.sha256 != object.sha256.as_str());
@@ -435,17 +463,22 @@ async fn publish(
     lease_valid(&mut tx, &input.lease).await?;
     input.open()?;
     pending.validate()?;
-    // COMMIT can have succeeded even when its response/future is lost. Retain
-    // from this point; later GC must prove absence of source/jobs references.
     super::extraction::enqueue(&mut tx, id)
         .await
         .map_err(extraction_error)?;
     lease_valid(&mut tx, &input.lease).await?;
     input.open()?;
     pending.validate()?;
-    pending.retain = true;
+    if let Some(metadata) = reused
+        && staged_metadata(&pending.directory, object.object_id.as_str())? != metadata
+    {
+        return Err(DomainError::Changed);
+    }
+    // A lost COMMIT response can still mean publication succeeded. Only the
+    // new object needs retention if it may now be referenced.
+    pending.retain = pending.name == object.object_id.as_str();
     tx.commit().await?;
-    Ok(())
+    Ok(object)
 }
 fn size_i64(n: u64) -> Result<i64, DomainError> {
     i64::try_from(n).map_err(|_| DomainError::Changed)
@@ -508,11 +541,11 @@ fn validate_root(input: &SourceObservation) -> Result<(), DomainError> {
     }
     Ok(())
 }
-async fn verify_receipt_object(
+async fn verify_staged_object(
     ctx: &AppContext,
     input: &SourceObservation,
     expected: &StagedObject,
-) -> Result<(), DomainError> {
+) -> Result<Metadata, DomainError> {
     if expected.size > MAX_INPUT_BYTES {
         return Err(DomainError::TooLarge);
     }
@@ -539,7 +572,7 @@ async fn verify_receipt_object(
     }
     let mut hash = Sha256::new();
     let mut size = 0u64;
-    let mut buffer = [0u8; 64 * 1024];
+    let mut buffer = vec![0u8; 64 * 1024];
     loop {
         input.check_cancel()?;
         let n = file.read(&mut buffer)?;
@@ -561,7 +594,7 @@ async fn verify_receipt_object(
     {
         return Err(DomainError::Changed);
     }
-    Ok(())
+    Ok(before)
 }
 async fn replay(
     ctx: &AppContext,
@@ -576,8 +609,8 @@ async fn replay(
     lease_valid(&mut tx, &input.lease).await?;
     validate_root(input)?;
     let receipt = if let Some(object) = receipt {
-        match verify_receipt_object(ctx, input, &object).await {
-            Ok(()) => Some(object),
+        match verify_staged_object(ctx, input, &object).await {
+            Ok(_) => Some(object),
             Err(DomainError::Cancelled) => return Err(DomainError::Cancelled),
             Err(_) => None, // An invalid old input is retained; fresh capture may repair it.
         }
