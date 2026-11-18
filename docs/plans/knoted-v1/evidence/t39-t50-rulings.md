@@ -20,5 +20,6 @@
 | 14 | T50 首版支持 PDF、静态 PNG/JPEG/WebP 和严格转义文本；APNG/动画 WebP/未知容器拒绝预览但保留普通下载。 | 合法动画只能下载；不能先相信小画布，再让大帧绕过解码前 40M 像素守卫。此项仍为准备阶段选择。 | [草稿 PR #162](https://github.com/xingjianxu/knoted/pull/162)、[预览限额](../indexing-and-rag.md) |
 | 15 | 预览绑定所选来源、内容版本、元数据 ETag/version、摘要和格式；ETag 不符时保守刷新/重试，不新增版本参数。 | 元数据-only 修改可能触发额外的 50MiB 有界取回，不应误称正文改变或重新解析。此项仍为准备阶段选择。 | [草稿 PR #162](https://github.com/xingjianxu/knoted/pull/162)、[双版本契约](../../../decisions/0006-file-pipeline-and-aggregate-contracts.md) |
 | 16 | T50 文件选择镜像 Rust ASCII 小写与 Path 扩展语义，隐藏的仅扩展名 `.txt` 和 Unicode 大小写折叠变体不能扩大白名单。 | 这些名称保持仅下载；不将前端通用 Unicode lower-case 当作后端选择规则。 | [草稿 PR #162](https://github.com/xingjianxu/knoted/pull/162) |
+| 17 | T47 Worker 的真实停机需要启用既有 Tokio signal feature；主 Agent 离线仅补必需的 signal-hook-registry 1.4.8 传递锁项，不升级既有包，不另写手工信号处理库。此项窄化替代初期锁字节不变的准备假设。 | 增加一项传递依赖并需完整 Rust 复验；不扩展公开接口、宿主权限或其他依赖治理范围。 | [T47 B 计划](../../2026-11-18-t47-execution.md)、[ADR0007](../../../decisions/0007-execution-exit-confirmation.md) |
 
 最终收尾仍须审查所有完整任务与分支组合，并处理原账本的 deferred 项；本文件本身不证明 T47—T50 已合入或部署。
