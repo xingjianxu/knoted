@@ -5,6 +5,8 @@ edition.workspace = true
 
 [dependencies]
 base64.workspace = true
+bytes = "=1.12.1"
+ring = "=0.17.14"
 image.workspace = true
 tempfile.workspace = true
 chrono.workspace = true
