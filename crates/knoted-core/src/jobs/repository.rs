@@ -121,6 +121,7 @@ pub async fn claim(pool: &PgPool, worker: &str) -> Result<Option<Lease>, DbError
                  THEN 'cancel_requested' ELSE 'running' END, \
              lease_token = $2, \
              lease_expires_at = now() + make_interval(secs => $3), \
+             started_at = CASE WHEN attempts = 0 THEN now() ELSE started_at END, \
              attempts = attempts + 1, locked_by = $4, updated_at = now() \
          WHERE id = $1 \
          RETURNING attempts, lease_expires_at, state",

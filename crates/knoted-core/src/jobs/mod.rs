@@ -27,6 +27,7 @@ pub use service::{DomainJobError, ExecutionOutcome, FinishExecution};
 use std::fmt;
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -120,7 +121,8 @@ pub struct EnqueueOutcome {
 /// The database column stays textual (T07 exposes [`Job::state`] as a `String`),
 /// but code that branches on the state machine uses this enum so a typo cannot
 /// silently take the wrong branch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum JobState {
     Queued,
     Running,
@@ -195,6 +197,7 @@ pub struct Job {
     pub retry_of: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
 }
 
 impl Job {
