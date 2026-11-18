@@ -84,7 +84,7 @@
 | [T55](tasks/T55.md) | 搜索界面 | T54, T19 | done（dev 浏览器验收，见任务卡） |
 | [T56](tasks/T56.md) | 索引任务状态与重试 | T08, T54 | pending |
 | [T57](tasks/T57.md) | 分块和定位 | T48, T22, T36, T53 | done（dev 真实词法验收，见任务卡） |
-| [T58](tasks/T58.md) | 嵌入批处理适配 | T11, T57 | pending |
+| [T58](tasks/T58.md) | 嵌入批处理适配 | T11, T57 | done（dev 固定模型执行，见任务卡） |
 | [T59](tasks/T59.md) | pgvector存储与检索 | T58 | pending |
 | [T60](tasks/T60.md) | 混合检索和范围 | T59, T54 | pending |
 | [T61](tasks/T61.md) | 模型服务适配器 | T12, T60 | pending |
