@@ -92,7 +92,7 @@
 | [T63](tasks/T63.md) | 上下文预算与依赖 | T62 | done（见[主线与 dev 验收](evidence/t61-t65-integration.md)） |
 | [T64](tasks/T64.md) | 引用快照与验证 | T63 | done（见[主线与 dev 验收](evidence/t61-t65-integration.md)） |
 | [T65](tasks/T65.md) | 聊天界面 | T64, T18, T55 | done（见[主线与 dev 验收](evidence/t61-t65-integration.md)） |
-| [T66](tasks/T66.md) | 回答转存笔记 | T65, T23, T32 | pending |
+| [T66](tasks/T66.md) | 回答转存笔记 | T65, T23, T32 | done（[PR #217](https://github.com/xingjianxu/knoted/pull/217)，主线/dev `f796437`，[证据](evidence/t66-save-note.md)） |
 | [T67](tasks/T67.md) | 图片和临时对象回收 | T26, T37, T64 | pending |
 | [T68](tasks/T68.md) | 一致性备份 | T67 | pending |
 | [T69](tasks/T69.md) | 隔离恢复演练 | T68, T53, T59 | pending |
