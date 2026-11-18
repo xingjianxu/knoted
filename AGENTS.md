@@ -24,7 +24,9 @@ Knoted 当前为 Rust 2024 workspace（`crates/knoted-core`、`knoted-api`、`kn
 11. 使用 `verification-before-completion` 和 `finishing-a-development-branch` 收尾。完整完成 = 改动已安全提交 + 本地必需检查通过 + PR 合入目标主线 + 主线验证 + 本任务 Worktree/已合并分支清理。PR 创建或测试通过都不足以关闭任务。Issue 通过合并到默认分支的 PR 关闭关系自动关闭。按默认授权可直接合并自己完成的 PR；用户明确要求先看 PR 时保留待合并状态。[收尾步骤](docs/development/git-worktree.md)
 12. 需要独立人工确认的边界只剩两类：**重大架构决策**（新增或替代 Accepted ADR、跨模块接口与存储契约）与**不可逆或生产变更**（不可逆迁移、破坏性数据库操作、生产部署与线上配置）。删除未合并成果、清理其他任务的 Worktree、擅自扩大任务范围仍属禁止。凭据是硬约束：任何提交、文档、Issue、PR、日志都不得写入 token、私钥或密码，发现即停止并报告。强推与分支保护绕过由服务端规则约束，Agent 不主动尝试。
 
-## UI 组件归属
+## UI 开发
+
+新增或修改界面时，避免不必要的次级标签、副标题和说明文案。优先用布局、分组和视觉层级说明内容与操作的关系；保留必要的字段标签、反馈及无障碍名称。设计与验收参照 [UI 指南：布局与界面文案](docs/development/ui-mtone.md#布局与界面文案)。
 
 通用 UI 使用 npm `@bixlab/mtone`，不在 Knoted 实现通用组件库或 `@knoted/ui` 转发层。T17 已通过 PR #42 普通 merge 至主线 `e3e1db2`，移除 `packages/ui` cn 占位包并完成消费验收与主线验证、任务 Worktree/分支清理；不得重建占位包或转发层。应用保留业务组合、API/Query、权限、游标与编辑器适配；Tailwind 只做应用布局及公开主题适配，不另建基础控件体系，不直接包装 Base UI/复制源码/patch 绕过 mtone。
 
