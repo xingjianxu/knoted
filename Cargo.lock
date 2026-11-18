@@ -1696,6 +1696,7 @@ dependencies = [
  "futures-util",
  "http",
  "knoted-core",
+ "ring",
  "serde",
  "serde_json",
  "sqlx",
@@ -1714,12 +1715,14 @@ name = "knoted-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "bytes",
  "chrono",
  "chrono-tz",
  "image",
  "libc",
  "rand 0.8.8",
  "reqwest",
+ "ring",
  "rustix",
  "serde",
  "serde_json",

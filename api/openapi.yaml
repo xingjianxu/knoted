@@ -2196,10 +2196,16 @@ paths:
         - Files
       summary: 生成 Office 短时只读预览配置
       operationId: createOfficePreview
-      description: 只读且短时有效；源变化或授权过期后不能获取新源或扩大目录访问。
+      description: 绑定选定的内容版本和当前浏览器会话，创建有效期最长 120 秒的只读副本。响应含短时凭据，不得记录或缓存。
       parameters:
         - $ref: "#/components/parameters/FileId"
         - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OfficePreviewRequest"
       responses:
         "201":
           description: 成功
@@ -2228,26 +2234,64 @@ paths:
         - Files
       summary: 撤销 Office 预览配置
       operationId: deleteOfficePreview
+      description: 仅撤销当前会话为此文件创建的指定预览；无匹配授权时同样成功，不收回已交付的副本。
       parameters:
         - $ref: "#/components/parameters/FileId"
         - $ref: "#/components/parameters/CsrfToken"
+        - name: preview_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
       responses:
         "204":
-          description: 预览配置已撤销。
+          description: 请求处理完毕，无正文。
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/Conflict"
-        "429":
-          $ref: "#/components/responses/TooManyRequests"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+  /office-preview-sources/{previewId}:
+    get:
+      tags:
+        - Files
+      summary: 仅供 Document Server 读取已授权 Office 副本
+      operationId: getOfficePreviewSource
+      description: 仅接受 OnlyOffice 出站 JWT 请求头，不接受查询字符串或浏览器 cookie 鉴权。不支持部分读取；成功时返回完整副本，不缓存或记录凭据。
+      security:
+        - OfficeOutboxJWT: []
+      parameters:
+        - name: previewId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: 固定版本的原件字节
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: private, no-store
+            X-Content-Type-Options:
+              schema:
+                type: string
+                const: nosniff
+          content:
+            application/vnd.openxmlformats-officedocument.wordprocessingml.document:
+              schema: { type: string, format: binary }
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema: { type: string, format: binary }
+            application/vnd.openxmlformats-officedocument.presentationml.presentation:
+              schema: { type: string, format: binary }
+        "404":
+          $ref: "#/components/responses/NotFound"
   /search:
     get:
       tags:
@@ -2816,6 +2860,12 @@ paths:
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
 components:
+  securitySchemes:
+    OfficeOutboxJWT:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Document Server 签发的 HS256 出站 JWT，包含精确取源 URL（payload.url）和 iat/exp。
   schemas:
     ApiError:
       type: object
@@ -4238,19 +4288,89 @@ components:
           type: integer
           minimum: 1
           description: FileSource.version；不是 content_version。
+    OfficePreviewRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_content_version]
+      properties:
+        expected_content_version:
+          type: integer
+          minimum: 1
     OfficePreview:
       type: object
       additionalProperties: false
-      required:
-        - url
-        - expires_at
+      required: [preview_id, expires_at, document_server_origin, config]
       properties:
-        url:
+        preview_id:
           type: string
-          format: uri
+          format: uuid
         expires_at:
           type: string
           format: date-time
+        document_server_origin:
+          type: string
+          format: uri
+        config:
+          $ref: "#/components/schemas/OfficeEditorConfig"
+    OfficeEditorConfig:
+      type: object
+      additionalProperties: false
+      required: [documentType, document, editorConfig, token]
+      properties:
+        documentType:
+          type: string
+          enum: [word, cell, slide]
+        document:
+          type: object
+          additionalProperties: false
+          required: [fileType, key, title, url, permissions]
+          properties:
+            fileType:
+              type: string
+              enum: [docx, xlsx, pptx]
+            key:
+              type: string
+            title:
+              type: string
+            url:
+              type: string
+              format: uri
+            permissions:
+              type: object
+              additionalProperties: false
+              required: [edit, review, comment, fillForms, modifyFilter, modifyContentControl, chat, download, print, copy, changeHistory, protect]
+              properties:
+                edit: { type: boolean, const: false }
+                review: { type: boolean, const: false }
+                comment: { type: boolean, const: false }
+                fillForms: { type: boolean, const: false }
+                modifyFilter: { type: boolean, const: false }
+                modifyContentControl: { type: boolean, const: false }
+                chat: { type: boolean, const: false }
+                download: { type: boolean, const: false }
+                print: { type: boolean, const: false }
+                copy: { type: boolean, const: false }
+                changeHistory: { type: boolean, const: false }
+                protect: { type: boolean, const: false }
+        editorConfig:
+          type: object
+          additionalProperties: false
+          required: [mode, customization]
+          properties:
+            mode:
+              type: string
+              const: view
+            customization:
+              type: object
+              additionalProperties: false
+              required: [plugins, macros, macrosMode]
+              properties:
+                plugins: { type: boolean, const: false }
+                macros: { type: boolean, const: false }
+                macrosMode: { type: string, const: disable }
+        token:
+          type: string
+          minLength: 1
     SearchType:
       type: string
       enum:

@@ -82,6 +82,7 @@ pub struct AppContext {
     asset_root: std::path::PathBuf,
     files: crate::config::FilesConfig,
     intelligence: crate::config::IntelligenceConfig,
+    office: Option<Arc<crate::files::office::PreviewStore>>,
 }
 
 impl AppContext {
@@ -93,6 +94,7 @@ impl AppContext {
             asset_root: crate::config::AssetsConfig::default().root,
             files: crate::config::FilesConfig::default(),
             intelligence: crate::config::IntelligenceConfig::default(),
+            office: None,
         }
     }
 
@@ -126,6 +128,23 @@ impl AppContext {
     }
     pub fn files(&self) -> &crate::config::FilesConfig {
         &self.files
+    }
+
+    /// Install the optional API-local Office state. An unreadable credential
+    /// disables only Office previews; it does not prevent the API from starting.
+    pub fn with_office(
+        mut self,
+        config: Option<&crate::config::OfficeConfig>,
+        auth: &crate::config::AuthConfig,
+    ) -> Self {
+        self.office = config
+            .and_then(|config| crate::files::office::PreviewStore::new(config, auth))
+            .map(Arc::new);
+        self
+    }
+
+    pub(crate) fn office(&self) -> Option<&Arc<crate::files::office::PreviewStore>> {
+        self.office.as_ref()
     }
 
     /// The PostgreSQL pool.

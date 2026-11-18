@@ -99,6 +99,7 @@ const REQUIRED_BROWSER_OPERATIONS = [
   "POST /files/{fileId}/relink",
   "POST /files/{fileId}/office-preview",
   "DELETE /files/{fileId}/office-preview",
+  "GET /office-preview-sources/{previewId}",
   "GET /search",
   "GET /jobs",
   "POST /jobs/{jobId}/retry",
@@ -664,10 +665,29 @@ function checkOperations(document, documentName, operations, requiredInventory) 
     }
 
     if (documentName === BROWSER_DOCUMENT) {
-      check(
-        operation.responses["401"] !== undefined,
-        `${label}: 缺少 401 Unauthorized`,
-      );
+      if (operation.operationId === "getOfficePreviewSource") {
+        // No query or browser auth fallback; hide every authorization failure as 404.
+        const scheme = document.components?.securitySchemes?.OfficeOutboxJWT;
+        check(
+          operation.security?.length === 1 &&
+            Object.keys(operation.security[0]).length === 1 &&
+            operation.security[0].OfficeOutboxJWT?.length === 0 &&
+            scheme?.type === "http" && scheme.scheme === "bearer" &&
+            scheme.bearerFormat === "JWT" &&
+            ![...(pathItem.parameters ?? []), ...(operation.parameters ?? [])].some((parameter) =>
+              resolveLocal(document, parameter, `${label} parameter`).in !== "path"
+            ) &&
+            operation.responses["401"] === undefined &&
+            operation.responses["403"] === undefined &&
+            operation.responses["404"] !== undefined,
+          `${label}: Document Server 取源仅接受出站 JWT 请求头，授权失败统一返回 404`,
+        );
+      } else {
+        check(
+          operation.responses["401"] !== undefined,
+          `${label}: 缺少 401 Unauthorized`,
+        );
+      }
     }
 
     const response200Or201 = operation.responses["200"] ?? operation.responses["201"];

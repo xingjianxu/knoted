@@ -103,7 +103,8 @@ async fn run_server(args: Vec<String>) -> ExitCode {
     };
     let ctx = AppContext::new(pool)
         .with_asset_root(config.assets.root.clone())
-        .with_files(config.files.clone());
+        .with_files(config.files.clone())
+        .with_office(config.office.as_ref(), config.auth());
 
     let listener = match tokio::net::TcpListener::bind(bind).await {
         Ok(listener) => listener,

@@ -172,6 +172,8 @@ function prepareEnv({ runtimeRoot, instanceRoot, certDir, apiPort, httpsPort, in
     KNOTED_HTTPS_PORT: String(httpsPort),
     KNOTED_HTTPS_DOMAIN: domain,
     KNOTED_LOG_LEVEL: "debug",
+    KNOTED_OFFICE_ORIGIN: "",
+    KNOTED_OFFICE_JWT_SECRET_FILE: "",
     DATABASE_URL: "postgres://dev@127.0.0.1:5432/dev",
     ...extra,
   };
@@ -250,12 +252,43 @@ describe("prepare", () => {
     assert.ok(toml.includes('root = "/data/vaultsyncd-dev/dev-server/vaults/knoted-test"'));
     assert.ok(toml.includes(`staging_root = "${fixture.instanceRoot}/staging"`));
     assert.match(toml, /\[files\]\nenabled = true/);
+    assert.doesNotMatch(toml, /^\[office\]$/m);
 
     assert.equal(statSync(join(fixture.instanceRoot, "config/knoted.toml")).mode & 0o777, 0o600);
     assert.equal(statSync(join(fixture.instanceRoot, "state")).mode & 0o777, 0o700);
     assert.equal(existsSync(join(fixture.instanceRoot, "config/Caddyfile")), false);
     assert.equal(existsSync(join(fixture.instanceRoot, "bin/knoted-https-reload")), false);
 
+  });
+
+  it("仅用可信来源和绝对凭据路径启用 Office；不打开凭据文件", async () => {
+    const fixture = await fullFixture();
+    const secretFile = join(fixture.base, "not-created test input");
+    const result = run("bash", [serviceScript, "prepare"], {
+      env: prepareEnv(fixture, {
+        KNOTED_OFFICE_ORIGIN: "https://docs.example.test:19443",
+        KNOTED_OFFICE_JWT_SECRET_FILE: secretFile,
+      }),
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const toml = readFileSync(join(fixture.instanceRoot, "config/knoted.toml"), "utf8");
+    assert.ok(toml.includes('[office]\ndocument_server_origin = "https://docs.example.test:19443"'));
+    assert.ok(toml.includes(`jwt_secret_file = "${secretFile}"`));
+    assert.equal(existsSync(secretFile), false);
+  });
+
+  it("拒绝不完整或会破坏 TOML 的 Office 配置", async () => {
+    const fixture = await fullFixture();
+    for (const path of ["", "relative", '/path"\n[extra]']) {
+      const result = run("bash", [serviceScript, "prepare"], {
+        env: prepareEnv(fixture, {
+          KNOTED_OFFICE_ORIGIN: "https://docs.example.test:19443",
+          KNOTED_OFFICE_JWT_SECRET_FILE: path,
+        }),
+      });
+      assert.equal(result.status, 1);
+      assert.equal(existsSync(join(fixture.instanceRoot, "config/knoted.toml")), false);
+    }
   });
 
   it("拒绝被篡改或清单不完整的固定产物", async () => {

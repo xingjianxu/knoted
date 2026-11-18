@@ -8,6 +8,7 @@ use rustix::fs::{self, FileType, Mode, OFlags};
 use sha2::{Digest, Sha256};
 use sqlx::types::Json;
 use std::{fs::File, io::Read, path::Path};
+use tokio::sync::OwnedSemaphorePermit;
 use uuid::Uuid;
 #[derive(Debug, thiserror::Error)]
 pub enum DomainError {
@@ -15,6 +16,10 @@ pub enum DomainError {
     NotFound,
     #[error("file unavailable")]
     Unavailable,
+    #[error("selected content version is unavailable")]
+    SelectionConflict,
+    #[error("Office format or size is not supported")]
+    UnsupportedPreview,
     #[error(transparent)]
     Database(#[from] sqlx::Error),
 }
@@ -26,6 +31,17 @@ impl From<std::io::Error> for DomainError {
 pub struct ReadContent {
     pub id: Uuid,
 }
+pub(super) struct ReadOfficeContent {
+    pub id: Uuid,
+    pub expected_content_version: i64,
+}
+// Drop the allocation before releasing its admission, even when a detached
+// blocking task's return value is dropped without ever reaching the caller.
+pub(super) struct Admitted<T, G> {
+    pub content: T,
+    pub guard: G,
+}
+
 #[derive(Debug)]
 pub struct FileContent {
     pub bytes: Vec<u8>,
@@ -73,6 +89,20 @@ impl Source {
         }
         Ok(())
     }
+    fn validate_selection(&self, expected: Option<i64>) -> Result<(), DomainError> {
+        if let Some(expected) = expected {
+            if self.content_version != expected || self.status != "present" {
+                return Err(DomainError::SelectionConflict);
+            }
+            if self.size > super::office::MAX_PREVIEW_BYTES
+                || !super::office::supports(&self.relative_path)
+            {
+                return Err(DomainError::UnsupportedPreview);
+            }
+        }
+        self.validate()
+            .map_err(|error| recheck_error(error, expected))
+    }
     fn open(&self, root: &Root) -> Result<File, DomainError> {
         let path = Path::new(&self.relative_path);
         if self
@@ -119,12 +149,39 @@ pub async fn read_content(
     ctx: &AppContext,
     input: ReadContent,
 ) -> Result<FileContent, DomainError> {
+    read_current(ctx, input.id, None, ())
+        .await
+        .map(|result| result.content)
+}
+
+pub(super) async fn read_office_content(
+    ctx: &AppContext,
+    input: ReadOfficeContent,
+    permit: OwnedSemaphorePermit,
+) -> Result<Admitted<FileContent, OwnedSemaphorePermit>, DomainError> {
+    read_current(ctx, input.id, Some(input.expected_content_version), permit).await
+}
+
+fn recheck_error(error: DomainError, expected: Option<i64>) -> DomainError {
+    if expected.is_some() && matches!(error, DomainError::Unavailable | DomainError::NotFound) {
+        DomainError::SelectionConflict
+    } else {
+        error
+    }
+}
+
+async fn read_current<G: Send + 'static>(
+    ctx: &AppContext,
+    id: Uuid,
+    expected: Option<i64>,
+    guard: G,
+) -> Result<Admitted<FileContent, G>, DomainError> {
     let source: Source = sqlx::query_as(SOURCE)
-        .bind(input.id)
+        .bind(id)
         .fetch_optional(ctx.pool())
         .await?
         .ok_or(DomainError::NotFound)?;
-    source.validate()?;
+    source.validate_selection(expected)?;
     let root: Root = sqlx::query_as(ROOT)
         .bind(source.root_id)
         .fetch_optional(ctx.pool())
@@ -141,9 +198,17 @@ pub async fn read_content(
     }
     let s = source.clone();
     let r = root.clone();
-    let (bytes, file) = tokio::task::spawn_blocking(move || read_verified(&s, &r))
-        .await
-        .map_err(|_| DomainError::Unavailable)??;
+    // The guard travels with the allocation, even if the caller is cancelled
+    // and the blocking FD read keeps running after the request is gone.
+    let Admitted {
+        guard,
+        content: (bytes, file),
+    } = tokio::task::spawn_blocking(move || {
+        read_verified(&s, &r).map(|content| Admitted { content, guard })
+    })
+    .await
+    .map_err(|_| DomainError::Unavailable)?
+    .map_err(|error| recheck_error(error, expected))?;
     let mut tx = ctx.pool().begin().await?;
     let result = async {
         // Match scanner/capture lock ordering; annotation-only version changes are allowed.
@@ -153,21 +218,24 @@ pub async fn read_content(
             .await?
             .ok_or(DomainError::Unavailable)?;
         let current_source: Source = sqlx::query_as(&format!("{SOURCE} FOR UPDATE"))
-            .bind(input.id)
+            .bind(id)
             .fetch_optional(&mut *tx)
             .await?
-            .ok_or(DomainError::NotFound)?;
-        current_source.validate()?;
+            .ok_or_else(|| recheck_error(DomainError::NotFound, expected))?;
+        current_source
+            .validate()
+            .map_err(|error| recheck_error(error, expected))?;
         if root != current_root || source != current_source {
-            return Err(DomainError::Unavailable);
+            return Err(recheck_error(DomainError::Unavailable, expected));
         }
         let version: i64 = sqlx::query_scalar("SELECT version FROM file_sources WHERE id=$1")
-            .bind(input.id)
+            .bind(id)
             .fetch_one(&mut *tx)
             .await?;
         tokio::task::spawn_blocking(move || verify_path(&current_source, &current_root, &file))
             .await
-            .map_err(|_| DomainError::Unavailable)??;
+            .map_err(|_| DomainError::Unavailable)?
+            .map_err(|error| recheck_error(error, expected))?;
         Ok(FileContent {
             bytes,
             name: source
@@ -183,7 +251,7 @@ pub async fn read_content(
     match result {
         Ok(v) => {
             tx.commit().await?;
-            Ok(v)
+            Ok(Admitted { content: v, guard })
         }
         Err(e) => {
             tx.rollback().await?;

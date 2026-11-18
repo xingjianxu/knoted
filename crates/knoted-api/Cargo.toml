@@ -19,6 +19,7 @@ uuid.workspace = true
 tokio = { workspace = true, features = ["net"] }
 
 [dev-dependencies]
+ring = "=0.17.14"
 webauthn-authenticator-rs = { version = "0.6", features = ["softtoken"] }
 serde_json.workspace = true
 sqlx.workspace = true
