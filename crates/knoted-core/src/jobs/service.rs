@@ -424,8 +424,20 @@ struct ListCursor {
     id: Uuid,
 }
 
-/// Lists the newest executions first, including terminal attempts.
-pub async fn list(ctx: &AppContext, input: ListJobs) -> Result<JobPage, ListJobsError> {
+/// Reads the dispatch kind without loading a job's private payload.
+pub async fn kind(ctx: &AppContext, job_id: Uuid) -> Result<Option<String>, DbError> {
+    Ok(sqlx::query_scalar("SELECT kind FROM jobs WHERE id=$1")
+        .bind(job_id)
+        .fetch_optional(ctx.pool())
+        .await?)
+}
+
+/// Lists the newest executions of the selected kinds, including terminal attempts.
+pub async fn list(
+    ctx: &AppContext,
+    input: ListJobs,
+    kinds: &[&str],
+) -> Result<JobPage, ListJobsError> {
     let limit = input.limit.unwrap_or(50);
     if !(1..=100).contains(&limit) {
         return Err(ListJobsError::Invalid);
@@ -449,13 +461,14 @@ pub async fn list(ctx: &AppContext, input: ListJobs) -> Result<JobPage, ListJobs
         .transpose()?;
     let mut items: Vec<Job> = sqlx::query_as(
         "SELECT * FROM jobs WHERE ($1::text IS NULL OR state=$1) \
-         AND ($2::timestamptz IS NULL OR (created_at,id) < ($2,$3)) \
+         AND kind=ANY($5::text[]) AND ($2::timestamptz IS NULL OR (created_at,id) < ($2,$3)) \
          ORDER BY created_at DESC,id DESC LIMIT $4",
     )
     .bind(input.state.map(JobState::as_str))
     .bind(cursor.as_ref().map(|value| value.created_at))
     .bind(cursor.as_ref().map(|value| value.id))
     .bind(i64::from(limit) + 1)
+    .bind(kinds)
     .fetch_all(ctx.pool())
     .await
     .map_err(|_| ListJobsError::Unavailable)?;

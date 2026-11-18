@@ -320,3 +320,43 @@ async fn t56_scan_key_expires_after_seven_days_and_replay_keeps_the_original_res
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(busy["code"], "scan_pending");
 }
+
+#[tokio::test]
+async fn t56_excludes_chat_jobs_from_pagination_and_leaves_their_lifecycle_untouched() {
+    let f = Fixture::new().await;
+    let chat = f.enqueue("chat.generate").await;
+    let vector = f.enqueue("rag_vectors.embed").await;
+
+    let (status, found) = f
+        .call("GET", "/api/v1/jobs?limit=1", true, None, Value::Null)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(found["items"][0]["id"], json!(vector.id));
+    assert!(
+        found["next_cursor"].is_null(),
+        "the next page must exclude unrelated jobs"
+    );
+
+    let cancel = format!("/api/v1/jobs/{}/cancel", chat.id);
+    let (status, _) = f.call("POST", &cancel, true, None, Value::Null).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let lease = jobs::claim(f.ctx.pool(), "t56").await.unwrap().unwrap();
+    assert_eq!(lease.job_id, chat.id);
+    f.finish(
+        &lease,
+        ExecutionOutcome::PermanentFailure {
+            message: "private chat fixture".into(),
+        },
+        false,
+    )
+    .await;
+    let retry = format!("/api/v1/jobs/{}/retry", chat.id);
+    let (status, _) = f.call("POST", &retry, true, None, Value::Null).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let children: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs WHERE retry_of=$1")
+        .bind(chat.id)
+        .fetch_one(f.ctx.pool())
+        .await
+        .unwrap();
+    assert_eq!(children, 0);
+}

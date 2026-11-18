@@ -41,7 +41,7 @@ export const jobStages = {
 export function jobStage(kind: string): keyof typeof jobStages {
   if (kind.startsWith("file.")) return "extraction";
   if (kind.startsWith("fulltext.") || kind.startsWith("rag_chunks.")) return "fulltext";
-  if (kind.startsWith("vector.") || kind.startsWith("embedding.")) return "vector";
+  if (kind.startsWith("rag_vectors.")) return "vector";
   return "other";
 }
 
@@ -51,8 +51,9 @@ const jobNames: Record<string, string> = {
   "file.extract": "解析文件",
   "fulltext.publish": "发布全文索引",
   "fulltext.cleanup": "清理全文索引",
+  "rag_chunks.build": "生成检索分块",
   "rag_chunks.publish": "发布分块词法索引",
-  "vector.publish": "发布向量索引",
+  "rag_vectors.embed": "嵌入与发布向量",
 };
 
 export function jobName(kind: string) {

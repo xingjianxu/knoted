@@ -152,3 +152,11 @@ it("opens the task page from the file browser", async () => {
   await waitFor(() => expect(view.router.state.location.pathname).toBe("/files/jobs"));
   expect(await screen.findByRole("heading", { name: "索引任务" })).toBeInTheDocument();
 });
+
+it("shows the vector stage with its own jobs when embedding is used", async () => {
+  const vector: Job = { ...failed, kind: "rag_vectors.embed", state: "succeeded", error: null };
+  await openJobs([], () => json({ items: [vector], next_cursor: null }));
+  const stage = await screen.findByRole("region", { name: "向量索引" });
+  expect(await within(stage).findByText("嵌入与发布向量")).toBeInTheDocument();
+  expect(within(stage).queryByText("未启用")).not.toBeInTheDocument();
+});

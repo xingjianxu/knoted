@@ -31,6 +31,19 @@ use crate::{
     },
 };
 
+// The index panel can only manage ingestion/retrieval work. Other consumers,
+// including chat generation, own their lifecycle and resources.
+const INDEX_KINDS: &[&str] = &[
+    scanner::SCAN_JOB_KIND,
+    knoted_core::files::capture::CAPTURE_JOB_KIND,
+    knoted_core::files::extraction::EXTRACT_JOB_KIND,
+    knoted_core::search::meili::PUBLISH_JOB_KIND,
+    knoted_core::search::meili::CLEANUP_JOB_KIND,
+    "rag_chunks.build",
+    "rag_chunks.publish",
+    "rag_vectors.embed",
+];
+
 pub fn router(config: AuthConfig, ctx: AppContext) -> Router<AppContext> {
     Router::new()
         .route("/jobs", get(list))
@@ -138,7 +151,7 @@ async fn list(
     let Ok(Query(input)) = query else {
         return bad(request);
     };
-    match service::list(&ctx, input).await {
+    match service::list(&ctx, input, INDEX_KINDS).await {
         Ok(page) => Json(JobPageDto {
             items: page.items.into_iter().map(JobDto::from).collect(),
             next_cursor: page.next_cursor,
@@ -146,6 +159,18 @@ async fn list(
         .into_response(),
         Err(ListJobsError::Invalid) => bad(request),
         Err(ListJobsError::Unavailable) => unavailable(request),
+    }
+}
+
+async fn require_index_job(ctx: &AppContext, job_id: Uuid) -> Result<(), DomainJobError> {
+    let kind = service::kind(ctx, job_id).await?;
+    if kind
+        .as_deref()
+        .is_some_and(|kind| INDEX_KINDS.contains(&kind))
+    {
+        Ok(())
+    } else {
+        Err(DomainJobError::NotFound(job_id))
     }
 }
 
@@ -157,6 +182,9 @@ async fn retry(
     let Ok(Path(job_id)) = path else {
         return bad(request);
     };
+    if let Err(error) = require_index_job(&ctx, job_id).await {
+        return job_error(request, error);
+    }
     match service::retry_failed(&ctx, job_id).await {
         Ok(job) => (StatusCode::CREATED, Json(JobDto::from(job))).into_response(),
         Err(error) => job_error(request, error),
@@ -171,6 +199,9 @@ async fn cancel(
     let Ok(Path(job_id)) = path else {
         return bad(request);
     };
+    if let Err(error) = require_index_job(&ctx, job_id).await {
+        return job_error(request, error);
+    }
     match service::request_active_cancel(&ctx, job_id).await {
         Ok(job) => Json(JobDto::from(job)).into_response(),
         Err(error) => job_error(request, error),
