@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Dialog, Image, Spinner } from "@bixlab/mtone";
 import { ApiRequestError, type ApiClient } from "@knoted/api-client";
-import { inspectPreview, PREVIEW_BYTES, previewKind, type FileSource } from "./inspect";
+import { inspectPreview, isOfficeFile, PREVIEW_BYTES, previewKind, type FileSource } from "./inspect";
+import { OfficePreview } from "./OfficePreview";
 import { readPreviewBytes } from "./read";
 export interface FilePreviewProps {
     api: ApiClient;
@@ -51,6 +52,9 @@ function OpenPreview({ api, file, onOpenChange, onDownload }: FilePreviewProps &
     const [downloading, setDownloading] = useState(false);
     const [downloadError, setDownloadError] = useState("");
     const lifetime = useRef<Owner | null>(null);
+    const officeLifetime = useRef<(() => void) | null>(null);
+    const office = isOfficeFile(snapshot);
+    const markUnauthorized = useCallback(() => setUnauthorized(true), []);
     useEffect(() => {
         const owner: Owner = {
             controller: new AbortController(), disposed: false,
@@ -112,12 +116,13 @@ function OpenPreview({ api, file, onOpenChange, onDownload }: FilePreviewProps &
                 }
             }
         }
-        void load();
+        if (!office) void load();
         return owner.dispose;
-    }, [api, snapshot]);
+    }, [api, office, snapshot]);
     useEffect(() => { if (unauthorized)
         onOpenChange(false); }, [unauthorized, onOpenChange]);
     function close() {
+        officeLifetime.current?.();
         lifetime.current?.dispose();
         setClosed(true);
         onOpenChange(false);
@@ -135,6 +140,7 @@ function OpenPreview({ api, file, onOpenChange, onDownload }: FilePreviewProps &
             if (owner.disposed)
                 return;
             if (error instanceof ApiRequestError && error.status === 401) {
+                officeLifetime.current?.();
                 owner.dispose();
                 setUnauthorized(true);
             }
@@ -152,17 +158,19 @@ function OpenPreview({ api, file, onOpenChange, onDownload }: FilePreviewProps &
     return <Dialog open title={`文件预览：${file.name}`} onOpenChange={open => { if (!open)
         close(); }} className="max-w-5xl" footer={<><Button onClick={close}>关闭预览</Button><Button disabled={downloading || file.status !== "present"} onClick={() => void download()}>下载原文件</Button></>}>
     <div className="max-h-[70vh] overflow-auto">
-      {current.kind === "loading" && <Spinner label="正在读取预览"/>}
-      {current.kind === "error" && <Alert tone="warning">{current.message}</Alert>}
-      {current.kind === "text" && <pre aria-label="文件文本" className="whitespace-pre-wrap break-words">{current.text}</pre>}
-      {current.kind === "image" && <Image src={current.url} alt={file.name} preview={false} fit="contain" className="max-h-[65vh] max-w-full" onError={() => {
-                if (!lifetime.current || lifetime.current.disposed || lifetime.current.url !== current.url)
-                    return;
-                URL.revokeObjectURL(current.url);
-                lifetime.current.url = undefined;
-                setState({ api, kind: "error", message: "图片解码失败，请下载原文件。" });
-            }}/>}
-      {current.kind === "pdf" && <><p>由浏览器 PDF 查看器显示；如无法显示，请下载原文件。</p><iframe title={`PDF 预览：${file.name}`} src={current.url} className="h-[60vh] w-full"/></>}
+      {office ? <OfficePreview api={api} file={snapshot} disposeRef={officeLifetime} onUnauthorized={markUnauthorized}/> : <>
+        {current.kind === "loading" && <Spinner label="正在读取预览"/>}
+        {current.kind === "error" && <Alert tone="warning">{current.message}</Alert>}
+        {current.kind === "text" && <pre aria-label="文件文本" className="whitespace-pre-wrap break-words">{current.text}</pre>}
+        {current.kind === "image" && <Image src={current.url} alt={file.name} preview={false} fit="contain" className="max-h-[65vh] max-w-full" onError={() => {
+            if (!lifetime.current || lifetime.current.disposed || lifetime.current.url !== current.url)
+                return;
+            URL.revokeObjectURL(current.url);
+            lifetime.current.url = undefined;
+            setState({ api, kind: "error", message: "图片解码失败，请下载原文件。" });
+        }}/>}
+        {current.kind === "pdf" && <><p>由浏览器 PDF 查看器显示；如无法显示，请下载原文件。</p><iframe title={`PDF 预览：${file.name}`} src={current.url} className="h-[60vh] w-full"/></>}
+      </>}
       {downloadError && <Alert tone="error">{downloadError}</Alert>}
     </div>
   </Dialog>;
