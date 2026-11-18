@@ -20,6 +20,11 @@ pub async fn execute(
             message: "invalid extraction envelope".into(),
         };
     };
+    if job.payload.get("parser_revision").and_then(|v| v.as_str())
+        == Some(knoted_core::files::pdf::PARSER_REVISION)
+    {
+        return execute_python(ctx, lease, &input).await;
+    }
     let Ok(staged) = input.staged_object() else {
         return ExecutionOutcome::PermanentFailure {
             message: "invalid extraction input".into(),
@@ -54,5 +59,193 @@ pub async fn execute(
         Err(_) => ExecutionOutcome::TemporaryFailure {
             message: "extraction publication unavailable".into(),
         },
+    }
+}
+
+async fn execute_python(
+    ctx: &AppContext,
+    lease: &Lease,
+    input: &ExtractionInput,
+) -> ExecutionOutcome {
+    use knoted_core::{
+        files::pdf,
+        intelligence::{ExecutionKind, ExecutionRequest, ExecutionState, IntelligenceClient},
+    };
+    let client = match IntelligenceClient::new(&ctx.intelligence().base_url) {
+        Ok(client) => client,
+        Err(_) => return temporary("intelligence configuration unavailable"),
+    };
+    let attempts = match extraction::load_attempts(ctx.pool(), lease.job_id).await {
+        Ok(attempts) => attempts,
+        Err(_) => return temporary("attempt ledger unavailable"),
+    };
+    for previous in attempts.iter().filter(|a| a.lease_token != lease.token) {
+        if client.settle_execution(&previous.request).await.is_err() {
+            return temporary("previous execution exit unconfirmed");
+        }
+    }
+    let Ok(staged) = input.staged_object() else {
+        return permanent("invalid staging input");
+    };
+    let request = ExecutionRequest {
+        execution_id: uuid::Uuid::new_v4(),
+        kind: ExecutionKind::Parse,
+        input_object_id: staged.object_id,
+        input_sha256: staged.sha256,
+        source_version: input.content_version,
+        deadline: ctx.now() + std::time::Duration::from_secs(900),
+        options_revision: pdf::OPTIONS_REVISION.into(),
+    };
+    let attempt = match extraction::register_attempt(ctx.pool(), lease, request).await {
+        Ok(attempt) => attempt,
+        Err(extraction::DomainError::Stale) => return ExecutionOutcome::Cancelled,
+        Err(_) => return temporary("attempt registration unavailable"),
+    };
+    let request = &attempt.request;
+    if client.create_execution(request).await.is_err() {
+        return temporary("execution submission unconfirmed");
+    }
+    loop {
+        let record = match client.get_execution(request.execution_id).await {
+            Ok(record) => record,
+            Err(_) => return temporary("execution observation unavailable"),
+        };
+        if record.verify_echo(request).is_err() {
+            return permanent("execution echo mismatch");
+        }
+        if record.state.is_terminal() {
+            if record.verify_resource_exit(request).is_err() {
+                return temporary("execution exit unconfirmed");
+            }
+            if record.state != ExecutionState::Succeeded {
+                let code = record
+                    .error
+                    .as_ref()
+                    .map(|e| e.code.as_str())
+                    .unwrap_or("execution_failed");
+                return execution_failure(code);
+            }
+            if record.verify_fresh(request, ctx.now()).is_err() {
+                return permanent("deadline_exceeded");
+            }
+            let result = match client.get_result(request.execution_id).await {
+                Ok(result) => result,
+                Err(_) => return temporary("result unavailable"),
+            };
+            let document = match pdf::read_artifact(ctx, request, &result).await {
+                Ok(document) => document,
+                Err(pdf::Error::Io(_)) => return temporary("artifact unavailable"),
+                Err(_) => return permanent("invalid parse artifact"),
+            };
+            return match extraction::publish_python(ctx, lease, input, &document, &attempt).await {
+                Ok(()) => ExecutionOutcome::Succeeded,
+                Err(extraction::DomainError::Stale) => ExecutionOutcome::Cancelled,
+                Err(extraction::DomainError::DeadlineExceeded) => permanent("deadline_exceeded"),
+                Err(_) => temporary("extraction publication unavailable"),
+            };
+        }
+        if ctx.now() >= request.deadline {
+            return if client.settle_execution(request).await.is_ok() {
+                permanent("deadline_exceeded")
+            } else {
+                temporary("deadline exit unconfirmed")
+            };
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+fn execution_failure(code: &str) -> ExecutionOutcome {
+    if matches!(
+        code,
+        "corrupt_input"
+            | "unsupported_format"
+            | "invalid_input"
+            | "empty_input"
+            | "input_too_large"
+            | "image_too_large"
+            | "too_many_pages"
+            | "artifact_too_large"
+            | "output_too_large"
+            | "deadline_exceeded"
+            | "input_digest_mismatch"
+    ) {
+        permanent(code)
+    } else {
+        temporary(code)
+    }
+}
+fn temporary(message: &str) -> ExecutionOutcome {
+    ExecutionOutcome::TemporaryFailure {
+        message: message.into(),
+    }
+}
+fn permanent(message: &str) -> ExecutionOutcome {
+    ExecutionOutcome::PermanentFailure {
+        message: message.into(),
+    }
+}
+
+pub async fn cancel_and_wait(ctx: &AppContext, lease: &Lease) -> bool {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        cancel_registered(ctx, lease),
+    )
+    .await
+    .unwrap_or(false)
+}
+async fn cancel_registered(ctx: &AppContext, lease: &Lease) -> bool {
+    use knoted_core::intelligence::IntelligenceClient;
+    let Ok(attempts) = extraction::load_attempts(ctx.pool(), lease.job_id).await else {
+        return false;
+    };
+    let Ok(client) = IntelligenceClient::new(&ctx.intelligence().base_url) else {
+        return false;
+    };
+    let current: Option<uuid::Uuid> =
+        match sqlx::query_scalar("SELECT lease_token FROM jobs WHERE id=$1")
+            .bind(lease.job_id)
+            .fetch_one(ctx.pool())
+            .await
+        {
+            Ok(token) => token,
+            Err(_) => return false,
+        };
+    for attempt in attempts
+        .iter()
+        .filter(|a| current == Some(lease.token) || a.lease_token == lease.token)
+    {
+        if client.settle_execution(&attempt.request).await.is_err() {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn t47_machine_codes_preserve_permanent_input_limits_and_retryable_models() {
+        for code in [
+            "output_too_large",
+            "too_many_pages",
+            "image_too_large",
+            "corrupt_input",
+        ] {
+            assert!(matches!(
+                execution_failure(code),
+                ExecutionOutcome::PermanentFailure { .. }
+            ));
+        }
+        for code in [
+            "models_missing",
+            "execution_failed",
+            "unrecognized_future_code",
+        ] {
+            assert!(matches!(
+                execution_failure(code),
+                ExecutionOutcome::TemporaryFailure { .. }
+            ));
+        }
     }
 }

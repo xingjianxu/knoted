@@ -1,10 +1,10 @@
 # RFC: T47 计算进程退出确认与崩溃恢复
 
 - Date: 2026-11-18
-- Status: In Review
+- Status: Resolved
 - Owner: 用户决策，主 Agent 整理
 - Related issues / ADRs: [T47 #132](https://github.com/xingjianxu/knoted/issues/132)、[T48 #133](https://github.com/xingjianxu/knoted/issues/133)、[ADR0006](../decisions/0006-file-pipeline-and-aggregate-contracts.md)
-- Decision record: 尚未决定；原 RFC/ADR0006 已确认的 DTO、文件双版本和来源/提取存储继续有效，本 RFC 仅补充计算退出证明。
+- Decision record: [ADR0007](../decisions/0007-execution-exit-confirmation.md) Accepted。用户于 2026-11-18 本会话针对该 RFC 确认问题回复“通过，基于执行”；按推荐方案实施。原 ADR0006 继续有效。
 
 ## 问题、目标与非目标
 
@@ -60,7 +60,7 @@ file.extract 的 jobs payload 保存每次 claim/attempt 对应的 execution_id�
 
 ## 影响与迁移
 
-- 新字段是 Rust/Python 跨模块接口补充，需要用户确认；原已确认 RFC 不包含该退出证明，因此不能借原授权把本方案直接 Accepted。
+- 新字段属于 Rust/Python 跨模块接口补充；已由本次用户独立确认，见 ADR0007。原 ADR0006 的确认本身不包含该退出证明。
 - Python 账本只增量补列/私有记录，旧数据保留；PG 沿用已批准 file_extractions 的 execution_id 与 opaque jobs payload，不改变业务身份或正文版本。
 - 先补 OpenAPI/正反示例/客户端类型及双端测试，再实现 guardian/attempt/解析处理。两端从同一固定 SHA 产物启动，父子使用固定解释器/锁定依赖，禁止从 worktree 或可编辑环境运行持续服务。
 - dev 停本实例写进程及新增 intelligence 进程，保留 PG/assets 与 SQLite/私有账本一致备份，验证后切换；停止边界须等待/核对 guardian，不能只检查 API/Worker PID。共享服务与模型不动。
@@ -68,7 +68,7 @@ file.extract 的 jobs payload 保存每次 claim/attempt 对应的 execution_id�
 
 ## 验证与开放问题
 
-确认责任人为用户；推荐整个方案，尤其 compute_exit_confirmed 字段及 guardian 无法确认时保留占用的取舍。确认后以新 ADR 补充 ADR0006，不改写其原决策。
+用户已确认整个推荐方案，包含 compute_exit_confirmed 字段及 guardian 无法确认时保留占用的取舍。以 ADR0007 补充 ADR0006，不改写其原决策。
 
 实施验收至少包括：leader先退而孙进程存活、重复取消/TERM忽略、spawn前后各崩溃窗口、API SIGKILL/正常重启、guardian也死亡及损坏凭证时不放行、不误杀无关sentinel、迟到POST与丢响应、租约接管、自然终态与取消409竞态、短化deadline验证900秒上限动作、旧观察结果拒绝、真实离线中文OCR、500页/40M/100MiB边界、固定产物搬移及运行后摘要不变。不得用 mock 或 interrupted 状态替代实际子进程退出取证。
 
@@ -78,4 +78,4 @@ guardian 早期实现、具体 SQLite 私有字段布局及可检验凭证格式
 
 - 2026-11-18：只读 research_t47_crash_lifecycle 完成独立 owned-process 实验及候选报告；主 Agent 起草本 RFC，未实施协议字段或产品 guardian。
 - 2026-11-18：独立 review_t47_exit_rfc 给出 PASS，可交用户审阅；补强了旧helper调用点、guardian/ECHILD前提、完整请求与deadline幂等绑定、证明单调及legacy边界。报告 `/data/knoted-dev/tasks/t39-t50/reviews/t47-exit-rfc-review.md`，不是人工批准。
-- 人工决定：待确认；T46 可独立继续。
+- 2026-11-18 人工决定：用户针对本补充 RFC 明确回复“通过，基于执行”，推荐方案获批；见 ADR0007。此记录不是实施或运行验收完成。

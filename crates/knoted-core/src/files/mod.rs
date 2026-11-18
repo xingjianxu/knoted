@@ -21,3 +21,5 @@ pub mod identity;
 pub mod text;
 
 pub mod extraction;
+
+pub mod pdf;

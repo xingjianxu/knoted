@@ -69,6 +69,7 @@ class Service:
     def __init__(self, client: TestClient, settings: Settings) -> None:
         self.client = client
         self.settings = settings
+        self.deadlines: dict[str, datetime] = {}
 
     # -- protocol calls ------------------------------------------------------
 
@@ -83,8 +84,13 @@ class Service:
         deadline: datetime | None = None,
         options_revision: str = PARSE_OPTIONS,
     ):
+        execution_id = execution_id or str(uuid.uuid4())
+        if deadline is None:
+            deadline = self.deadlines.setdefault(
+                execution_id, datetime.now(UTC) + timedelta(minutes=5)
+            )
         body = {
-            "execution_id": execution_id or str(uuid.uuid4()),
+            "execution_id": execution_id,
             "kind": kind,
             "input_object_id": object_id,
             "input_sha256": sha256 or digest_text(),
@@ -316,8 +322,12 @@ def test_t09_3_restart_marks_running_interrupted(tmp_path: Path) -> None:
         result = restarted.result(running_id)
         assert result.status_code == 422
         assert result.json()["code"] == "execution_not_succeeded"
-        # Nothing is left in flight, so a restart does not look busy.
-        assert restarted.health().json() == {"status": "ok", "active_executions": 0}
+        # Legacy records have no exit receipt. Business interruption is not resource proof.
+        assert all(
+            restarted.get(eid).json()["compute_exit_confirmed"] is False
+            for eid in (queued_id, running_id, cancelling_id)
+        )
+        assert restarted.health().json() == {"status": "degraded", "active_executions": 0}
 
 
 def test_t09_4_cancel_kills_process_group_and_waits(tmp_path: Path) -> None:

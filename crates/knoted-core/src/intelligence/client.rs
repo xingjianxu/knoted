@@ -217,6 +217,7 @@ impl IntelligenceClient {
                 expected: "succeeded",
             });
         }
+        record.verify_resource_exit(request)?;
         if record.finished_at.is_none() {
             return Err(IntelligenceError::MalformedResponse {
                 reason: format!(
@@ -228,6 +229,52 @@ impl IntelligenceClient {
         let result = self.get_result(request.execution_id).await?;
         result.verify_against(store)?;
         Ok(result)
+    }
+
+    /// Fence a possibly late POST using its original persisted request, then
+    /// cancel/observe. Only a matching terminal exit receipt returns success.
+    pub async fn settle_execution(
+        &self,
+        request: &ExecutionRequest,
+    ) -> Result<(), IntelligenceError> {
+        let record = match self.get_execution(request.execution_id).await {
+            Ok(record) => record,
+            Err(IntelligenceError::Status { status: 404, .. }) => {
+                self.create_execution(request).await?.record
+            }
+            Err(error) => return Err(error),
+        };
+        record.verify_echo(request)?;
+        if record.verify_resource_exit(request).is_ok() {
+            return Ok(());
+        }
+        match self.cancel_execution(request.execution_id).await {
+            Ok(record) => {
+                record.verify_echo(request)?;
+                if record.verify_resource_exit(request).is_ok() {
+                    return Ok(());
+                }
+            }
+            Err(
+                IntelligenceError::Status { status: 409, .. }
+                | IntelligenceError::CancelUnconfirmed { .. },
+            ) => {}
+            Err(error) => return Err(error),
+        }
+        let deadline = tokio::time::Instant::now() + CANCEL_TIMEOUT;
+        loop {
+            let record = self.get_execution(request.execution_id).await?;
+            record.verify_echo(request)?;
+            if record.verify_resource_exit(request).is_ok() {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(IntelligenceError::CancelUnconfirmed {
+                    execution_id: request.execution_id,
+                });
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     fn execution_url(&self, execution_id: Uuid) -> String {

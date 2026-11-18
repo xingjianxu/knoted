@@ -213,6 +213,36 @@ const EXPECTED_VERSION_SCHEMAS = [
 
 const REQUIRED_EXAMPLES = [
   {
+    "document": "intelligence.openapi.yaml",
+    "schema": "ExecutionRecord",
+    "file": "valid/execution-record-exit-confirmed.json",
+    "valid": true
+  },
+  {
+    "document": "intelligence.openapi.yaml",
+    "schema": "ExecutionRecord",
+    "file": "valid/execution-record-exit-unconfirmed.json",
+    "valid": true
+  },
+  {
+    "document": "intelligence.openapi.yaml",
+    "schema": "ExecutionRecord",
+    "file": "valid/execution-record-legacy.json",
+    "valid": true
+  },
+  {
+    "document": "intelligence.openapi.yaml",
+    "schema": "ExecutionRecord",
+    "file": "invalid/execution-record-running-exit-confirmed.json",
+    "valid": false
+  },
+  {
+    "document": "intelligence.openapi.yaml",
+    "schema": "ExecutionRecord",
+    "file": "invalid/execution-record-exit-nonboolean.json",
+    "valid": false
+  },
+  {
     document: "openapi.yaml",
     schema: "FileRelinkRequest",
     file: "valid/file-relink.json",

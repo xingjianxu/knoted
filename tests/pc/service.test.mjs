@@ -107,6 +107,28 @@ function createRuntimeFixture() {
   writeFileSync(join(root, "share/knoted/web/index.html"), "<!doctype html><title>knoted</title>\n");
   writeFileSync(join(root, "share/knoted/migrations/0001_registry.sql"), "select 1;\n");
   writeFileSync(join(root, "share/knoted/REVISION"), `${revision}\n`);
+  // Only integrity fixtures: no Python computation is started by prepare.
+  writeExecutable(join(root, "bin/knoted-intelligence"), "#!/usr/bin/env bash\nexit 0\n");
+  const pythonRoot = join(root, "share/knoted/intelligence");
+  mkdirSync(join(pythonRoot, "python/bin"), { recursive: true });
+  mkdirSync(join(pythonRoot, "python/lib/python3.12/site-packages/knoted_intelligence"), { recursive: true });
+  writeExecutable(join(pythonRoot, "python/bin/python3.12"), '#!/usr/bin/env bash\nexec python3 "$@"\n');
+  for (const file of [
+    "BUILD.json",
+    "requirements.txt",
+    "uv.lock",
+    "python/lib/python3.12/os.py",
+    "python/lib/python3.12/site-packages/knoted_intelligence/app.py",
+    "python/lib/python3.12/site-packages/knoted_intelligence/guardian.py",
+    "python/lib/python3.12/site-packages/knoted_intelligence/supervision.py",
+    "python/lib/python3.12/site-packages/knoted_intelligence/parsing/pdf.py",
+    "python/lib/python3.12/site-packages/docling/document_converter.py",
+    "python/lib/python3.12/site-packages/torch/__init__.py",
+    "python/lib/python3.12/site-packages/onnxruntime/__init__.py",
+  ]) {
+    mkdirSync(resolve(join(pythonRoot, file), ".."), { recursive: true });
+    writeFileSync(join(pythonRoot, file), "integrity fixture\n");
+  }
   writeManifest(root);
   return root;
 }
@@ -135,7 +157,7 @@ function createCertificateFixture(hostname) {
 }
 
 // prepareEnv 关闭 boot profile 兜底，让每个用例自己决定工具来源。
-function prepareEnv({ runtimeRoot, instanceRoot, certDir, apiPort, httpsPort, domain }, extra = {}) {
+function prepareEnv({ runtimeRoot, instanceRoot, certDir, apiPort, httpsPort, intelligencePort, domain }, extra = {}) {
   return {
     ...process.env,
     // 默认只暴露临时 profile（真实 openssl）；/run/current-system 兜底也关掉，
@@ -146,6 +168,7 @@ function prepareEnv({ runtimeRoot, instanceRoot, certDir, apiPort, httpsPort, do
     KNOTED_RUNTIME_ROOT: runtimeRoot,
     KNOTED_CERT_DIR: certDir,
     KNOTED_API_PORT: String(apiPort),
+    KNOTED_INTELLIGENCE_PORT: String(intelligencePort),
     KNOTED_HTTPS_PORT: String(httpsPort),
     KNOTED_HTTPS_DOMAIN: domain,
     KNOTED_LOG_LEVEL: "debug",
@@ -160,12 +183,14 @@ async function fullFixture() {
   const certDir = createCertificateFixture("knoted.example.test");
   const apiPort = await freePort();
   const httpsPort = await freePort();
+  const intelligencePort = await freePort();
   return {
     base,
     runtimeRoot,
     certDir,
     apiPort,
     httpsPort,
+    intelligencePort,
     domain: "knoted.example.test",
     instanceRoot: join(base, "service"),
   };
@@ -198,7 +223,7 @@ describe("编排配置", () => {
       .map((line) => line.trim().replace(":", ""));
     assert.deepEqual(
       processNames.sort(),
-      ["knoted-api", "knoted-worker", "migrate", "prepare"],
+      ["knoted-api", "knoted-intelligence", "knoted-worker", "migrate", "prepare"],
       "外部依赖（PostgreSQL/Strata）不得进编排",
     );
     assert.match(yaml, /condition: process_completed_successfully/);
@@ -528,5 +553,49 @@ describe("T25 Worker", () => {
     assert.equal(result.status, 1);
     assert.match(result.stderr, /bin\/knoted-worker/);
     assert.equal(existsSync(join(fixture.instanceRoot, "config")), false);
+  });
+});
+
+describe("Python 固定产物", () => {
+  for (const file of [
+    "bin/knoted-intelligence",
+    "share/knoted/intelligence/python/bin/python3.12",
+    "share/knoted/intelligence/python/lib/python3.12/os.py",
+    "share/knoted/intelligence/python/lib/python3.12/site-packages/knoted_intelligence/app.py",
+    "share/knoted/intelligence/python/lib/python3.12/site-packages/docling/document_converter.py",
+    "share/knoted/intelligence/python/lib/python3.12/site-packages/torch/__init__.py",
+    "share/knoted/intelligence/python/lib/python3.12/site-packages/onnxruntime/__init__.py",
+    "share/knoted/intelligence/BUILD.json",
+    "share/knoted/intelligence/requirements.txt",
+    "share/knoted/intelligence/uv.lock",
+  ]) {
+    it(`重新生成清单也不能掩盖缺少 ${file}`, async () => {
+      const fixture = await fullFixture();
+      rmSync(join(fixture.runtimeRoot, file), { force: true });
+      writeManifest(fixture.runtimeRoot);
+      const result = run("bash", [serviceScript, "prepare"], { env: prepareEnv(fixture) });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /Python/);
+    });
+  }
+});
+
+describe("T47 intelligence", () => {
+  it("固定解释器进程、ready依赖及有界停止配置", () => {
+    const yaml = readFileSync(join(repoRoot, "process-compose.yaml"), "utf8");
+    assert.match(yaml, /\n  knoted-intelligence:/);
+    assert.match(yaml, /command: "exec bash tools\/dev\/pc\/service.sh intelligence"/);
+    assert.match(yaml, /condition: process_healthy/);
+    assert.match(yaml, /timeout_seconds: 30/);
+  });
+  it("degraded JSON 不满足 intelligence readiness", async () => {
+    const fixture = await fullFixture();
+    const stub = makeTempDir("health-stub");
+    writeExecutable(join(stub, "curl"), "#!/usr/bin/env bash\necho '{\"status\":\"degraded\",\"active_executions\":0}'\n");
+    const result = run("bash", [serviceScript, "probe-intelligence"], {
+      env: prepareEnv(fixture, { PATH: `${stub}:${process.env.PATH}` }),
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /degraded|未就绪/);
   });
 });

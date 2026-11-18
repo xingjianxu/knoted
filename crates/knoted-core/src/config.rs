@@ -146,6 +146,45 @@ impl Default for AssetsConfig {
     }
 }
 
+/// Internal execution service; no external origin or inline credentials.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct IntelligenceConfig {
+    pub base_url: String,
+}
+impl Default for IntelligenceConfig {
+    fn default() -> Self {
+        Self {
+            base_url: "http://127.0.0.1:15603".into(),
+        }
+    }
+}
+impl IntelligenceConfig {
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        let valid = url::Url::parse(&self.base_url).ok().is_some_and(|u| {
+            u.scheme() == "http"
+                && u.username().is_empty()
+                && u.password().is_none()
+                && u.path() == "/"
+                && u.query().is_none()
+                && u.fragment().is_none()
+                && match u.host() {
+                    Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+                    Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+                    _ => false,
+                }
+        });
+        if valid {
+            Ok(())
+        } else {
+            Err(ConfigError::Invalid {
+                field: "intelligence.base_url",
+                message: "requires an HTTP loopback origin without credentials or a path".into(),
+            })
+        }
+    }
+}
+
 /// Disabled unless explicitly configured. Sources remain read-only; staging
 /// must live outside the observed tree.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -253,6 +292,7 @@ pub struct AppConfig {
     pub auth: AuthConfig,
     pub assets: AssetsConfig,
     pub files: FilesConfig,
+    pub intelligence: IntelligenceConfig,
     secrets: BTreeMap<String, String>,
 }
 
@@ -266,6 +306,7 @@ impl fmt::Debug for AppConfig {
             .field("auth", &self.auth)
             .field("assets", &self.assets)
             .field("files", &self.files)
+            .field("intelligence", &self.intelligence)
             .field("loaded_credentials", &self.secrets.len())
             .finish()
     }
@@ -346,6 +387,7 @@ impl AppConfig {
         }
         validate_auth(&file.auth)?;
         file.files.validate()?;
+        file.intelligence.validate()?;
         if file.files.enabled {
             let source = resolve_existing(file.files.root.as_ref().expect("validated root"))
                 .map_err(|_| ConfigError::Invalid {
@@ -387,6 +429,7 @@ impl AppConfig {
             auth: file.auth,
             assets: file.assets,
             files: file.files,
+            intelligence: file.intelligence,
             secrets,
         })
     }
@@ -436,6 +479,8 @@ struct ConfigFile {
     assets: AssetsConfig,
     #[serde(default)]
     files: FilesConfig,
+    #[serde(default)]
+    intelligence: IntelligenceConfig,
 }
 
 #[derive(Deserialize)]

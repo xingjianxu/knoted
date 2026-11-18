@@ -237,10 +237,28 @@ components:
         - started_at
         - finished_at
         - error
+      allOf:
+        - if:
+            required: [compute_exit_confirmed]
+            properties:
+              compute_exit_confirmed:
+                const: true
+          then:
+            properties:
+              state:
+                enum: [succeeded, failed, cancelled, interrupted]
       properties:
         execution_id:
           type: string
           format: uuid
+        compute_exit_confirmed:
+          type: boolean
+          default: false
+          description: >-
+            仅 terminal 可为 true，表示此 ID 不会再启动计算且整个受监督后代树已确认回收。
+            缺失按 false；旧记录不得因 PID 不存在或升级自动补 true。证明可单调补齐，
+            不改写终态业务结果。资源确认另须匹配 request echo，成功还须完整产物、deadline
+            与来源/租约栅栏。新 Rust/Python 同固定版本部署，见 ADR0007。
         kind:
           $ref: "#/components/schemas/ExecutionKind"
         state:
