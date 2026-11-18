@@ -1,7 +1,7 @@
 # T48 Office 解析实施证据
 
 Issue #133；基线 `5377c581cc7696cc416304b4ae1b758ee0c30f79`。
-以下阶段 A 段落为当时的历史记录；当前 Phase B 记录在文末，整卡仍待主 Agent 集成验收。
+以下阶段 A 段落为当时的历史记录；整卡主线/dev 交付与清理记录在文末，早期阶段边界保留作历史证据。
 阶段 A 当时仅纯解析库与安全测试，T47 未集成，执行注册、Python/Rust
 双端执行状态/取消/摘要/过期结果和 dev 验收留在阶段 B；不以 parser 测试替代。
 
@@ -10,8 +10,8 @@ Issue #133；基线 `5377c581cc7696cc416304b4ae1b758ee0c30f79`。
 - [x] 首轮 GREEN：33 passed；补充完整性回归 RED：2 failed / 42 passed。
 - [x] 补充 GREEN：44 passed。
 - [x] Python 完整 pytest + 冻结后全部 T48 / ruff / 格式检查（组合验证，快照区别见下）。
-- [ ] 安全提交与主 Agent 独立审查。
-- [ ] 阶段 B、主线集成、dev 验收与清理。
+- [x] 阶段 A 安全提交与主 Agent 独立审查。
+- [x] 阶段 B、主线集成、dev 验收与清理（最终记录见文末）。
 
 ## 实现选择与支持范围
 
@@ -129,8 +129,8 @@ pgNum、contentPart 与未知正文表达明确 unsupported_format，保留普�
 - [x] Rust Office identity、共享有界 artifact 读取与定位校验的 RED→GREEN。
 - [x] enqueue/Worker/成功表选择 Office，保留既有退出/租约/来源/deadline 栅栏。
 - [x] Python HTTP 成功/错误/取消/短截止/重启、Rust echo/proof/摘要/过期与隔离 PG 管线。
-- [ ] 冻结代码后完整 Rust fmt/test/clippy、Python pytest/ruff，记录实际计数和 scope。
-- [ ] 提交、父审查与集成；本实施者不执行远程/dev/真实 SourceRoot 写入。
+- [x] 冻结代码后完整 Rust fmt/test/clippy、Python pytest/ruff，记录实际计数和 scope。
+- [x] 提交、父审查与集成；本实施者不执行远程/dev/真实 SourceRoot 写入。
 
 ### Phase B 身份与实际链路
 
@@ -254,3 +254,57 @@ HTTP 子测试。`r3-fmt-final`、`r3-clippy-final` 与 diffcheck 全 exit0。
 所有命令/原始输出/退出码仍在 `/data/knoted-dev/tasks/t48/logs/`。
 Python 全部源/测试和 Rust 产品字节未改，不重复模型或完整 Rust/Worker 管线。
 最终提交与完整差异哈希见外部实施报告；继续冻结交父独立复验与 scoped 审查。
+
+## 最终主线与 dev 验收（2026-11-18）
+
+PR [#159](https://github.com/xingjianxu/knoted/pull/159) 普通 merge 至
+`c936e0a9b8b4cfc9c8cdee9749fb038f3648cbf3`，dev 同 SHA、schema15。
+Issue #133 和继承的 PID fixture 竞态 #166 已由关闭关系自动关闭。
+最终修复 R2 `cf96b97`、R3 `1e00917` 及独立定向复审均已完成，
+SpecPASS / QualityAPPROVED，I1–I4 全部 ADDRESSED，无 Critical/Important。
+旧 PDF 测试名/OCR 注释属于非阻断措辞 Minor；依赖警告继续 #156。
+
+父最终完整产品快照 `cf96b97` 实际门禁：
+
+| 命令/检查 | 实际结果 | 原始证据 |
+|---|---|---|
+| `cargo test --workspace --locked` | 394顶层 + 2嵌套通过，1既有ignored | `logs/parent-r2-rust.log/.exit` |
+| `uv run --locked --group dev pytest -q` | 168 passed，9 warnings，249.13秒 | `logs/parent-r2-python.log/.exit` |
+| Office专项 | 76 passed，无warning | `logs/r2-office-final.log/.exit` |
+| 最后R3仅HTTP测试助手，父独立HTTP模块 | 3顶层 + 7嵌套通过，37.78秒 | `logs/parent-r3-http.log/.exit` |
+| fmt / clippy `-D warnings` / ruff / format | 全exit0，28 Python文件格式符合 | `logs/parent-r2-*`、`parent-r3-*` |
+| 主线实际Python导入与 `cargo test --workspace --locked t48_` | 导入主线源码，13顶层 + 7嵌套通过 | `logs/main-import.log`、`main-t48-rust.log/.exit` |
+| 主线fmt/clippy/固定联合产物 | 全exit0，38317文件完整清单 | `evidence/main-verification.json` |
+
+R3之后所有Python源/测试和Rust产品字节对已完整验证的cf96不变；
+仅Rust HTTP测试助手/证据变化，其独立覆盖如上，不把组合称为另一遍完整suite。
+主线树与最终审查HEAD/18文件摘要一致，uv环境已切到主线，未从已清理WT运行。
+API/pc/Web行为及依赖锁未改，沿用T47已验证的同字节门禁，不重复无影响模型/平台审计。
+T47的产物封装/搬移/CPU/宿主动态库边界仍适用，不宣称跨机器运行闭包。
+
+固定产物清单 SHA256：
+`a643efdafbf04b7b9c662f907794a04c62f083362babc44064005b986fc0cf1b`。
+部署前已依流程停止自有三进程、确认私有监督clean，并完成PG/assets/staging和
+原生SQLite一致性备份：`/data/knoted-dev/service/backups/20261118T023806Z-t48-/`。
+实际三进程均从c936e0a固定产物运行，HTTPS/内部健康、CPU/只读模型、loopback、
+共享服务身份不变；不重做T47已验证且字节未变的打包器搬移/ELF审计。
+
+真实源目录只使用本次UUID下五份样本，完整初始→unchanged→DOCX正文v2→cleanup：
+
+- 初始generation85：DOCX中文段落和表格、XLSX原工作表/A1/缓存42且隐藏标记不出现、PPTX空白第一页/正文第二页/隐藏第三页均真实提取。DOCX/XLSX页码NULL、所有bboxNULL，artifact SHA/size/格式及compute_exit_confirmed校验通过。
+- 损坏DOCX和旧二进制XLSX各永久失败一次，无成功行；generation86未变扫描保持三成功/两失败，不重新获取预算。
+- generation87 DOCX正文v2产生第四成功，content_version推进、旧提取行保持；其他格式不重算。
+- generation88五源全部missing/fresh=false，自有样本删除；三成功来源共四历史提取、两失败终态保持。
+
+运行日志 `logs/live-acceptance.log/.exit=0` 和八个步骤输出均保存；
+`evidence/runtime-{initial,unchanged,changed,cleaned}.json` 保留独立实际检查。
+最后只读审计 `evidence/final-runtime-audit.json`：17个持久Python执行全部
+request echo/退出证明有效（9成功、5失败、1取消、2中断，含T47历史），
+健康active0、文件任务active0、staging无.part，完整38317文件运行后仍匹配清单。
+全局来源0present/21missing、成功提取13、预期失败工作7、既有Passkey1。
+正常移除本任务WT与已合并本地/远程分支；11个忽略文件均pytest/pyc可重建缓存，
+未知忽略文件0，其他任务WT保留，见 `evidence/worktree-cleanup.json`。
+
+上述本地原始证据均位于 `/data/knoted-dev/tasks/t48/`，不含会话凭据或私有owner令牌。
+本文支持范围仍为受界ZIP32 OOXML正文子集；预算与特殊容器可能拒绝合法文档，
+缓存可陈旧，未执行公式或Office。文件浏览/预览由T49/T50继续，检索/RAG未开放。
