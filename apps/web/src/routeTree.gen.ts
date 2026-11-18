@@ -14,12 +14,14 @@ import { Route as BootstrapRouteImport } from './routes/bootstrap'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as RecoveryRouteImport } from './routes/recovery'
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated.index'
+import { Route as AuthenticatedChatRouteImport } from './routes/_authenticated.chat'
 import { Route as AuthenticatedFilesRouteImport } from './routes/_authenticated.files'
 import { Route as AuthenticatedNotesRouteImport } from './routes/_authenticated.notes'
 import { Route as AuthenticatedProjectsRouteImport } from './routes/_authenticated.projects'
 import { Route as AuthenticatedSearchRouteImport } from './routes/_authenticated.search'
 import { Route as AuthenticatedTasksRouteImport } from './routes/_authenticated.tasks'
 import { Route as AuthenticatedTrashRouteImport } from './routes/_authenticated.trash'
+import { Route as AuthenticatedChatChatSessionIdRouteImport } from './routes/_authenticated.chat.$chatSessionId'
 import { Route as AuthenticatedFilesIndexRouteImport } from './routes/_authenticated.files.index'
 import { Route as AuthenticatedFilesFileIdRouteImport } from './routes/_authenticated.files.$fileId'
 import { Route as AuthenticatedNotesIndexRouteImport } from './routes/_authenticated.notes.index'
@@ -54,6 +56,11 @@ const AuthenticatedIndexRoute = AuthenticatedIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedChatRoute = AuthenticatedChatRouteImport.update({
+  id: '/chat',
+  path: '/chat',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
 const AuthenticatedFilesRoute = AuthenticatedFilesRouteImport.update({
   id: '/files',
   path: '/files',
@@ -84,6 +91,12 @@ const AuthenticatedTrashRoute = AuthenticatedTrashRouteImport.update({
   path: '/trash',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedChatChatSessionIdRoute =
+  AuthenticatedChatChatSessionIdRouteImport.update({
+    id: '/$chatSessionId',
+    path: '/$chatSessionId',
+    getParentRoute: () => AuthenticatedChatRoute,
+  } as any)
 const AuthenticatedFilesIndexRoute = AuthenticatedFilesIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -141,12 +154,14 @@ export interface FileRoutesByFullPath {
   '/bootstrap': typeof BootstrapRoute
   '/login': typeof LoginRoute
   '/recovery': typeof RecoveryRoute
+  '/chat': typeof AuthenticatedChatRouteWithChildren
   '/files': typeof AuthenticatedFilesRouteWithChildren
   '/notes': typeof AuthenticatedNotesRouteWithChildren
   '/projects': typeof AuthenticatedProjectsRouteWithChildren
   '/search': typeof AuthenticatedSearchRoute
   '/tasks': typeof AuthenticatedTasksRouteWithChildren
   '/trash': typeof AuthenticatedTrashRoute
+  '/chat/$chatSessionId': typeof AuthenticatedChatChatSessionIdRoute
   '/files/$fileId': typeof AuthenticatedFilesFileIdRoute
   '/notes/$noteId': typeof AuthenticatedNotesNoteIdRoute
   '/projects/$projectId': typeof AuthenticatedProjectsProjectIdRoute
@@ -161,9 +176,11 @@ export interface FileRoutesByTo {
   '/bootstrap': typeof BootstrapRoute
   '/login': typeof LoginRoute
   '/recovery': typeof RecoveryRoute
+  '/chat': typeof AuthenticatedChatRouteWithChildren
   '/search': typeof AuthenticatedSearchRoute
   '/trash': typeof AuthenticatedTrashRoute
   '/': typeof AuthenticatedIndexRoute
+  '/chat/$chatSessionId': typeof AuthenticatedChatChatSessionIdRoute
   '/files/$fileId': typeof AuthenticatedFilesFileIdRoute
   '/notes/$noteId': typeof AuthenticatedNotesNoteIdRoute
   '/projects/$projectId': typeof AuthenticatedProjectsProjectIdRoute
@@ -180,6 +197,7 @@ export interface FileRoutesById {
   '/bootstrap': typeof BootstrapRoute
   '/login': typeof LoginRoute
   '/recovery': typeof RecoveryRoute
+  '/_authenticated/chat': typeof AuthenticatedChatRouteWithChildren
   '/_authenticated/files': typeof AuthenticatedFilesRouteWithChildren
   '/_authenticated/notes': typeof AuthenticatedNotesRouteWithChildren
   '/_authenticated/projects': typeof AuthenticatedProjectsRouteWithChildren
@@ -187,6 +205,7 @@ export interface FileRoutesById {
   '/_authenticated/tasks': typeof AuthenticatedTasksRouteWithChildren
   '/_authenticated/trash': typeof AuthenticatedTrashRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
+  '/_authenticated/chat/$chatSessionId': typeof AuthenticatedChatChatSessionIdRoute
   '/_authenticated/files/$fileId': typeof AuthenticatedFilesFileIdRoute
   '/_authenticated/notes/$noteId': typeof AuthenticatedNotesNoteIdRoute
   '/_authenticated/projects/$projectId': typeof AuthenticatedProjectsProjectIdRoute
@@ -204,12 +223,14 @@ export interface FileRouteTypes {
     | '/bootstrap'
     | '/login'
     | '/recovery'
+    | '/chat'
     | '/files'
     | '/notes'
     | '/projects'
     | '/search'
     | '/tasks'
     | '/trash'
+    | '/chat/$chatSessionId'
     | '/files/$fileId'
     | '/notes/$noteId'
     | '/projects/$projectId'
@@ -224,9 +245,11 @@ export interface FileRouteTypes {
     | '/bootstrap'
     | '/login'
     | '/recovery'
+    | '/chat'
     | '/search'
     | '/trash'
     | '/'
+    | '/chat/$chatSessionId'
     | '/files/$fileId'
     | '/notes/$noteId'
     | '/projects/$projectId'
@@ -242,6 +265,7 @@ export interface FileRouteTypes {
     | '/bootstrap'
     | '/login'
     | '/recovery'
+    | '/_authenticated/chat'
     | '/_authenticated/files'
     | '/_authenticated/notes'
     | '/_authenticated/projects'
@@ -249,6 +273,7 @@ export interface FileRouteTypes {
     | '/_authenticated/tasks'
     | '/_authenticated/trash'
     | '/_authenticated/'
+    | '/_authenticated/chat/$chatSessionId'
     | '/_authenticated/files/$fileId'
     | '/_authenticated/notes/$noteId'
     | '/_authenticated/projects/$projectId'
@@ -304,6 +329,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedIndexRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/chat': {
+      id: '/_authenticated/chat'
+      path: '/chat'
+      fullPath: '/chat'
+      preLoaderRoute: typeof AuthenticatedChatRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/files': {
       id: '/_authenticated/files'
       path: '/files'
@@ -345,6 +377,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/trash'
       preLoaderRoute: typeof AuthenticatedTrashRouteImport
       parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/chat/$chatSessionId': {
+      id: '/_authenticated/chat/$chatSessionId'
+      path: '/$chatSessionId'
+      fullPath: '/chat/$chatSessionId'
+      preLoaderRoute: typeof AuthenticatedChatChatSessionIdRouteImport
+      parentRoute: typeof AuthenticatedChatRoute
     }
     '/_authenticated/files/': {
       id: '/_authenticated/files/'
@@ -412,6 +451,17 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface AuthenticatedChatRouteChildren {
+  AuthenticatedChatChatSessionIdRoute: typeof AuthenticatedChatChatSessionIdRoute
+}
+
+const AuthenticatedChatRouteChildren: AuthenticatedChatRouteChildren = {
+  AuthenticatedChatChatSessionIdRoute: AuthenticatedChatChatSessionIdRoute,
+}
+
+const AuthenticatedChatRouteWithChildren =
+  AuthenticatedChatRoute._addFileChildren(AuthenticatedChatRouteChildren)
+
 interface AuthenticatedFilesRouteChildren {
   AuthenticatedFilesFileIdRoute: typeof AuthenticatedFilesFileIdRoute
   AuthenticatedFilesIndexRoute: typeof AuthenticatedFilesIndexRoute
@@ -467,6 +517,7 @@ const AuthenticatedTasksRouteWithChildren =
   AuthenticatedTasksRoute._addFileChildren(AuthenticatedTasksRouteChildren)
 
 interface AuthenticatedRouteChildren {
+  AuthenticatedChatRoute: typeof AuthenticatedChatRouteWithChildren
   AuthenticatedFilesRoute: typeof AuthenticatedFilesRouteWithChildren
   AuthenticatedNotesRoute: typeof AuthenticatedNotesRouteWithChildren
   AuthenticatedProjectsRoute: typeof AuthenticatedProjectsRouteWithChildren
@@ -478,6 +529,7 @@ interface AuthenticatedRouteChildren {
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
+  AuthenticatedChatRoute: AuthenticatedChatRouteWithChildren,
   AuthenticatedFilesRoute: AuthenticatedFilesRouteWithChildren,
   AuthenticatedNotesRoute: AuthenticatedNotesRouteWithChildren,
   AuthenticatedProjectsRoute: AuthenticatedProjectsRouteWithChildren,

@@ -78,7 +78,7 @@ function Shell() {
           <NavItem active={pathname === "/trash"} onClick={() => void navigate({ to: "/trash" })}>回收站</NavItem>
           <NavItem active={/^\/files(?:\/|$)/.test(pathname)} onClick={() => void navigate({ to: "/files" })}>文件</NavItem>
           <NavItem active={pathname === "/search"} onClick={() => void navigate({ to: "/search", search: { q: "" } })}>搜索</NavItem>
-          <NavItem disabled title="尚未实现">问答（待开放）</NavItem>
+          <NavItem active={/^\/chat(?:\/|$)/.test(pathname)} onClick={() => void navigate({ to: "/chat" })}>问答</NavItem>
         </NavGroup>
         <NavGroup label="账号">
           <NavItem
