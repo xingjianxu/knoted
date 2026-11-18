@@ -148,7 +148,7 @@ class Ledger:
         return self._path
 
     def open(self) -> None:
-        """Opens the database, applies the schema and recovers stale rows."""
+        """Opens the database and applies schema; recovery requires the owner lock."""
 
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
@@ -227,12 +227,19 @@ class Ledger:
         options_revision: str,
         deadline: datetime,
         now: datetime,
+        supervision_token: str | None = None,
     ) -> ExecutionRow:
-        """Inserts a ``queued`` row; raises :class:`LedgerConflict` if it exists."""
+        """Insert execution and optional queued supervision as one durable unit.
+
+        The service always supplies a token. The token-free form is retained
+        for importing/testing legacy rows, whose exit remains unconfirmed.
+        """
 
         with self._lock:
+            db = self._connection_or_raise()
+            db.execute("BEGIN IMMEDIATE")
             try:
-                self._connection_or_raise().execute(
+                db.execute(
                     """
                     INSERT INTO executions (
                         execution_id, kind, input_object_id, input_sha256,
@@ -252,15 +259,22 @@ class Ledger:
                         to_storage(now),
                     ),
                 )
+                row = db.execute(
+                    "SELECT * FROM executions WHERE execution_id = ?", (execution_id,)
+                ).fetchone()
+                if row is None:  # pragma: no cover - just inserted in this transaction
+                    raise RuntimeError(f"execution {execution_id} disappeared after insert")
+                if supervision_token is not None:
+                    from .supervision import register_queued
+
+                    register_queued(db, row, supervision_token)
+                db.commit()
             except sqlite3.IntegrityError as exc:
+                db.rollback()
                 raise LedgerConflict(execution_id) from exc
-            row = (
-                self._connection_or_raise()
-                .execute("SELECT * FROM executions WHERE execution_id = ?", (execution_id,))
-                .fetchone()
-            )
-        if row is None:  # pragma: no cover - the insert above just wrote it
-            raise RuntimeError(f"execution {execution_id} disappeared after insert")
+            except BaseException:
+                db.rollback()
+                raise
         return _row(row)
 
     def mark_started(self, execution_id: str, now: datetime) -> bool:
@@ -342,17 +356,28 @@ class Ledger:
                 _row(row) for row in self._connection_or_raise().execute("SELECT * FROM executions")
             ]
 
-    def confirm_exit(self, execution_id: str) -> None:
+    def confirm_exit(self, execution_id: str) -> bool:
+        """Validate unresolved occupancy once; write only an unconfirmed terminal row."""
         from .supervision import validated_receipt
 
         with self._lock:
             db = self._connection_or_raise()
-            if validated_receipt(db, execution_id):
+            row = db.execute(
+                "SELECT state, compute_exit_confirmed FROM executions WHERE execution_id=?",
+                (execution_id,),
+            ).fetchone()
+            if row is None or row["state"] not in TERMINAL_STATES:
+                return False
+            if validated_receipt(db, execution_id) is None:
+                return False
+            if not row["compute_exit_confirmed"]:
                 db.execute(
                     "UPDATE executions SET compute_exit_confirmed=1 WHERE execution_id=? "
+                    "AND compute_exit_confirmed=0 "
                     "AND state IN ('succeeded','failed','cancelled','interrupted')",
                     (execution_id,),
                 )
+            return True
 
     def interrupt_unfinished(self, now: datetime) -> int:
         """Turns rows a dead process left in flight into ``interrupted``."""

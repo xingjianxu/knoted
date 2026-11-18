@@ -48,6 +48,14 @@ def request_hash(row) -> str:
     ).hexdigest()
 
 
+def register_queued(db, row, token: str) -> None:
+    """Join the caller's transaction; never commit execution separately."""
+    db.execute(
+        "INSERT INTO supervision(execution_id, token, request_hash, phase) VALUES(?,?,?,'queued')",
+        (row["execution_id"], token, request_hash(row)),
+    )
+
+
 class InstanceLock:
     def __init__(self, state_dir: Path):
         self.path = state_dir / "service.lock"
@@ -93,11 +101,7 @@ class Supervision:
             row = db.execute(
                 "SELECT * FROM executions WHERE execution_id=?", (execution_id,)
             ).fetchone()
-            db.execute(
-                "INSERT INTO supervision(execution_id, token, request_hash, phase) "
-                "VALUES(?,?,?,'queued')",
-                (execution_id, token, request_hash(row)),
-            )
+            register_queued(db, row, token)
         return token
 
     def phase(self, execution_id: str):

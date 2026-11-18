@@ -136,3 +136,93 @@ async fn t47_pdf_enqueues_correct_identity_and_publishes_real_execution() {
     ));
     db.drop().await;
 }
+
+#[tokio::test]
+async fn t47_python_deadline_crossed_waiting_for_publication_locks_rolls_back() {
+    use knoted_core::{
+        files::pdf,
+        intelligence::{ExecutionKind, ExecutionRequest},
+    };
+    for table in ["file_roots", "file_sources"] {
+        let (db, ctx, _root, _staging, lease, input) = extraction_fixture().await;
+        let request = ExecutionRequest {
+            execution_id: uuid::Uuid::new_v4(),
+            kind: ExecutionKind::Parse,
+            input_object_id: input.staged_object().unwrap().object_id,
+            input_sha256: input.staged_object().unwrap().sha256,
+            source_version: input.content_version,
+            deadline: chrono::Utc::now() + chrono::Duration::seconds(2),
+            options_revision: pdf::OPTIONS_REVISION.into(),
+        };
+        let attempt = extraction::register_attempt(ctx.pool(), &lease, request)
+            .await
+            .unwrap();
+        let deadline = attempt.request.deadline;
+        let mut blocker = db.pool.begin().await.unwrap();
+        let blocker_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *blocker)
+            .await
+            .unwrap();
+        let (sql, id) = if table == "file_roots" {
+            (
+                "SELECT id FROM file_roots WHERE id=$1 FOR UPDATE",
+                input.root_id,
+            )
+        } else {
+            (
+                "SELECT id FROM file_sources WHERE id=$1 FOR UPDATE",
+                input.source_id,
+            )
+        };
+        sqlx::query(sql)
+            .bind(id)
+            .fetch_one(&mut *blocker)
+            .await
+            .unwrap();
+        let publisher = tokio::spawn(async move {
+            let doc = knoted_core::files::text::ExtractedDocument {
+                blocks: vec![],
+                title: None,
+                source_format: "pdf".into(),
+                page_count: Some(1),
+                truncated: false,
+            };
+            extraction::publish_python(&ctx, &lease, &input, &doc, &attempt).await
+        });
+        loop {
+            let blocked: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))")
+                .bind(blocker_pid).fetch_one(&mut *blocker).await.unwrap();
+            if blocked {
+                break;
+            }
+            assert!(
+                chrono::Utc::now() < deadline,
+                "publisher never reached {table} lock before deadline"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(chrono::Utc::now() < deadline);
+        tokio::time::sleep(
+            (deadline - chrono::Utc::now()).to_std().unwrap()
+                + std::time::Duration::from_millis(30),
+        )
+        .await;
+        blocker.commit().await.unwrap();
+        let result = publisher.await.unwrap();
+        assert!(
+            matches!(result, Err(extraction::DomainError::DeadlineExceeded)),
+            "publication after {table} lock crossed its deadline: {result:?}"
+        );
+        let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM file_extractions")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        let events: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM outbox WHERE topic='file.extracted'")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!((rows, events), (0, 0));
+        db.drop().await;
+    }
+}

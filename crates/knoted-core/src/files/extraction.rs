@@ -23,6 +23,8 @@ pub const EXTRACT_JOB_KIND: &str = "file.extract";
 pub enum DomainError {
     #[error("extraction ownership or source observation expired")]
     Stale,
+    #[error("Python execution deadline elapsed before publication")]
+    DeadlineExceeded,
     #[error(transparent)]
     Database(#[from] sqlx::Error),
     #[error(transparent)]
@@ -206,6 +208,17 @@ async fn publish_inner(
         sqlx::query("INSERT INTO outbox(job_id,topic,payload) VALUES($1,'file.extracted',$2)").bind(lease.job_id).bind(json!({"extraction_id":id,"source_id":input.source_id,"source_version":input.content_version})).execute(&mut **tx).await?;
     }
     lock_lease(tx, lease).await?;
+    if let Some(attempt) = attempt {
+        // clock_timestamp observes wall time after every lock/write, unlike
+        // transaction-start now(). Any late result rolls back both rows.
+        let expired: bool = sqlx::query_scalar("SELECT clock_timestamp() >= $1")
+            .bind(attempt.request.deadline)
+            .fetch_one(&mut **tx)
+            .await?;
+        if expired {
+            return Err(DomainError::DeadlineExceeded);
+        }
+    }
     Ok(())
 }
 

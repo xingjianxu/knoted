@@ -140,6 +140,7 @@ async fn execute_python(
             return match extraction::publish_python(ctx, lease, input, &document, &attempt).await {
                 Ok(()) => ExecutionOutcome::Succeeded,
                 Err(extraction::DomainError::Stale) => ExecutionOutcome::Cancelled,
+                Err(extraction::DomainError::DeadlineExceeded) => permanent("deadline_exceeded"),
                 Err(_) => temporary("extraction publication unavailable"),
             };
         }

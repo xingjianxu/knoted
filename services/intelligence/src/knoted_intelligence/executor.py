@@ -138,13 +138,16 @@ class Scheduler:
         self._gpu_slots = threading.BoundedSemaphore(settings.gpu_slots)
         self._lock = threading.RLock()
         self._entries: dict[str, _Entry] = {}
+        self._unresolved: set[str] = set()
         self._closed = False
         self._closed_at = 0.0
         self._supervision = Supervision(ledger.path)
 
     def recover(self) -> None:
         # Only called after taking the instance lock. Ordinary Ledger.open is inert.
-        for row in self._ledger.all_rows():
+        rows = self._ledger.all_rows()
+        self._unresolved.update(row.execution_id for row in rows)
+        for row in rows:
             if self._supervision.phase(row.execution_id) == "queued":
                 with self._supervision.connect() as db:
                     token = db.execute(
@@ -155,14 +158,14 @@ class Scheduler:
         self.reconcile()
 
     def reconcile(self) -> bool:
+        # Historical confirmed rows were validated once at recovery. Runtime
+        # polling visits only unresolved occupancy; requested rows still get
+        # independent receipt validation in _require().
         uncertain = False
         with self._lock:
-            active = set(self._entries)
-            for row in self._ledger.all_rows():
-                if row.execution_id in active:
-                    continue
-                if self._supervision.receipt(row.execution_id):
-                    self._ledger.confirm_exit(row.execution_id)
+            for execution_id in self._unresolved.difference(self._entries):
+                if self._ledger.confirm_exit(execution_id):
+                    self._unresolved.discard(execution_id)
                 else:
                     uncertain = True
         return uncertain
@@ -194,6 +197,7 @@ class Scheduler:
                 return self._replay(existing, spec)
             if self._closed or self.degraded():
                 raise ExecutionUnavailable("execution resources are not confirmed available")
+            token = str(uuid.uuid4())
             try:
                 row = self._ledger.insert(
                     execution_id=spec.execution_id,
@@ -204,6 +208,7 @@ class Scheduler:
                     options_revision=spec.options_revision,
                     deadline=spec.deadline,
                     now=now,
+                    supervision_token=token,
                 )
             except LedgerConflict:
                 # A concurrent insert of the same id can land here; the stored
@@ -212,7 +217,7 @@ class Scheduler:
                 if existing is None:
                     raise
                 return self._replay(existing, spec)
-            token = self._supervision.reserve(spec.execution_id)
+            self._unresolved.add(spec.execution_id)
             entry = _Entry(execution_id=spec.execution_id, token=token)
             self._entries[spec.execution_id] = entry
             if spec.deadline <= now:
@@ -494,6 +499,11 @@ class Scheduler:
                         os.write(entry.owner_fd, b"G")
                         sent_go = True
             if process.poll() is not None:
+                # The guardian can commit between our first read and poll().
+                # Consume that receipt through the same success/error path.
+                receipt = self._supervision.receipt(execution_id)
+                if receipt is not None:
+                    break
                 self._finish(
                     execution_id,
                     FAILED,
@@ -590,7 +600,7 @@ class Scheduler:
         if entry and self._supervision.phase(execution_id) == "queued":
             self._supervision.complete(execution_id, entry.token, "never_started", None)
         proven = self._supervision.receipt(execution_id) is not None
-        return self._ledger.finish(
+        changed = self._ledger.finish(
             execution_id,
             state,
             _now(),
@@ -599,6 +609,10 @@ class Scheduler:
             result=result,
             compute_exit_confirmed=proven,
         )
+        if changed and proven:
+            with self._lock:
+                self._unresolved.discard(execution_id)
+        return changed
 
     def record(self, execution_id: str) -> ExecutionRow:
         self.reconcile()
@@ -609,6 +623,8 @@ class Scheduler:
         if row is None:  # pragma: no cover - the row is written before we get here
             raise ExecutionNotFound(f"execution {execution_id} is unknown")
         if row.compute_exit_confirmed and self._supervision.receipt(execution_id) is None:
+            with self._lock:
+                self._unresolved.add(execution_id)
             raise ExecutionUnavailable("persisted execution proof failed validation")
         return row
 

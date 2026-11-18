@@ -67,3 +67,15 @@ intelligence 与 Worker 的固定产物编排及 SIGTERM 关闭已接入；本�
 文件前缀 `b-artifact-*`，逐ELF readelf为 `b-elf-dependencies.log`。
 
 独立审查、最终父门禁、主线/dev/清理尚未由实施者执行，整卡仍为待集成交接状态。
+
+## R1 审查修复
+
+独立审查指出四项Important，已逐项定向RED→GREEN：Python发布事务最后重新检查原
+请求deadline（root/source锁等待跨截止均回滚成功与outbox）；guardian退出后重读
+receipt以消除提交观察竞态；运行期只调和未解决占用且请求记录仍独立核验；execution
+与owner/hash/queued监督登记同一事务。真实进程中断的两个初始登记窗口只留下全无或全有。
+
+相关Python回归58passed/4既有弃用warnings；T46/T47 publication6passed，真实Worker
+pipeline及机器码单测通过，fmt/clippy/ruff均exit0。完整命令和逐项失败/修复证据已追加
+外部implementation报告。父将对修复后SHA跑完整门禁并作scoped复审。上述b27固定产物
+保留为历史证据，最终联合产物与真实dev仍待父执行，不将旧产物计作R1字节验证。
