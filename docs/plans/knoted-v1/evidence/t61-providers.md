@@ -19,4 +19,6 @@ Strata 通过 `/v1/status` 和 `/v1/models` 核对模型与上下文设置，在
 
 定向用例覆盖默认选择、无自动回退、凭据/提示词脱敏、显式错误先于结束标记、断连、SSE 跨块 CRLF/UTF-8、本地上下文降限及取消确认差异。实现前测试在缺少 provider 模块时编译失败，随后连接两个独立的本机协议模拟服务执行。
 
-本机 Strata `/health` 返回 200。当前执行用户对 `/run/strata/api-key` 无读权限，带凭据的真实流及取消验收待运行用户获得宿主访问。库适配器尚由后续生成任务接线，当前无需重启 dev。
+T62 生成任务已接入该适配器，[PR #213](https://github.com/xingjianxu/knoted/pull/213) 合入 `867b004`，主线复跑 `cargo test --locked -p knoted-core --test t61` 为 7 passed / 0 failed。pcwrap 支持显式设置 `KNOTED_CHAT_LOCAL_BASE_URL`、`KNOTED_CHAT_LOCAL_MODEL` 和 `KNOTED_CHAT_LOCAL_CREDENTIAL_FILE`，三项齐备时启用本机配置。
+
+本机 Strata `/health` 返回 HTTP 200。dev 运行用户对 `/run/strata/api-key` 无读权限，真实鉴权调用、流和停止确认待授权本机凭据路径。

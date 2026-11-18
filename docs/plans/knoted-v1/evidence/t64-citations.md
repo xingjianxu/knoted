@@ -21,4 +21,4 @@
 
 HTTP 路由未实现时，`t64_2` 和 `t64_4` 分别在成功读取与匿名拒绝断言得到 404。补齐路由和分页后，`cargo test --locked --workspace t64_` exit 0，4 passed / 0 failed。`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`git diff --check` 均为 exit 0。
 
-生成完成事务接线与 dev 验收随上游 T62、T63 运行链集成后记录。
+生成完成事务接线随 [PR #213](https://github.com/xingjianxu/knoted/pull/213) 合入 `867b004`，已在真实 dev 应用与临时回环模型中验证固定快照及来源失效，见[集成证据](t61-t65-integration.md)。
