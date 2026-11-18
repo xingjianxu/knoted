@@ -68,13 +68,35 @@ impl Handler for Dispatcher {
             knoted_core::files::extraction::EXTRACT_JOB_KIND => {
                 super::extract::execute(&self.ctx, lease, &job).await
             }
+            super::fulltext::PUBLISH_JOB_KIND | super::fulltext::CLEANUP_JOB_KIND => {
+                super::fulltext::execute(&self.ctx, lease, &job).await
+            }
             _ => ExecutionOutcome::PermanentFailure {
                 message: "unsupported job kind".into(),
             },
         }
     }
     async fn cancel_and_wait<'a>(&'a self, lease: &'a Lease) -> bool {
-        super::extract::cancel_and_wait(&self.ctx, lease).await
+        // Only extraction owns an external process whose exit must be proven.
+        // A leaked or unknown row has nothing to wait for, but a failed kind
+        // lookup must fail closed and take the extraction path.
+        match sqlx::query_scalar::<_, String>("SELECT kind FROM jobs WHERE id=$1")
+            .bind(lease.job_id)
+            .fetch_optional(self.ctx.pool())
+            .await
+        {
+            Ok(Some(kind)) if kind == knoted_core::files::extraction::EXTRACT_JOB_KIND => {
+                super::extract::cancel_and_wait(&self.ctx, lease).await
+            }
+            Ok(Some(kind))
+                if kind == super::fulltext::PUBLISH_JOB_KIND
+                    || kind == super::fulltext::CLEANUP_JOB_KIND =>
+            {
+                super::fulltext::cancel_and_wait(&self.ctx, lease).await
+            }
+            Ok(_) => true,
+            Err(_) => super::extract::cancel_and_wait(&self.ctx, lease).await,
+        }
     }
 }
 async fn execute_scan(ctx: &AppContext, lease: &Lease) -> ExecutionOutcome {
@@ -189,17 +211,17 @@ async fn schedule(ctx: AppContext) -> ! {
 }
 
 pub async fn run(ctx: AppContext) {
-    if !ctx.files().enabled {
-        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("SIGTERM listener");
-        tokio::select! { _ = term.recv() => {}, _ = tokio::signal::ctrl_c() => {} }
-        return;
-    }
     let runner = WorkerRunner::with_context(
         ctx.clone(),
         format!("files-{}", std::process::id()),
         Dispatcher { ctx: ctx.clone() },
     );
+    // Full-text publication is independent of file scanning: the dispatcher runs
+    // even when no directory is observed, so queued jobs are still claimed.
+    if !ctx.files().enabled {
+        runner.run().await;
+        return;
+    }
     tokio::select! {
         _=schedule(ctx)=>unreachable!(),
         _=runner.run()=>{},

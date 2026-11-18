@@ -185,6 +185,70 @@ impl IntelligenceConfig {
     }
 }
 
+/// Full-text publication target. Disabled unless configured; an API key is
+/// referenced by credential name, never inlined into the configuration file.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct SearchConfig {
+    pub enabled: bool,
+    pub base_url: String,
+    pub index_uid: String,
+    /// Credential name in the shared credential file, `None` for an engine that
+    /// accepts unauthenticated loopback traffic.
+    pub api_key_credential: Option<String>,
+}
+impl Default for SearchConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            base_url: "http://127.0.0.1:15605".into(),
+            index_uid: "knoted_documents".into(),
+            api_key_credential: None,
+        }
+    }
+}
+impl SearchConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        let invalid = |message: &'static str| ConfigError::Invalid {
+            field: "search",
+            message: message.into(),
+        };
+        // Same shape as the internal execution service: loopback HTTP only, no
+        // credentials in the URL and no path to append requests to.
+        let valid = url::Url::parse(&self.base_url).ok().is_some_and(|u| {
+            u.scheme() == "http"
+                && u.username().is_empty()
+                && u.password().is_none()
+                && u.path() == "/"
+                && u.query().is_none()
+                && u.fragment().is_none()
+                && match u.host() {
+                    Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+                    Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+                    _ => false,
+                }
+        });
+        if !valid {
+            return Err(invalid(
+                "base_url requires an HTTP loopback IP-literal origin without credentials or a path",
+            ));
+        }
+        // Meilisearch index uids are also used as URL path segments.
+        if self.index_uid.is_empty()
+            || self.index_uid.len() > 400
+            || !self
+                .index_uid
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
+            return Err(invalid(
+                "index_uid requires 1-400 alphanumeric, `-` or `_` characters",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Optional server-side Office preview. Configuration contains a path, never a JWT secret.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -324,6 +388,7 @@ pub struct AppConfig {
     pub assets: AssetsConfig,
     pub files: FilesConfig,
     pub intelligence: IntelligenceConfig,
+    pub search: SearchConfig,
     pub office: Option<OfficeConfig>,
     secrets: BTreeMap<String, String>,
 }
@@ -339,6 +404,7 @@ impl fmt::Debug for AppConfig {
             .field("assets", &self.assets)
             .field("files", &self.files)
             .field("intelligence", &self.intelligence)
+            .field("search", &self.search)
             .field("office_configured", &self.office.is_some())
             .field("loaded_credentials", &self.secrets.len())
             .finish()
@@ -392,6 +458,19 @@ impl AppConfig {
         self.secrets.get(name).map(String::as_str)
     }
 
+    /// Search engine API key named by `search.api_key_credential`.
+    ///
+    /// `None` means the engine accepts unauthenticated loopback traffic; a named
+    /// credential that is missing from the loaded file also yields `None` rather
+    /// than failing the whole process, matching the optional external services.
+    pub fn search_api_key(&self) -> Option<String> {
+        self.search
+            .api_key_credential
+            .as_deref()
+            .and_then(|name| self.credential(name))
+            .map(str::to_owned)
+    }
+
     /// Resolves the configuration path from `KNOTED_CONFIG` or the default.
     pub fn config_path_from_env() -> PathBuf {
         match std::env::var_os(CONFIG_PATH_ENV) {
@@ -421,6 +500,7 @@ impl AppConfig {
         validate_auth(&file.auth)?;
         file.files.validate()?;
         file.intelligence.validate()?;
+        file.search.validate()?;
         if let Some(office) = &file.office {
             office.validate()?;
         }
@@ -466,6 +546,7 @@ impl AppConfig {
             assets: file.assets,
             files: file.files,
             intelligence: file.intelligence,
+            search: file.search,
             office: file.office,
             secrets,
         })
@@ -518,6 +599,8 @@ struct ConfigFile {
     files: FilesConfig,
     #[serde(default)]
     intelligence: IntelligenceConfig,
+    #[serde(default)]
+    search: SearchConfig,
     office: Option<OfficeConfig>,
 }
 

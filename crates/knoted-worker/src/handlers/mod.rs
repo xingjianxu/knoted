@@ -4,3 +4,4 @@ pub mod scan;
 pub mod trash;
 
 pub mod extract;
+pub mod fulltext;

@@ -82,6 +82,8 @@ pub struct AppContext {
     asset_root: std::path::PathBuf,
     files: crate::config::FilesConfig,
     intelligence: crate::config::IntelligenceConfig,
+    search: crate::config::SearchConfig,
+    search_api_key: Option<String>,
     office: Option<Arc<crate::files::office::PreviewStore>>,
 }
 
@@ -94,6 +96,8 @@ impl AppContext {
             asset_root: crate::config::AssetsConfig::default().root,
             files: crate::config::FilesConfig::default(),
             intelligence: crate::config::IntelligenceConfig::default(),
+            search: crate::config::SearchConfig::default(),
+            search_api_key: None,
             office: None,
         }
     }
@@ -128,6 +132,27 @@ impl AppContext {
     }
     pub fn files(&self) -> &crate::config::FilesConfig {
         &self.files
+    }
+
+    pub fn with_search(mut self, config: crate::config::SearchConfig) -> Self {
+        self.search = config;
+        self
+    }
+
+    /// Full-text publication target; disabled by default.
+    pub fn search(&self) -> &crate::config::SearchConfig {
+        &self.search
+    }
+
+    /// Installs the search engine's API key from the credential file. The value
+    /// never appears in `Debug` output or logs.
+    pub fn with_search_api_key(mut self, key: Option<String>) -> Self {
+        self.search_api_key = key;
+        self
+    }
+
+    pub fn search_api_key(&self) -> Option<&str> {
+        self.search_api_key.as_deref()
     }
 
     /// Install the optional API-local Office state. An unreadable credential
