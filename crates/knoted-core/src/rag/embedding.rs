@@ -146,43 +146,13 @@ pub async fn embed_chunks(
         return Err(DomainError::InvalidRequest);
     }
     for (chunks, request) in batches.clone().zip(requests) {
-        if request.kind != ExecutionKind::Embed
-            || request.options_revision != OPTIONS_REVISION
-            || request.source_version != set.source.source_version
-            || request.input_sha256 != Sha256Hex::digest(&manifest_bytes(set.id, chunks)?)
-        {
-            return Err(DomainError::InvalidRequest);
-        }
+        verify_request(set, chunks, request)?;
     }
 
     let client = IntelligenceClient::new(&ctx.intelligence().base_url)?;
     let mut rows = Vec::with_capacity(set.chunks.len());
     for (chunks, request) in batches.zip(requests) {
-        let mut record = client.create_execution(request).await?.record;
-        loop {
-            record.verify_echo(request)?;
-            if record.state.is_terminal() {
-                record.verify_resource_exit(request)?;
-                break;
-            }
-            if ctx.now() >= request.deadline {
-                client.settle_execution(request).await?;
-                return Err(DomainError::DeadlineExceeded);
-            }
-            tokio::time::sleep(POLL_INTERVAL).await;
-            record = client.get_execution(request.execution_id).await?;
-        }
-        if record.state != ExecutionState::Succeeded {
-            return Err(DomainError::Execution(record.state));
-        }
-        record.verify_fresh(request, ctx.now())?;
-        let result = client.get_result(request.execution_id).await?;
-        if result.size > MAX_STAGED_BYTES {
-            return Err(DomainError::InvalidArtifact);
-        }
-        let body = artifact::read_bytes(ctx, request, &result).await?;
-        let ids = chunks.iter().map(|chunk| chunk.id);
-        rows.extend(decode_artifact(set.id, ids, &body)?);
+        rows.extend(read_batch(ctx, &client, set.id, chunks, request).await?);
     }
     Ok(EmbeddingSet {
         chunk_set_id: set.id,
@@ -190,6 +160,72 @@ pub async fn embed_chunks(
         model_revision: MODEL_REVISION.into(),
         rows,
     })
+}
+
+/// Execute one batch after persisting its possibly dispatched identity. The
+/// caller retains the rows until all batches of the set have been verified.
+pub async fn embed_chunk_batch(
+    ctx: &AppContext,
+    set: &ChunkSet,
+    batch_index: usize,
+    request: &ExecutionRequest,
+) -> Result<Vec<Embedding>, DomainError> {
+    let chunks = set
+        .chunks
+        .chunks(CHUNKS_PER_EXECUTION)
+        .nth(batch_index)
+        .ok_or(DomainError::InvalidRequest)?;
+    verify_request(set, chunks, request)?;
+    let client = IntelligenceClient::new(&ctx.intelligence().base_url)?;
+    read_batch(ctx, &client, set.id, chunks, request).await
+}
+
+fn verify_request(
+    set: &ChunkSet,
+    chunks: &[Chunk],
+    request: &ExecutionRequest,
+) -> Result<(), DomainError> {
+    if request.kind != ExecutionKind::Embed
+        || request.options_revision != OPTIONS_REVISION
+        || request.source_version != set.source.source_version
+        || request.input_sha256 != Sha256Hex::digest(&manifest_bytes(set.id, chunks)?)
+    {
+        return Err(DomainError::InvalidRequest);
+    }
+    Ok(())
+}
+
+async fn read_batch(
+    ctx: &AppContext,
+    client: &IntelligenceClient,
+    set_id: Uuid,
+    chunks: &[Chunk],
+    request: &ExecutionRequest,
+) -> Result<Vec<Embedding>, DomainError> {
+    let mut record = client.create_execution(request).await?.record;
+    loop {
+        record.verify_echo(request)?;
+        if record.state.is_terminal() {
+            record.verify_resource_exit(request)?;
+            break;
+        }
+        if ctx.now() >= request.deadline {
+            client.settle_execution(request).await?;
+            return Err(DomainError::DeadlineExceeded);
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+        record = client.get_execution(request.execution_id).await?;
+    }
+    if record.state != ExecutionState::Succeeded {
+        return Err(DomainError::Execution(record.state));
+    }
+    record.verify_fresh(request, ctx.now())?;
+    let result = client.get_result(request.execution_id).await?;
+    if result.size > MAX_STAGED_BYTES {
+        return Err(DomainError::InvalidArtifact);
+    }
+    let body = artifact::read_bytes(ctx, request, &result).await?;
+    decode_artifact(set_id, chunks.iter().map(|chunk| chunk.id), &body)
 }
 
 /// Settle any execution which may have been sent. A lost POST reply is

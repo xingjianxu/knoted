@@ -1,13 +1,13 @@
 //! Turns current chunk sets into dense vectors through the shared job runner.
 
-use chrono::Duration;
+use chrono::{DateTime, Duration, Utc};
 use knoted_core::{
     context::AppContext,
     intelligence::ExecutionRequest,
     jobs::{self, ExecutionOutcome, Job, Lease},
     rag::{
         chunking::{CHUNKER_REVISION, ChunkSet},
-        embedding::{self, CHUNKS_PER_EXECUTION, MODEL, MODEL_REVISION},
+        embedding::{self, CHUNKS_PER_EXECUTION, EmbeddingSet, MODEL, MODEL_REVISION},
         vector::{self, publish_claimed_vectors},
     },
     search::chunks,
@@ -107,106 +107,133 @@ async fn run_attempt(ctx: &AppContext, lease: &Lease, job: &Job) -> Result<(), F
         .and_then(serde_json::Value::as_str)
         .and_then(|value| Uuid::parse_str(value).ok())
         .ok_or(Failure::Invalid)?;
-    // This also settles earlier attempts from a previous Rust worker and the
-    // original job referenced by a platform-level manual retry.
-    settle_requests(ctx, job.id, job.attempts, job.retry_of).await?;
+    // Never begin a new computation until earlier possible dispatches for
+    // this job and its manual retry chain have a proof of exit.
+    settle_requests(ctx, lease, false).await?;
     let set = chunks::load_chunk_set(ctx, id)
         .await?
         .ok_or(Failure::Stale)?;
     if !chunks::chunk_set_is_current(ctx, &set).await? {
         return Err(Failure::Stale);
     }
-    let requests = stage_attempt(ctx, lease, job.attempts, &set).await?;
-    let result = embedding::embed_chunks(ctx, &set, &requests).await;
-    if result.is_err() {
-        settle_requests(ctx, job.id, job.attempts.saturating_add(1), None).await?;
+    let deadline = ctx.now() + Duration::seconds(BATCH_DEADLINE_SECONDS);
+    let mut rows = Vec::with_capacity(set.chunks.len());
+    for index in 0..set.chunks.len().div_ceil(CHUNKS_PER_EXECUTION) {
+        let request = stage_batch(ctx, lease, &set, index, deadline).await?;
+        let result = embedding::embed_chunk_batch(ctx, &set, index, &request).await;
+        match result {
+            Ok(batch) => rows.extend(batch),
+            Err(error) => {
+                // Prior batches already proved exit. Only this batch may have
+                // reached Python without returning that proof.
+                embedding::cancel_embedding(ctx, &request)
+                    .await
+                    .map_err(|_| Failure::ExitUnconfirmed)?;
+                return Err(Failure::Embed(error));
+            }
+        }
     }
-    publish_claimed_vectors(ctx, lease, &result?).await?;
+    publish_claimed_vectors(
+        ctx,
+        lease,
+        &EmbeddingSet {
+            chunk_set_id: set.id,
+            model: MODEL.into(),
+            model_revision: MODEL_REVISION.into(),
+            rows,
+        },
+    )
+    .await?;
     Ok(())
 }
 
-async fn stage_attempt(
+async fn stage_batch(
     ctx: &AppContext,
     lease: &Lease,
-    attempt: i32,
     set: &ChunkSet,
-) -> Result<Vec<ExecutionRequest>, Failure> {
+    index: usize,
+    deadline: DateTime<Utc>,
+) -> Result<ExecutionRequest, Failure> {
+    let ordinal = i32::try_from(index).map_err(|_| Failure::Invalid)?;
     let mut tx = ctx.pool().begin().await?;
     let owned: Option<Uuid> = sqlx::query_scalar(
         "SELECT id FROM jobs WHERE id=$1 AND state='running' AND lease_token=$2
-         AND lease_expires_at>clock_timestamp() FOR UPDATE",
+         AND attempts=$3 AND lease_expires_at>clock_timestamp() FOR UPDATE",
     )
     .bind(lease.job_id)
     .bind(lease.token)
+    .bind(lease.attempt)
     .fetch_optional(&mut *tx)
     .await?;
     if owned.is_none() {
         return Err(Failure::Stale);
     }
-    let existing: Vec<Json<ExecutionRequest>> = sqlx::query_scalar(
-        "SELECT request FROM rag_embedding_executions WHERE job_id=$1 AND attempt=$2 ORDER BY ordinal",
+    let existing: Option<Json<ExecutionRequest>> = sqlx::query_scalar(
+        "SELECT request FROM rag_embedding_executions
+         WHERE job_id=$1 AND attempt=$2 AND ordinal=$3",
     )
     .bind(lease.job_id)
-    .bind(attempt)
-    .fetch_all(&mut *tx)
+    .bind(lease.attempt)
+    .bind(ordinal)
+    .fetch_optional(&mut *tx)
     .await?;
-    if !existing.is_empty() {
-        return Ok(existing.into_iter().map(|value| value.0).collect());
-    }
-    let batches = set.chunks.len().div_ceil(CHUNKS_PER_EXECUTION);
-    let deadline = ctx.now() + Duration::seconds(BATCH_DEADLINE_SECONDS);
-    let mut requests = Vec::with_capacity(batches);
-    for index in 0..batches {
-        let request = embedding::stage_embedding_batch(ctx, set, index, Uuid::new_v4(), deadline)?;
-        sqlx::query(
-            "INSERT INTO rag_embedding_executions (job_id,attempt,ordinal,request)
-             VALUES ($1,$2,$3,$4)",
-        )
-        .bind(lease.job_id)
-        .bind(attempt)
-        .bind(i32::try_from(index).map_err(|_| Failure::Invalid)?)
-        .bind(Json(&request))
-        .execute(&mut *tx)
-        .await?;
-        requests.push(request);
-    }
+    let request = match existing {
+        Some(Json(request)) => request,
+        None => {
+            let request =
+                embedding::stage_embedding_batch(ctx, set, index, Uuid::new_v4(), deadline)?;
+            sqlx::query(
+                "INSERT INTO rag_embedding_executions (job_id,attempt,ordinal,request)
+                 VALUES ($1,$2,$3,$4)",
+            )
+            .bind(lease.job_id)
+            .bind(lease.attempt)
+            .bind(ordinal)
+            .bind(Json(&request))
+            .execute(&mut *tx)
+            .await?;
+            request
+        }
+    };
+    // Only this batch may be replayed if the server's reply is lost. Later
+    // batches have no durable receipt until just before their own dispatch.
     tx.commit().await?;
-    Ok(requests)
+    Ok(request)
 }
 
 async fn settle_requests(
     ctx: &AppContext,
-    job_id: Uuid,
-    before_attempt: i32,
-    retry_of: Option<Uuid>,
+    lease: &Lease,
+    include_current: bool,
 ) -> Result<(), Failure> {
+    // Check ownership and fetch receipts in one snapshot. A revoked lease may
+    // settle only its own attempt. Taking over a cancellation can reuse its
+    // attempt number, but it cannot dispatch a new generation in that state.
     let requests: Vec<Json<ExecutionRequest>> = sqlx::query_scalar(
-        "SELECT request FROM rag_embedding_executions
-         WHERE (job_id=$1 AND attempt<$2) OR job_id=$3 ORDER BY job_id,attempt,ordinal",
+        "WITH RECURSIVE retry_chain AS (
+           SELECT id,retry_of FROM jobs WHERE id=$1 AND lease_token=$2
+           UNION
+           SELECT prior.id,prior.retry_of FROM jobs prior JOIN retry_chain next ON prior.id=next.retry_of
+         )
+         SELECT request FROM rag_embedding_executions
+         WHERE (job_id=$1 AND attempt=$3 AND $4)
+            OR (job_id IN (SELECT id FROM retry_chain) AND (job_id<>$1 OR attempt<$3 OR $4))
+         ORDER BY job_id,attempt,ordinal",
     )
-    .bind(job_id)
-    .bind(before_attempt)
-    .bind(retry_of)
+    .bind(lease.job_id)
+    .bind(lease.token)
+    .bind(lease.attempt)
+    .bind(include_current)
     .fetch_all(ctx.pool())
     .await?;
     for Json(request) in requests {
-        if embedding::cancel_embedding(ctx, &request).await.is_err() {
-            return Err(Failure::ExitUnconfirmed);
-        }
+        embedding::cancel_embedding(ctx, &request)
+            .await
+            .map_err(|_| Failure::ExitUnconfirmed)?;
     }
     Ok(())
 }
 
 pub async fn cancel_and_wait(ctx: &AppContext, lease: &Lease) -> bool {
-    let original: Result<Option<Uuid>, _> =
-        sqlx::query_scalar("SELECT retry_of FROM jobs WHERE id=$1")
-            .bind(lease.job_id)
-            .fetch_one(ctx.pool())
-            .await;
-    match original {
-        Ok(original) => settle_requests(ctx, lease.job_id, i32::MAX, original)
-            .await
-            .is_ok(),
-        Err(_) => false,
-    }
+    settle_requests(ctx, lease, true).await.is_ok()
 }
