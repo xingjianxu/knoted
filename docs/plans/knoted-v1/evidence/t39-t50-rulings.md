@@ -12,7 +12,7 @@
 | 6 | T46 使用明确的文本/代码/配置扩展与有限无扩展名白名单；其他格式只采集，PDF/图片和 Office 分别留给后续卡。操作观察参与补排身份，成功缓存仍只依赖内容/解析器/选项。 | 未列扩展暂不解析；不能用二进制文本失败或假成功代替格式支持。元数据修改不使成功提取失效。 | [T46](t46-text.md) |
 | 7 | T46 修复只抑制同语义 Failed 工作的新预算，不盲目抑制 queued/retry/running；保留观察栅栏与 Cancelled 后的新捕获补排。 | 新操作观察可能取消/重排工作，不承诺跨任意观察全局只有四次；T47 接管设计需继续考虑此代价，不能放松已批准发布栅栏。 | [T46](t46-text.md) |
 | 8 | 等待 T47 新契约确认期间，串行准备下游可独立测试的部分；整卡依赖、合入与运行验收顺序仍为 T47→T48→T49→T50。 | 上游集成后可能需要适配准备成果；不部署未经验证的组合，不将等待当批准或准备当整卡完成。 | [条件计划](../../2026-11-17-t39-t50.md) |
-| 9 | T49 单列既有 core files 领域补充子任务，API 保持薄适配。当前根 FD 完整有界读取、摘要及最终 root/source/观察校验后响应；missing 404，仍 present 但不可用 503，元数据-only 并发返回最终版本 ETag。 | 最多 100MiB 输入载荷需完整缓冲，实际内存另有开销且首字节延迟较高；扫描期间可能保守拒绝。不是流式/性能承诺，也没有新增公开参数或状态。 | [T49 core](../tasks/T49-core.md)、[草稿 PR #161](https://github.com/xingjianxu/knoted/pull/161) |
+| 9 | T49 单列既有 core files 领域补充子任务，API 保持薄适配。当前根 FD 完整有界读取、摘要及最终 root/source/观察校验后响应；missing 404，仍 present 但不可用 503，元数据-only 并发返回最终版本 ETag。 | 最多 100MiB 输入载荷需完整缓冲，实际内存另有开销且首字节延迟较高；扫描期间可能保守拒绝。不是流式/性能承诺，也没有新增公开参数或状态。 | [T49 core](../tasks/T49-core.md)、[PR #161](https://github.com/xingjianxu/knoted/pull/161) |
 | 10 | T48 用有界 defusedxml OOXML 正文解析，复用 ParsedDocument/Block，不建立第二套 DTO；不可靠文字表达明确拒绝。 | 相比完整 Office 渲染只支持文档化正文子集，合法复杂文档可能拒绝，需要后续能力工作；不能靠遗漏文字伪装完整成功。 | [PR #159](https://github.com/xingjianxu/knoted/pull/159) |
 | 11 | PPTX 包括隐藏与空白幻灯片，保留原始 1-based 序号；DOCX/XLSX 无可靠页码时为 NULL，Office bbox 均不虚构。 | 隐藏幻灯片正文可能被提取；不是放映可见性或页面渲染结果承诺。 | [PR #159](https://github.com/xingjianxu/knoted/pull/159) |
 | 12 | Office 内部预算绑定选项身份：4096 parts、单 part 32MiB、展开总量 128MiB、压缩比 200、XML 50 万节点/深度 64、XML 及输出文本各 16MiB、实际 cells/blocks 各 10 万。原 100MiB/900秒边界保持。 | 大型、高压缩比或复杂合法 Office 可能被拒绝；超限是明确失败，不返回截断内容，也不冒充原 Spec 已给出的新限额。 | [PR #159](https://github.com/xingjianxu/knoted/pull/159) |
