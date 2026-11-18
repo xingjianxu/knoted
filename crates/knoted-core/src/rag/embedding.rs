@@ -112,8 +112,23 @@ pub fn stage_embedding_batch(
         .chunks(CHUNKS_PER_EXECUTION)
         .nth(batch_index)
         .ok_or(DomainError::InvalidRequest)?;
-    let bytes = manifest_bytes(set.id, chunks)?;
-    let digest = Sha256Hex::digest(&bytes);
+    stage_request(
+        ctx,
+        set.source.source_version,
+        execution_id,
+        deadline,
+        &manifest_bytes(set.id, chunks)?,
+    )
+}
+
+fn stage_request(
+    ctx: &AppContext,
+    source_version: i64,
+    execution_id: Uuid,
+    deadline: DateTime<Utc>,
+    bytes: &[u8],
+) -> Result<ExecutionRequest, DomainError> {
+    let digest = Sha256Hex::digest(bytes);
     let object_id = ObjectId::parse(format!("embed-{execution_id}-{digest}.json"))?;
     let root = ctx
         .files()
@@ -121,14 +136,14 @@ pub fn stage_embedding_batch(
         .as_ref()
         .ok_or(DomainError::StagingUnavailable)?;
     let store = StagingStore::new(root.join("input"), MAX_STAGED_BYTES)?;
-    store.write(&object_id, &bytes)?;
+    store.write(&object_id, bytes)?;
 
     Ok(ExecutionRequest {
         execution_id,
         kind: ExecutionKind::Embed,
         input_object_id: object_id,
         input_sha256: digest,
-        source_version: set.source.source_version,
+        source_version,
         deadline,
         options_revision: OPTIONS_REVISION.into(),
     })
@@ -158,31 +173,12 @@ pub async fn embed_chunks(
     let client = IntelligenceClient::new(&ctx.intelligence().base_url)?;
     let mut rows = Vec::with_capacity(set.chunks.len());
     for (chunks, request) in batches.zip(requests) {
-        let mut record = client.create_execution(request).await?.record;
-        loop {
-            record.verify_echo(request)?;
-            if record.state.is_terminal() {
-                record.verify_resource_exit(request)?;
-                break;
-            }
-            if ctx.now() >= request.deadline {
-                client.settle_execution(request).await?;
-                return Err(DomainError::DeadlineExceeded);
-            }
-            tokio::time::sleep(POLL_INTERVAL).await;
-            record = client.get_execution(request.execution_id).await?;
-        }
-        if record.state != ExecutionState::Succeeded {
-            return Err(DomainError::Execution(record.state));
-        }
-        record.verify_fresh(request, ctx.now())?;
-        let result = client.get_result(request.execution_id).await?;
-        if result.size > MAX_STAGED_BYTES {
-            return Err(DomainError::InvalidArtifact);
-        }
-        let body = artifact::read_bytes(ctx, request, &result).await?;
-        let ids = chunks.iter().map(|chunk| chunk.id);
-        rows.extend(decode_artifact(set.id, ids, &body)?);
+        let body = complete_batch(ctx, &client, request).await?;
+        rows.extend(decode_artifact(
+            set.id,
+            chunks.iter().map(|chunk| chunk.id),
+            &body,
+        )?);
     }
     Ok(EmbeddingSet {
         chunk_set_id: set.id,
@@ -190,6 +186,72 @@ pub async fn embed_chunks(
         model_revision: MODEL_REVISION.into(),
         rows,
     })
+}
+
+/// Questions use the same locked dense space as stored chunks. The ephemeral
+/// manifest carries only local execution identities, never a domain source.
+pub async fn embed_query(ctx: &AppContext, text: &str) -> Result<Vec<f32>, DomainError> {
+    if text.trim().is_empty() {
+        return Err(DomainError::InvalidRequest);
+    }
+    let execution_id = Uuid::new_v4();
+    let chunk_id = Uuid::new_v4();
+    let bytes = serde_json::to_vec(&Manifest {
+        chunk_set_id: execution_id,
+        chunks: vec![ManifestChunk { id: chunk_id, text }],
+    })
+    .map_err(|_| DomainError::InvalidRequest)?;
+    let request = stage_request(
+        ctx,
+        1,
+        execution_id,
+        ctx.now() + chrono::Duration::seconds(30),
+        &bytes,
+    )?;
+    let client = IntelligenceClient::new(&ctx.intelligence().base_url)?;
+    let result = complete_batch(ctx, &client, &request).await;
+    if (result.is_ok() || client.settle_execution(&request).await.is_ok())
+        && let Some(root) = &ctx.files().staging_root
+    {
+        let _ =
+            tokio::fs::remove_file(root.join("input").join(request.input_object_id.as_str())).await;
+    }
+    let body = result?;
+    decode_artifact(execution_id, [chunk_id].into_iter(), &body)?
+        .into_iter()
+        .next()
+        .map(|row| row.vector)
+        .ok_or(DomainError::InvalidArtifact)
+}
+
+async fn complete_batch(
+    ctx: &AppContext,
+    client: &IntelligenceClient,
+    request: &ExecutionRequest,
+) -> Result<Vec<u8>, DomainError> {
+    let mut record = client.create_execution(request).await?.record;
+    loop {
+        record.verify_echo(request)?;
+        if record.state.is_terminal() {
+            record.verify_resource_exit(request)?;
+            break;
+        }
+        if ctx.now() >= request.deadline {
+            client.settle_execution(request).await?;
+            return Err(DomainError::DeadlineExceeded);
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+        record = client.get_execution(request.execution_id).await?;
+    }
+    if record.state != ExecutionState::Succeeded {
+        return Err(DomainError::Execution(record.state));
+    }
+    record.verify_fresh(request, ctx.now())?;
+    let result = client.get_result(request.execution_id).await?;
+    if result.size > MAX_STAGED_BYTES {
+        return Err(DomainError::InvalidArtifact);
+    }
+    Ok(artifact::read_bytes(ctx, request, &result).await?)
 }
 
 /// Settle any execution which may have been sent. A lost POST reply is
