@@ -114,10 +114,10 @@ async fn t57_4_published_lexical_hits_keep_the_persisted_chunk_identity() {
     let base_url =
         std::env::var("KNOTED_TEST_MEILI_URL").unwrap_or_else(|_| "http://127.0.0.1:15605".into());
     let ctx = AppContext::new(db.pool.clone()).with_search(SearchConfig {
-        index_uid: format!("knoted_t57_{}", Uuid::new_v4().simple()),
+        rag_chunk_index_uid: format!("knoted_t57_{}", Uuid::new_v4().simple()),
         base_url: base_url.clone(),
         enabled: true,
-        api_key_credential: None,
+        ..SearchConfig::default()
     });
     let note = create(
         &ctx,
@@ -296,4 +296,38 @@ async fn t57_6_reobservation_only_revokes_visibility_until_digest_is_confirmed()
         .await
         .unwrap();
     assert!(chunks::chunk_set_is_current(&ctx, &set).await.unwrap());
+}
+
+#[test]
+fn t57_7_keeps_a_worksheet_row_together_beyond_the_target() {
+    let text = "研究资料和实施记录。".repeat(100);
+    let doc = document(vec![
+        block(0, &text, None, json!({"sheet":"甲","cell":"A1"})),
+        block(1, "测试结论", None, json!({"sheet":"甲","cell":"B1"})),
+        block(2, "下一条记录", None, json!({"sheet":"甲","cell":"A2"})),
+    ]);
+    let set = chunk_document(&doc, source(), &ChunkConfig::default(), tokenizer()).unwrap();
+    let first = &set.chunks[0];
+    assert_eq!(first.locations[0].structure["cell"], "A1");
+    assert_eq!(first.locations[1].structure["cell"], "B1");
+    assert!(first.text.ends_with("\n测试结论"));
+    assert!(!first.text.contains("下一条记录"));
+}
+
+#[tokio::test]
+async fn t57_8_document_index_changes_do_not_rebuild_the_lexical_generation() {
+    use knoted_core::{config::SearchConfig, context::AppContext, search::chunks::chunk_index_uid};
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .connect_lazy("postgres://unused@127.0.0.1:1/unused_test")
+        .unwrap();
+    let first = AppContext::new(pool.clone()).with_search(SearchConfig {
+        index_uid: "documents_a".into(),
+        ..SearchConfig::default()
+    });
+    let next = AppContext::new(pool).with_search(SearchConfig {
+        index_uid: "documents_b".into(),
+        ..SearchConfig::default()
+    });
+    assert_eq!(chunk_index_uid(&first), "knoted_rag_chunks");
+    assert_eq!(chunk_index_uid(&first), chunk_index_uid(&next));
 }

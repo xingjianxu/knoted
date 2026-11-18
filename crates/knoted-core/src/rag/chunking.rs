@@ -223,7 +223,11 @@ pub fn chunk_document(
                 fragment.location.byte_start > 0 || fragment.location.byte_end < block.text.len();
             if !pending.is_empty() {
                 let section_boundary = at_boundary || independent || split || heading;
-                if !section_boundary && pending_tokens < TARGET {
+                let same_row = locations
+                    .last()
+                    .and_then(table_row)
+                    .is_some_and(|row| Some(row) == table_row(&fragment.location));
+                if !section_boundary && (pending_tokens < TARGET || same_row) {
                     let end = pending.len();
                     pending.push('\n');
                     pending.push_str(fragment.text);
@@ -281,6 +285,19 @@ pub fn chunk_document(
         set.push(pending, pending_tokens, locations);
     }
     Ok(set)
+}
+
+fn table_row(location: &ChunkLocation) -> Option<(&str, &str)> {
+    if let (Some(sheet), Some(cell)) = (
+        location.structure["sheet"].as_str(),
+        location.structure["cell"].as_str(),
+    ) {
+        let row_start = cell.find(|c: char| c.is_ascii_digit())?;
+        return Some((sheet, &cell[row_start..]));
+    }
+    // Office table paths use a stable <container>/table:<n>/row:<n>/...
+    let (table, member) = location.structure["path"].as_str()?.rsplit_once("/row:")?;
+    Some((table, member.split('/').next()?))
 }
 
 fn overlap_tail(

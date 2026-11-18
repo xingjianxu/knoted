@@ -14,7 +14,6 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use sqlx::{Postgres, Transaction, types::Json};
 use std::sync::OnceLock;
 use uuid::Uuid;
@@ -40,19 +39,7 @@ pub enum DomainError {
 }
 
 pub fn chunk_index_uid(ctx: &AppContext) -> String {
-    let index = &ctx.search().index_uid;
-    let suffix = "_rag_chunks";
-    if index.len() + suffix.len() <= 400 {
-        format!("{index}{suffix}")
-    } else {
-        format!(
-            "{}{suffix}",
-            Sha256::digest(index.as_bytes())
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>()
-        )
-    }
+    ctx.search().rag_chunk_index_uid.clone()
 }
 
 #[derive(sqlx::FromRow)]
