@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate, useRouterState } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { FilesPage } from "../features/files/FilesPage";
 
 export const Route = createFileRoute("/_authenticated/files")({ component: FilesRoute });
@@ -14,6 +14,7 @@ function FilesRoute() {
     <FilesPage
       bundle={bundle}
       fileId={fileId}
+      jobsLink={<Link to="/files/jobs" className="text-accent hover:underline">索引任务</Link>}
       onSelectFile={(id) => {
         if (id === null) {
           void navigate({ to: "/files" });
