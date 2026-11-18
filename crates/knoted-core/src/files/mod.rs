@@ -27,3 +27,7 @@ pub mod pdf;
 pub mod office;
 
 mod artifact;
+
+pub mod browse;
+
+pub mod download;

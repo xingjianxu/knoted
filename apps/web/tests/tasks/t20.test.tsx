@@ -207,8 +207,9 @@ describe("t20 auth routes", () => {
   it("disables unimplemented navigation entries while notes is open", async () => {
     loggedIn = true;
     await mount("/");
-    // 已实现的概览/笔记/项目/事项可用，未来入口仍待开放。
-    for (const name of ["文件", "搜索", "问答"])
+    // 已实现的概览/笔记/项目/事项/文件可用，未来入口仍待开放。
+    expect(await screen.findByRole("button", { name: "文件" })).toBeEnabled();
+    for (const name of ["搜索", "问答"])
       expect(
         await screen.findByRole("button", { name: new RegExp(name) }),
       ).toBeDisabled();
