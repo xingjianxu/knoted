@@ -1,12 +1,18 @@
 import { readFileSync } from "node:fs";
 import { StrictMode } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError, createApiClient } from "@knoted/api-client";
 import { UiProvider } from "../../src/lib/ui-provider";
 import { FilePreview, type FilePreviewProps } from "../../src/features/files/preview/FilePreview";
 import { inspectPreview, type FileSource } from "../../src/features/files/preview/inspect";
 import { readPreviewBytes } from "../../src/features/files/preview/read";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { FileDetail } from "../../src/features/files/FileDetail";
+import { queryKeys, type QueryClientBundle } from "../../src/lib/query";
+import { createAppRouter } from "../../src/lib/router";
+import { createMemoryHistory } from "@tanstack/react-router";
+import App from "../../src/App";
 const enc = new TextEncoder();
 const source = (name = "a.txt", patch: Partial<FileSource> = {}): FileSource => ({ id: "a", name, relative_path: name, size: 12, mime: null, sha256: "a".repeat(64), version: 7, content_version: 3, status: "present", note: null, tag_ids: [], created_at: "2026-11-18T00:00:00Z", updated_at: "2026-11-18T00:00:00Z", last_seen_at: null, ...patch });
 const fixture = (name: string) => new Uint8Array(readFileSync(`${process.cwd()}/tests/fixtures/t50/${name}`));
@@ -183,3 +189,131 @@ it.each([
     ["x.webp", concat(enc.encode("RIFF"), u32(16, true), enc.encode("WEBPVP8L"), u32(0xffffffff, true), new Uint8Array(4))],
     ["x.webp", riff(webpChunk("VP8 ", new Uint8Array([1, 0, 0, 0x9d, 1, 0x2a, 1, 0, 1, 0])))],
 ])("rejects invalid container boundaries and unknown dimensions %s", (name, bytes) => expect(() => inspectPreview(source(name as string), bytes as Uint8Array)).toThrow());
+
+// Phase B exercises the actual FileDetail callsite; A's 108 tests are retained.
+const fileA = "00000000-0000-4000-8000-000000000050";
+const fileB = "00000000-0000-4000-8000-000000000051";
+const jsonResponse = (value: unknown, status = 200) => new Response(JSON.stringify(value), {status, headers:{"content-type":"application/json"}});
+function detailHarness(file = source("预览原件.txt", {id:fileA, note:"saved note", tag_ids:[fileB]}), content: () => Response | Promise<Response> = () => response(enc.encode("actual source text"))) {
+    const requests: Request[] = [];
+    const bundle: QueryClientBundle = {
+        queryClient: new QueryClient({defaultOptions:{queries:{retry:false,staleTime:Infinity}}}),
+        api: createApiClient({baseUrl:"http://localhost/api/v1",fetch:async input=>{
+            const request = input as Request; requests.push(request);
+            if (request.url.endsWith("/content")) return content();
+            if (new URL(request.url).pathname.endsWith("/tags")) return jsonResponse({items:[],next_cursor:null});
+            return jsonResponse(request.url.endsWith(fileB) ? source("second.txt",{id:fileB}) : file);
+        }}),
+    };
+    const view=(id=file.id)=><UiProvider><QueryClientProvider client={bundle.queryClient}><FileDetail bundle={bundle} fileId={id} onSelectFile={()=>{}}/></QueryClientProvider></UiProvider>;
+    const mounted=render(view());
+    return {...mounted,bundle,requests,select:(id:string)=>mounted.rerender(view(id))};
+}
+async function openDetailPreview() {
+    const opener = await screen.findByRole("button",{name:"预览文件"});
+    opener.focus(); fireEvent.click(opener);
+    return {opener,dialog:await screen.findByRole("dialog")};
+}
+it.each(["button","Escape"])("B real detail preview closes by %s, restores opener and retains dirty note/tags",async(method)=>{
+    const h=detailHarness();
+    fireEvent.change(await screen.findByLabelText("文件备注"),{target:{value:"unsaved private draft"}});
+    fireEvent.click(screen.getByRole("button",{name:new RegExp(`^(?:移除|Remove) ${fileB}$`)}));
+    const {opener,dialog}=await openDetailPreview();
+    expect(await within(dialog).findByLabelText("文件文本")).toHaveTextContent("actual source text");
+    if(method==="Escape") fireEvent.keyDown(within(dialog).getByRole("button",{name:"关闭预览"}),{key:"Escape",code:"Escape"});
+    else fireEvent.click(within(dialog).getByRole("button",{name:"关闭预览"}));
+    await waitFor(()=>expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(()=>expect(opener).toHaveFocus());
+    expect(screen.getByLabelText("文件备注")).toHaveValue("unsaved private draft");
+    expect(screen.queryByRole("button",{name:new RegExp(`^(?:移除|Remove) ${fileB}$`)})).toBeNull();
+    expect(screen.getByRole("button",{name:"保存备注和标签"})).toBeEnabled();
+    expect(h.requests.filter(r=>r.method!=="GET")).toHaveLength(0);
+    await openDetailPreview(); expect(await screen.findByLabelText("文件文本")).toHaveTextContent("actual source text");
+});
+it("B missing sources expose a disabled preview action and never request content",async()=>{
+    const h=detailHarness(source("missing.txt",{id:fileA,status:"missing"}));
+    expect(await screen.findByRole("button",{name:"预览文件"})).toBeDisabled();
+    expect(h.requests.some(r=>r.url.endsWith("/content"))).toBe(false);
+});
+it("B ordinary download uses the opened snapshot and original bytes after detail metadata refresh",async()=>{
+    const original = new Uint8Array([255,254,45,78]);
+    const downloads:string[]=[];
+    vi.spyOn(HTMLAnchorElement.prototype,"click").mockImplementation(function(this: HTMLAnchorElement){downloads.push(this.download);});
+    const h=detailHarness(source("原件.txt",{id:fileA}),()=>response(original));
+    const {dialog}=await openDetailPreview();
+    expect(await within(dialog).findByLabelText("文件文本")).toHaveTextContent("中");
+    act(()=>h.bundle.queryClient.setQueryData(queryKeys.files.detail(fileA),source("新的名称.txt",{id:fileA,version:8})));
+    fireEvent.click(within(dialog).getByRole("button",{name:"下载原文件"}));
+    await waitFor(()=>expect(downloads).toEqual(["原件.txt"]));
+    const blob=vi.mocked(URL.createObjectURL).mock.calls.at(-1)?.[0];
+    expect(blob).toHaveProperty("size",4);
+    expect(Array.from(new Uint8Array(await (blob as Blob).arrayBuffer()))).toEqual([255,254,45,78]);
+    expect(h.requests.filter(r=>r.url.endsWith("/content"))).toHaveLength(2);
+    expect(live.size).toBe(0);
+});
+it("B over-limit preview retains the same ordinary download path without the preview cap",async()=>{
+    const downloads:string[]=[];
+    vi.spyOn(HTMLAnchorElement.prototype,"click").mockImplementation(function(this: HTMLAnchorElement){downloads.push(this.download);});
+    const h=detailHarness(source("large.txt",{id:fileA,size:52428801}),()=>response(new Uint8Array(52428801)));
+    const {dialog}=await openDetailPreview(); await within(dialog).findByText(/50 MiB/);
+    expect(h.requests.filter(r=>r.url.endsWith("/content"))).toHaveLength(0);
+    fireEvent.click(within(dialog).getByRole("button",{name:"下载原文件"}));
+    await waitFor(()=>expect(downloads).toEqual(["large.txt"]));
+    expect(vi.mocked(URL.createObjectURL).mock.calls.at(-1)?.[0]).toHaveProperty("size",52428801);
+    expect(h.requests.filter(r=>r.url.endsWith("/content"))).toHaveLength(1);
+    expect(live.size).toBe(0);
+});
+it("B switching the real detail removes the active preview and revokes its image",async()=>{
+    const h=detailHarness(source("a.png",{id:fileA}),()=>response(fixture("chinese.png")));
+    await openDetailPreview(); await screen.findByRole("img"); expect(live.size).toBe(1);
+    h.select(fileB); await screen.findByRole("button",{name:"预览文件"});
+    expect(screen.queryByRole("dialog")).toBeNull(); expect(live.size).toBe(0);
+});
+it("B a failed ordinary download is visible inside the preview",async()=>{
+    let calls=0;
+    detailHarness(undefined,()=>++calls===1?response(enc.encode("text")):jsonResponse({code:"dependency_unavailable",message:"offline",request_id:fileA},503));
+    const {dialog}=await openDetailPreview();await within(dialog).findByLabelText("文件文本");
+    fireEvent.click(within(dialog).getByRole("button",{name:"下载原文件"}));
+    expect(await within(dialog).findByText("下载失败，请重试。")).toBeInTheDocument();
+});
+
+it.each(["preview401","loaded-detail401"] as const)("B default router %s removes preview resources, draft and file cache",async(mode)=>{
+    const {createServer}=await import("node:http");
+    let expired=false;
+    const file=source("session.png",{id:fileA,note:"saved note"});
+    const server=createServer((request,res)=>{
+        const path=new URL(request.url!,"http://localhost").pathname;
+        const reply=(value:unknown,status=200)=>{res.writeHead(status,{"content-type":"application/json"});res.end(JSON.stringify(value));};
+        if(path==="/api/v1/auth/session") return reply({session:{id:fileA,user_id:fileB,current:true},csrf_token:"test-csrf-value-long"});
+        if((mode==="preview401"&&path.endsWith("/content"))||(expired&&path===`/api/v1/files/${fileA}`)) return reply({code:"unauthorized",message:"expired",request_id:fileA},401);
+        if(path.endsWith("/content")){res.writeHead(200,{"content-type":"application/octet-stream",etag:'"7"'});res.end(fixture("chinese.png"));return;}
+        if(path==="/api/v1/files") return reply({items:[file],next_cursor:null});
+        if(path===`/api/v1/files/${fileA}`)return reply(file);
+        if(path==="/api/v1/tags")return reply({items:[],next_cursor:null});
+        reply({},404);
+    });
+    await new Promise<void>(resolve=>server.listen(0,"127.0.0.1",resolve));
+    const address=server.address() as import("node:net").AddressInfo;
+    const NativeRequest=globalThis.Request;
+    class OriginRequest extends NativeRequest {constructor(input:RequestInfo|URL,init?:RequestInit){super(typeof input==="string"?new URL(input,`http://127.0.0.1:${address.port}`):input,init);}}
+    vi.stubGlobal("Request",OriginRequest);
+    const router=createAppRouter({history:createMemoryHistory({initialEntries:[`/files/${fileA}`]})});
+    const bundle=router.options.context!;
+    const mounted=render(<UiProvider><App router={router}/></UiProvider>);
+    try{
+        await act(async()=>router.load());
+        fireEvent.change(await screen.findByLabelText("文件备注"),{target:{value:"private preview session draft"}});
+        fireEvent.click(await screen.findByRole("button",{name:"预览文件"}));
+        if(mode==="loaded-detail401"){
+            await screen.findByRole("img");expect(live.size).toBe(1);expired=true;
+            await act(async()=>bundle.queryClient.invalidateQueries({queryKey:queryKeys.files.detail(fileA)}));
+        }
+        await waitFor(()=>expect(router.state.location.pathname).toBe("/login"));
+        expect(router.state.location.search).toMatchObject({redirect:`/files/${fileA}`});
+        expect(screen.queryByRole("dialog")).toBeNull();expect(screen.queryByDisplayValue("private preview session draft")).toBeNull();
+        expect(bundle.queryClient.getQueryData(queryKeys.files.detail(fileA))).toBeUndefined();expect(live.size).toBe(0);
+    }finally{
+        mounted.unmount();await bundle.queryClient.cancelQueries();bundle.queryClient.clear();vi.stubGlobal("Request",NativeRequest);
+        server.closeAllConnections();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));
+    }
+});
