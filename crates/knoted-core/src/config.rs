@@ -389,6 +389,7 @@ pub struct AppConfig {
     pub files: FilesConfig,
     pub intelligence: IntelligenceConfig,
     pub search: SearchConfig,
+    pub chat: crate::rag::providers::ChatProvidersConfig,
     pub office: Option<OfficeConfig>,
     secrets: BTreeMap<String, String>,
 }
@@ -405,6 +406,7 @@ impl fmt::Debug for AppConfig {
             .field("files", &self.files)
             .field("intelligence", &self.intelligence)
             .field("search", &self.search)
+            .field("chat", &self.chat)
             .field("office_configured", &self.office.is_some())
             .field("loaded_credentials", &self.secrets.len())
             .finish()
@@ -501,6 +503,10 @@ impl AppConfig {
         file.files.validate()?;
         file.intelligence.validate()?;
         file.search.validate()?;
+        file.chat.validate().map_err(|_| ConfigError::Invalid {
+            field: "chat",
+            message: "invalid model provider settings".into(),
+        })?;
         if let Some(office) = &file.office {
             office.validate()?;
         }
@@ -547,6 +553,7 @@ impl AppConfig {
             files: file.files,
             intelligence: file.intelligence,
             search: file.search,
+            chat: file.chat,
             office: file.office,
             secrets,
         })
@@ -601,6 +608,8 @@ struct ConfigFile {
     intelligence: IntelligenceConfig,
     #[serde(default)]
     search: SearchConfig,
+    #[serde(default)]
+    chat: crate::rag::providers::ChatProvidersConfig,
     office: Option<OfficeConfig>,
 }
 
