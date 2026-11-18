@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+chrono.workspace = true
+serde_json.workspace = true
 knoted-core = { path = "../knoted-core" }
 sqlx.workspace = true
 thiserror.workspace = true

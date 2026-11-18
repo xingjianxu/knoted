@@ -701,7 +701,7 @@ impl MeiliClient {
         MeiliClient::new(ctx.search(), ctx.search_api_key())
     }
 
-    fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
+    pub(crate) fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
         let builder = self.http.request(method, format!("{}/{path}", self.base));
         match &self.api_key {
             Some(key) => builder.bearer_auth(key),
@@ -709,7 +709,10 @@ impl MeiliClient {
         }
     }
 
-    async fn send(&self, request: reqwest::RequestBuilder) -> Result<Value, DomainError> {
+    pub(crate) async fn send(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<Value, DomainError> {
         let response = request.send().await.map_err(|_| DomainError::Unavailable)?;
         let status = response.status();
         let body: Value = response.json().await.unwrap_or(Value::Null);

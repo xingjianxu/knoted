@@ -256,6 +256,13 @@ impl SearchConfig {
     }
 }
 
+/// Enables automatic dense vectors for current chunk sets.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct VectorsConfig {
+    pub enabled: bool,
+}
+
 /// Optional server-side Office preview. Configuration contains a path, never a JWT secret.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -396,6 +403,7 @@ pub struct AppConfig {
     pub files: FilesConfig,
     pub intelligence: IntelligenceConfig,
     pub search: SearchConfig,
+    pub vectors: VectorsConfig,
     pub office: Option<OfficeConfig>,
     secrets: BTreeMap<String, String>,
 }
@@ -412,6 +420,7 @@ impl fmt::Debug for AppConfig {
             .field("files", &self.files)
             .field("intelligence", &self.intelligence)
             .field("search", &self.search)
+            .field("vectors", &self.vectors)
             .field("office_configured", &self.office.is_some())
             .field("loaded_credentials", &self.secrets.len())
             .finish()
@@ -554,6 +563,7 @@ impl AppConfig {
             files: file.files,
             intelligence: file.intelligence,
             search: file.search,
+            vectors: file.vectors,
             office: file.office,
             secrets,
         })
@@ -608,6 +618,8 @@ struct ConfigFile {
     intelligence: IntelligenceConfig,
     #[serde(default)]
     search: SearchConfig,
+    #[serde(default)]
+    vectors: VectorsConfig,
     office: Option<OfficeConfig>,
 }
 
