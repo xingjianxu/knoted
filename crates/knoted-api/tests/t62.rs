@@ -566,3 +566,183 @@ async fn t62_6_worker_recovers_a_terminal_job_with_an_unsettled_run() {
     assert_eq!(first["state"], "failed");
     assert_eq!(first["error"], "generation_interrupted");
 }
+
+#[tokio::test]
+async fn t62_7_replaced_endpoint_cannot_prove_stop_for_a_persisted_run() {
+    use axum::{Json, Router, routing::get};
+    use knoted_core::{
+        jobs,
+        rag::{
+            chat,
+            providers::{ChatProvidersConfig, ProviderConfig, ProviderRegistry},
+        },
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    let old_endpoint = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let replacement = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let old_url = format!("http://{}", old_endpoint.local_addr().unwrap());
+    let replacement_url = format!("http://{}", replacement.local_addr().unwrap());
+    let observed = Arc::new(AtomicUsize::new(0));
+    let hits = observed.clone();
+    let app = Router::new().route(
+        "/v1/status",
+        get(move || {
+            let hits = hits.clone();
+            async move {
+                hits.fetch_add(1, Ordering::Relaxed);
+                Json(json!({
+                    "service":"strata","model":"fixture-model","loaded":true,
+                    "cache_max_tokens":32768,"context":{"native":32768,"max_positions":32768},
+                    "activity":{"in_flight":0}
+                }))
+            }
+        }),
+    );
+    let server = tokio::spawn(async move { axum::serve(replacement, app).await.unwrap() });
+    let fixture = tempfile::tempdir().unwrap();
+    let credential_file = fixture.path().join("credential");
+    std::fs::write(&credential_file, "fixture-key").unwrap();
+    let registry = |base_url| {
+        Arc::new(
+            ProviderRegistry::new(ChatProvidersConfig {
+                local: Some(ProviderConfig {
+                    base_url,
+                    model: "fixture-model".into(),
+                    credential_file: credential_file.clone(),
+                }),
+                external: Default::default(),
+            })
+            .unwrap(),
+        )
+    };
+
+    let h = Harness::new().await;
+    let session = h.session().await;
+    let id = run_id(&h.submit(session, "old", "待停止的问题").await.1);
+    h.submit(session, "next", "排队问题").await;
+    let lease = jobs::claim(&h.db.pool, "original-worker")
+        .await
+        .unwrap()
+        .unwrap();
+    let old_ctx = h.ctx.clone().with_chat_providers(registry(old_url));
+    chat::begin_generation(&old_ctx, &lease, id).await.unwrap();
+    chat::mark_upstream_requested(&old_ctx, &lease, id, "fixture-model")
+        .await
+        .unwrap();
+    let (status, _, _) = h
+        .send("POST", &format!("/runs/{id}/cancel"), Value::Null, None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let replacement_ctx = h.ctx.clone().with_chat_providers(registry(replacement_url));
+    assert!(!chat::cancel_and_wait(&replacement_ctx, &lease).await);
+    assert_eq!(observed.load(Ordering::Relaxed), 0);
+    assert!(
+        jobs::claim(&h.db.pool, "next-worker")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn t62_8_cancellation_keeps_definitive_provider_terminal_proof() {
+    use axum::{Json, Router, response::IntoResponse, routing::post};
+    use knoted_core::{
+        jobs::{self, ExecutionOutcome},
+        rag::{
+            chat,
+            providers::{ChatProvidersConfig, ProviderConfig, ProviderRegistry},
+        },
+    };
+    use std::sync::Arc;
+    use tokio::sync::Notify;
+
+    let requested = Arc::new(Notify::new());
+    let emit_terminal = Arc::new(Notify::new());
+    let observed = requested.clone();
+    let release = emit_terminal.clone();
+    let app=Router::new().route("/v1/chat/completions",post(move |Json(_):Json<Value>|{
+        let observed=observed.clone();
+        let release=release.clone();
+        async move {
+            observed.notify_one();
+            release.notified().await;
+            let complete=json!({"model":"fixture-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]});
+            ([("content-type","text/event-stream")],format!("data: {complete}\n\ndata: [DONE]\n\n")).into_response()
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let fixture = tempfile::tempdir().unwrap();
+    let credential_file = fixture.path().join("credential");
+    std::fs::write(&credential_file, "fixture-key").unwrap();
+    let registry = ProviderRegistry::new(ChatProvidersConfig {
+        local: None,
+        external: [(
+            "test_provider".into(),
+            ProviderConfig {
+                base_url,
+                model: "fixture-model".into(),
+                credential_file,
+            },
+        )]
+        .into(),
+    })
+    .unwrap();
+    let mut h = Harness::new().await;
+    h.ctx = h.ctx.with_chat_providers(Arc::new(registry));
+    h.app = build_router_with_auth(h.ctx.clone(), AuthConfig::default());
+    let (status, _, body) = h
+        .send(
+            "POST",
+            "/sessions",
+            json!({"provider":"test_provider"}),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let session = body["id"].as_str().unwrap().parse().unwrap();
+    let id = run_id(&h.submit(session, "cancelling", "正在运行").await.1);
+    h.submit(session, "queued", "下一个问题").await;
+    let lease = jobs::claim(&h.db.pool, "worker").await.unwrap().unwrap();
+    let job = jobs::load_claimed(&h.db.pool, &lease)
+        .await
+        .unwrap()
+        .unwrap();
+    let task_ctx = h.ctx.clone();
+    let task_lease = lease.clone();
+    let execution =
+        tokio::spawn(async move { chat::execute_generation(&task_ctx, &task_lease, &job).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), requested.notified())
+        .await
+        .unwrap();
+
+    let (status, _, _) = h
+        .send("POST", &format!("/runs/{id}/cancel"), Value::Null, None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(jobs::claim(&h.db.pool, "waiting").await.unwrap().is_none());
+    emit_terminal.notify_one();
+    assert_eq!(execution.await.unwrap(), ExecutionOutcome::Cancelled);
+    let durable_proof: bool =
+        sqlx::query_scalar("SELECT upstream_stopped FROM generation_runs WHERE id=$1")
+            .bind(id)
+            .fetch_one(&h.db.pool)
+            .await
+            .unwrap();
+    assert!(durable_proof);
+    assert!(chat::cancel_and_wait(&h.ctx, &lease).await);
+    assert!(jobs::claim(&h.db.pool, "next").await.unwrap().is_some());
+    let (_, _, run) = h
+        .send("GET", &format!("/runs/{id}"), Value::Null, None)
+        .await;
+    assert_eq!(run["state"], "cancelled");
+    server.abort();
+}
