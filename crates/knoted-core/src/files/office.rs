@@ -1,7 +1,6 @@
 //! Office extraction identity and ephemeral, fixed-version preview authorization.
 use super::{artifact, download, pdf::Error, text::ExtractedDocument};
 use crate::{
-    auth::hash_token,
     config::{AuthConfig, OfficeConfig, is_canonical_https_origin},
     context::AppContext,
     intelligence::{ExecutionRequest, ExecutionResult},
@@ -9,7 +8,6 @@ use crate::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use rand::{RngCore, rngs::OsRng};
 use ring::hmac;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -20,7 +18,6 @@ use std::{
     path::Path,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
-use subtle::ConstantTimeEq as _;
 use tokio::{
     sync::{OwnedSemaphorePermit, Semaphore, oneshot},
     time::Instant,
@@ -317,11 +314,11 @@ pub struct RevokePreview {
 
 pub struct GetPreviewSource<'a> {
     pub preview_id: Uuid,
-    pub token: &'a str,
+    pub outbox_jwt: &'a str,
 }
 
 // These values deliberately do not implement Debug: the configuration holds
-// the signed JWT and capability URL, and the source contains private bytes.
+// the signed browser JWT, and the source contains private bytes.
 #[derive(Serialize)]
 pub struct OfficePreview {
     pub preview_id: Uuid,
@@ -338,7 +335,6 @@ pub struct PreviewSource {
 struct Entry {
     file_id: Uuid,
     session_id: Uuid,
-    token_hash: [u8; 32],
     expires_at: DateTime<Utc>,
     deadline: Instant,
     mime: &'static str,
@@ -399,6 +395,13 @@ impl PreviewStore {
 
     fn reap(&self, now: DateTime<Utc>) {
         self.entries().retain(|_, entry| entry.live(now));
+    }
+
+    fn source_url(&self, preview_id: Uuid) -> String {
+        format!(
+            "{}/api/v1/office-preview-sources/{preview_id}",
+            self.public_origin
+        )
     }
 }
 
@@ -498,15 +501,7 @@ pub async fn create_preview(
     };
 
     let preview_id = Uuid::new_v4();
-    let mut random = [0u8; 32];
-    OsRng
-        .try_fill_bytes(&mut random)
-        .map_err(|_| DomainError::Unavailable)?;
-    let token = URL_SAFE_NO_PAD.encode(random);
-    let url = format!(
-        "{}/api/v1/office-preview-sources/{preview_id}?token={token}",
-        store.public_origin
-    );
+    let url = store.source_url(preview_id);
     with_session_lock(ctx, input.session_id, |session_deadline| {
         let now = ctx.now();
         if session_deadline.is_none_or(|deadline| deadline <= now) {
@@ -529,7 +524,6 @@ pub async fn create_preview(
             Entry {
                 file_id: input.file_id,
                 session_id: input.session_id,
-                token_hash: hash_token(&token),
                 expires_at,
                 deadline,
                 mime,
@@ -619,39 +613,80 @@ pub fn revoke_preview(ctx: &AppContext, input: RevokePreview) {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OutboxJwtHeader<'a> {
+    alg: &'a str,
+    typ: Option<&'a str>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OutboxClaims {
+    payload: OutboxPayload,
+    iat: i64,
+    exp: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OutboxPayload {
+    url: String,
+}
+
+impl OutboxClaims {
+    fn live(&self, now: DateTime<Utc>) -> bool {
+        0 < self.iat && self.iat <= now.timestamp() && now.timestamp() < self.exp
+    }
+}
+
+fn verify_outbox(key: &hmac::Key, jwt: &str) -> Option<OutboxClaims> {
+    const MAX_JWT_BYTES: usize = 4096;
+    if jwt.len() > MAX_JWT_BYTES {
+        return None;
+    }
+    let (signed, tag) = jwt.rsplit_once('.')?;
+    let (header, payload) = signed.split_once('.')?;
+    // The no-pad engine also rejects invalid alphabet and non-zero unused
+    // bits; authenticate the original compact encoding, never reserialize it.
+    let header = URL_SAFE_NO_PAD.decode(header).ok()?;
+    let header: OutboxJwtHeader<'_> = serde_json::from_slice(&header).ok()?;
+    if header.alg != "HS256" || header.typ.is_some_and(|typ| typ != "JWT") {
+        return None;
+    }
+    let tag = URL_SAFE_NO_PAD.decode(tag).ok()?;
+    hmac::verify(key, signed.as_bytes(), &tag).ok()?;
+    let payload = URL_SAFE_NO_PAD.decode(payload).ok()?;
+    // The official converter wraps the URL in payload and adds iat/exp.
+    // Browser configs use a different claim shape and are not outbox claims.
+    serde_json::from_slice(&payload).ok()
+}
+
 pub async fn get_preview_source(
     ctx: &AppContext,
     input: GetPreviewSource<'_>,
 ) -> Option<PreviewSource> {
     let store = ctx.office()?;
-    if input.token.len() != 43
-        || !input
-            .token
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
-    {
+    let claims = verify_outbox(&store.signer, input.outbox_jwt)?;
+    let now = ctx.now();
+    if !claims.live(now) || claims.payload.url != store.source_url(input.preview_id) {
         return None;
     }
-    let hash = hash_token(input.token);
-    store.reap(ctx.now());
-    let session_id = {
-        let entries = store.entries();
-        let entry = entries.get(&input.preview_id)?;
-        if !bool::from(entry.token_hash.ct_eq(&hash)) {
-            return None;
-        }
-        entry.session_id
-    };
+    store.reap(now);
+    let session_id = store.entries().get(&input.preview_id)?.session_id;
 
     with_session_lock(ctx, session_id, |session_deadline| {
         let mut entries = store.entries();
         let entry = entries.get(&input.preview_id)?;
-        if entry.session_id != session_id || !bool::from(entry.token_hash.ct_eq(&hash)) {
+        if entry.session_id != session_id {
             return None;
         }
         let now = ctx.now();
         if !entry.live(now) || session_deadline.is_none_or(|deadline| deadline <= now) {
             entries.remove(&input.preview_id);
+            return None;
+        }
+        if !claims.live(now) {
             return None;
         }
         // A Bytes clone retains the same owner/permit through Axum/Hyper delivery,

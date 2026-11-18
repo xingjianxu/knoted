@@ -199,25 +199,55 @@ fn preview_id(preview: &Value) -> Uuid {
     preview["preview_id"].as_str().unwrap().parse().unwrap()
 }
 
-fn source_uri(preview: &Value) -> &str {
-    preview["config"]["document"]["url"]
-        .as_str()
-        .unwrap()
-        .strip_prefix(PUBLIC)
-        .expect("configured public origin")
+fn source_path(id: Uuid) -> String {
+    format!("/api/v1/office-preview-sources/{id}")
 }
 
-async fn fetch(app: &Router, uri: &str, range: bool) -> Response {
-    let req = Request::get(uri);
+fn outbox_claims(uri: &str, issued: i64, expires: i64) -> Value {
+    json!({"payload":{"url":format!("{PUBLIC}{uri}")},"iat":issued,"exp":expires})
+}
+
+fn signed_jwt(key: &[u8], header: &[u8], claims: &[u8]) -> String {
+    let input = format!(
+        "{}.{}",
+        URL_SAFE_NO_PAD.encode(header),
+        URL_SAFE_NO_PAD.encode(claims)
+    );
+    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key);
+    let tag = ring::hmac::sign(&key, input.as_bytes());
+    format!("{input}.{}", URL_SAFE_NO_PAD.encode(tag))
+}
+
+const JWT_HEADER: &[u8] = br#"{"alg":"HS256","typ":"JWT"}"#;
+
+fn bearer(f: &Fixture, path: &str) -> String {
+    let now = f.ctx.now().timestamp();
+    signed_jwt(
+        &f.signing_fixture,
+        JWT_HEADER,
+        outbox_claims(path, now, now + 300).to_string().as_bytes(),
+    )
+}
+
+async fn send(app: &Router, req: Builder) -> Response {
+    app.clone()
+        .oneshot(
+            req.body(Body::empty())
+                .expect("request fixture must be valid"),
+        )
+        .await
+        .unwrap()
+}
+
+async fn fetch(f: &Fixture, app: &Router, preview: &Value, range: bool) -> Response {
+    let path = source_path(preview_id(preview));
+    let req = Request::get(&path).header("authorization", format!("Bearer {}", bearer(f, &path)));
     let req = if range {
         req.header("range", "bytes=0-1")
     } else {
         req
     };
-    app.clone()
-        .oneshot(req.body(Body::empty()).expect("source URI must be valid"))
-        .await
-        .unwrap()
+    send(app, req).await
 }
 
 async fn revoke(
@@ -252,7 +282,7 @@ async fn t51_1_source_expires_and_revoke_is_idempotent() {
     let session = f.session().await;
     let preview = created(create(&app, file, 7, Some(&session), true).await).await;
     f.clock.advance(Duration::seconds(119));
-    let response = fetch(&app, source_uri(&preview), true).await;
+    let response = fetch(&f, &app, &preview, true).await;
     assert_eq!(
         response.status(),
         StatusCode::OK,
@@ -281,7 +311,7 @@ async fn t51_1_source_expires_and_revoke_is_idempotent() {
         "source GET cannot renew idle time"
     );
     f.clock.advance(Duration::seconds(1));
-    assert_eq!(fetch(&app, source_uri(&preview), false).await.status(), 404);
+    assert_eq!(fetch(&f, &app, &preview, false).await.status(), 404);
     assert_eq!(
         revoke(&app, file, preview_id(&preview), &session, true).await,
         204
@@ -293,11 +323,11 @@ async fn t51_1_source_expires_and_revoke_is_idempotent() {
             204
         );
     }
-    assert_eq!(fetch(&app, source_uri(&preview), false).await.status(), 404);
+    assert_eq!(fetch(&f, &app, &preview, false).await.status(), 404);
 }
 
 #[tokio::test]
-async fn t51_2_capability_scope_is_process_preview_file_and_session() {
+async fn t51_2_outbox_scope_is_process_preview_file_and_session() {
     let f = Fixture::new().await;
     fs::create_dir(f.dir.path().join("outside")).unwrap();
     fs::write(f.dir.path().join("outside/outside.docx"), ORIGINAL).unwrap();
@@ -311,15 +341,18 @@ async fn t51_2_capability_scope_is_process_preview_file_and_session() {
     let other = f.session().await;
     let a = created(create(&app, file, 7, Some(&owner), true).await).await;
     let b = created(create(&app, file, 7, Some(&owner), true).await).await;
-    let uri = source_uri(&a);
-    let (path, query) = uri.split_once('?').unwrap();
-    let raw = query.strip_prefix("token=").unwrap();
-    assert_eq!(raw.len(), 43);
-    assert!(
-        URL_SAFE_NO_PAD
-            .decode(raw)
-            .is_ok_and(|value| value.len() == 32)
+    let path = source_path(preview_id(&a));
+    let jwt = bearer(&f, &path);
+    let auth = format!("Bearer {jwt}");
+    // Positive control before the negatives: 404 from a disabled or absent
+    // endpoint must not make the adversarial fixtures pass vacuously.
+    assert_eq!(
+        send(&app, Request::get(&path).header("authorization", &auth))
+            .await
+            .status(),
+        200
     );
+    let browser_jwt = a["config"]["token"].as_str().unwrap();
     let log = LogBuffer::new();
     let subscriber = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::TRACE)
@@ -329,39 +362,140 @@ async fn t51_2_capability_scope_is_process_preview_file_and_session() {
         })
         .finish();
     let _log_guard = tracing::subscriber::set_default(subscriber);
-    let (lead, rest) = raw.split_at(1);
-    let changed = if lead == "A" { "B" } else { "A" };
-    for attempted in [
-        path.to_owned(),
-        format!("{path}?token={changed}{rest}"),
-        format!("/api/v1/office-preview-sources/{}?{query}", Uuid::new_v4()),
-        format!("/api/v1/office-preview-sources/{}?{query}", preview_id(&b)),
-        format!("{uri}&path=../outside.docx"),
-        format!("{path}?{raw}=bad"),
-    ] {
-        let response = fetch(&app, &attempted, false).await;
-        assert_eq!(response.status(), 404);
+    let now = f.ctx.now().timestamp();
+    let current = outbox_claims(&path, now, now + 300);
+    let sign = |claims: &Value| {
+        signed_jwt(
+            &f.signing_fixture,
+            JWT_HEADER,
+            claims.to_string().as_bytes(),
+        )
+    };
+    let mut foreign = current.clone();
+    foreign["payload"]["url"] = json!(format!("https://other.example.test:18443{path}"));
+    let mut missing_iat = current.clone();
+    missing_iat.as_object_mut().unwrap().remove("iat");
+    let mut invalid_purpose = current.clone();
+    invalid_purpose["payload"]["operation"] = json!("edit");
+    let invalid_jwts = [
+        ("browser JWT", browser_jwt.to_owned()),
+        (
+            "wrong signature",
+            signed_jwt(&[b'b'; 32], JWT_HEADER, current.to_string().as_bytes()),
+        ),
+        (
+            "wrong algorithm",
+            signed_jwt(
+                &f.signing_fixture,
+                br#"{"alg":"HS512","typ":"JWT"}"#,
+                current.to_string().as_bytes(),
+            ),
+        ),
+        ("wrong origin", sign(&foreign)),
+        ("wrong preview", bearer(&f, &source_path(preview_id(&b)))),
+        (
+            "claimed query",
+            sign(&outbox_claims(&format!("{path}?x=1"), now, now + 300)),
+        ),
+        (
+            "claimed fragment",
+            sign(&outbox_claims(&format!("{path}#x"), now, now + 300)),
+        ),
+        ("expired", sign(&outbox_claims(&path, now - 300, now))),
+        (
+            "future issued",
+            sign(&outbox_claims(&path, now + 1, now + 300)),
+        ),
+        ("missing iat", sign(&missing_iat)),
+        ("wrong operation", sign(&invalid_purpose)),
+        (
+            "malformed claims",
+            signed_jwt(&f.signing_fixture, JWT_HEADER, b"not-json"),
+        ),
+        ("malformed compact JWT", "one.two.three.four".to_owned()),
+        ("noncanonical padding", format!("{jwt}=")),
+        ("unbounded token", "a".repeat(8193)),
+    ];
+    let mut cases = vec![
+        ("no auth", Request::get(&path)),
+        (
+            "cookie only",
+            browser(Request::get(&path), Some(&owner), false),
+        ),
+        (
+            "wrong scheme",
+            Request::get(&path).header("authorization", format!("Basic {jwt}")),
+        ),
+        (
+            "duplicate auth",
+            Request::get(&path)
+                .header("authorization", &auth)
+                .header("authorization", &auth),
+        ),
+        (
+            "combined auth",
+            Request::get(&path).header("authorization", format!("{auth}, {auth}")),
+        ),
+        (
+            "legacy query",
+            Request::get(format!("{path}?token=synthetic-old-format")),
+        ),
+        (
+            "query despite auth",
+            Request::get(format!("{path}?x=1")).header("authorization", &auth),
+        ),
+        (
+            "empty query",
+            Request::get(format!("{path}?")).header("authorization", &auth),
+        ),
+    ];
+    cases.extend(invalid_jwts.iter().map(|(label, jwt)| {
+        (
+            *label,
+            Request::get(&path).header("authorization", format!("Bearer {jwt}")),
+        )
+    }));
+    for (label, request) in cases {
+        let response = send(&app, request).await;
+        assert_eq!(response.status(), 404, "{label}");
+        assert_eq!(response.headers()["cache-control"], "private, no-store");
         let body = to_bytes(response.into_body(), 8192).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["code"], "not_found");
         assert!(
-            !std::str::from_utf8(&body).unwrap().contains(raw),
-            "source errors must not echo the capability"
+            body["message"].as_str() == Some("preview source not found"),
+            "same fixed message for {label}"
         );
     }
-    assert_eq!(fetch(&f.app(true), uri, false).await.status(), 404);
+    let unknown = source_path(Uuid::new_v4());
+    assert_eq!(
+        send(
+            &app,
+            Request::get(&unknown)
+                .header("authorization", format!("Bearer {}", bearer(&f, &unknown)))
+        )
+        .await
+        .status(),
+        404
+    );
+    assert_eq!(fetch(&f, &f.app(true), &a, false).await.status(), 404);
     assert_eq!(revoke(&app, file, preview_id(&a), &other, true).await, 204);
     assert_eq!(
         revoke(&app, outside, preview_id(&a), &owner, true).await,
         204
     );
-    assert_eq!(fetch(&app, uri, false).await.status(), 200);
+    assert_eq!(fetch(&f, &app, &a, false).await.status(), 200);
     assert_eq!(revoke(&app, file, preview_id(&a), &owner, true).await, 204);
-    assert_eq!(fetch(&app, uri, false).await.status(), 404);
-    assert_eq!(fetch(&app, source_uri(&b), false).await.status(), 200);
+    assert_eq!(fetch(&f, &app, &a, false).await.status(), 404);
+    assert_eq!(fetch(&f, &app, &b, false).await.status(), 200);
     let logs = log.contents();
-    assert!(logs.contains(path), "the trace retains the path");
+    assert!(logs.contains(&path), "the trace retains the path");
     assert!(
-        !logs.contains(raw),
-        "the trace must not record the capability"
+        !logs.contains(&jwt)
+            && !logs.contains(browser_jwt)
+            && !logs.contains("synthetic-old-format")
+            && invalid_jwts.iter().all(|(_, jwt)| !logs.contains(jwt)),
+        "the trace must not record JWTs or queries"
     );
     assert_eq!(
         create(&app, outside, 7, Some(&owner), true).await.status(),
@@ -392,7 +526,7 @@ async fn t51_3_preview_keeps_original_bytes_and_rejects_stale_version() {
         409,
         "selected version already superseded"
     );
-    let response = fetch(&app, source_uri(&preview), false).await;
+    let response = fetch(&f, &app, &preview, false).await;
     assert_eq!(response.status(), 200);
     assert_eq!(
         &to_bytes(response.into_body(), 1024).await.unwrap()[..],
@@ -421,7 +555,7 @@ async fn t51_4_concurrent_admission_counts_unconsumed_source_body() {
         a["config"]["document"]["key"] != b["config"]["document"]["key"],
         "key must be unique per preview"
     );
-    let pending = fetch(&app, source_uri(&a), false).await;
+    let pending = fetch(&f, &app, &a, false).await;
     assert_eq!(pending.status(), 200);
     assert_eq!(revoke(&app, file, preview_id(&a), &s, true).await, 204);
     assert_eq!(create(&app, file, 7, Some(&s), true).await.status(), 429);
@@ -462,6 +596,11 @@ async fn t51_5_requires_session_csrf_config_and_signs_read_only() {
     assert_eq!(create(&app, file, 0, Some(&s), true).await.status(), 422);
     let preview = created(create(&app, file, 7, Some(&s), true).await).await;
     assert_eq!(preview["document_server_origin"], DOCS);
+    let expected_url = format!("{PUBLIC}{}", source_path(preview_id(&preview)));
+    assert!(
+        preview["config"]["document"]["url"].as_str() == Some(&expected_url),
+        "the source URL must have only configured origin and preview path, with no credentials"
+    );
     let expires: chrono::DateTime<Utc> = preview["expires_at"].as_str().unwrap().parse().unwrap();
     assert_eq!(expires, f.ctx.now() + Duration::seconds(120));
     let mut config = preview["config"].clone();
@@ -524,7 +663,7 @@ async fn t51_5_requires_session_csrf_config_and_signs_read_only() {
         .await
         .unwrap();
     drop(conn);
-    assert_eq!(fetch(&app, source_uri(&preview), false).await.status(), 404);
+    assert_eq!(fetch(&f, &app, &preview, false).await.status(), 404);
     assert_eq!(create(&app, file, 7, Some(&s), true).await.status(), 401);
     fs::remove_file(f.dir.path().join("test-signing-input")).unwrap();
     assert_eq!(

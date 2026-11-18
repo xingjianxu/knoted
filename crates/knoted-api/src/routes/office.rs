@@ -1,11 +1,11 @@
-//! Browser preview writes and a separate capability-only source route.
+//! Browser preview writes and a separate Document Server source route.
 use axum::{
     Extension, Json, Router,
     extract::{
-        Path, Query, RawQuery, State,
+        Path, Query, State,
         rejection::{JsonRejection, PathRejection, QueryRejection},
     },
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, Uri, header},
     middleware::from_fn_with_state,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -112,17 +112,27 @@ async fn revoke(
 async fn source(
     State(ctx): State<AppContext>,
     request: RequestId,
-    path: Result<Path<String>, PathRejection>,
-    RawQuery(query): RawQuery,
+    uri: Uri,
+    headers: HeaderMap,
 ) -> Response {
-    // Avoid QueryRejection: its diagnostic can echo an invalid query value.
-    // Our capability has one canonical ASCII representation; reject extras.
-    if let (Ok(Path(id)), Some(token)) = (
-        path,
-        query.as_deref().and_then(|q| q.strip_prefix("token=")),
-    ) && let Ok(preview_id) = id.parse()
-        && let Some(source) =
-            office::get_preview_source(&ctx, GetPreviewSource { preview_id, token }).await
+    // Never deserialize or log a query here. Any query (even an empty one)
+    // or non-canonical ID is outside the signed source URL contract.
+    if uri.query().is_none()
+        && let Some((_, id)) = uri.path().rsplit_once('/')
+        && let Ok(preview_id) = id.parse::<Uuid>()
+        && id
+            == preview_id
+                .hyphenated()
+                .encode_lower(&mut Uuid::encode_buffer())
+        && let Some(outbox_jwt) = bearer(&headers)
+        && let Some(source) = office::get_preview_source(
+            &ctx,
+            GetPreviewSource {
+                preview_id,
+                outbox_jwt,
+            },
+        )
+        .await
     {
         return (
             [
@@ -140,6 +150,18 @@ async fn source(
         .headers_mut()
         .insert(NO_STORE.0, header::HeaderValue::from_static(NO_STORE.1));
     response
+}
+
+fn bearer(headers: &HeaderMap) -> Option<&str> {
+    let mut values = headers.get_all(header::AUTHORIZATION).iter();
+    let value = values.next()?.to_str().ok()?;
+    if values.next().is_some() {
+        return None;
+    }
+    let (scheme, token) = value.split_once(' ')?;
+    // Reject comma-joined duplicates and whitespace in the compact JWT in
+    // the domain verifier, regardless of how a proxy combined the headers.
+    scheme.eq_ignore_ascii_case("Bearer").then_some(token)
 }
 
 fn bad_request(request: RequestId) -> Response {

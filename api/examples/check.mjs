@@ -666,13 +666,21 @@ function checkOperations(document, documentName, operations, requiredInventory) 
 
     if (documentName === BROWSER_DOCUMENT) {
       if (operation.operationId === "getOfficePreviewSource") {
-        // The service capability deliberately hides every authorization failure as 404.
+        // No query or browser auth fallback; hide every authorization failure as 404.
+        const scheme = document.components?.securitySchemes?.OfficeOutboxJWT;
         check(
-          operation.security?.length === 0 &&
+          operation.security?.length === 1 &&
+            Object.keys(operation.security[0]).length === 1 &&
+            operation.security[0].OfficeOutboxJWT?.length === 0 &&
+            scheme?.type === "http" && scheme.scheme === "bearer" &&
+            scheme.bearerFormat === "JWT" &&
+            ![...(pathItem.parameters ?? []), ...(operation.parameters ?? [])].some((parameter) =>
+              resolveLocal(document, parameter, `${label} parameter`).in !== "path"
+            ) &&
             operation.responses["401"] === undefined &&
             operation.responses["403"] === undefined &&
             operation.responses["404"] !== undefined,
-          `${label}: Document Server 取源必须以 404 隐藏授权失败，不使用浏览器会话`,
+          `${label}: Document Server 取源仅接受出站 JWT 请求头，授权失败统一返回 404`,
         );
       } else {
         check(

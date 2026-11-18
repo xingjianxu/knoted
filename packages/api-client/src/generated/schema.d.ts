@@ -975,7 +975,7 @@ export interface paths {
         };
         /**
          * 仅供 Document Server 读取已授权 Office 副本
-         * @description 不使用浏览器 cookie。不支持部分读取；成功时返回完整副本，不缓存或记录查询参数。
+         * @description 仅接受 OnlyOffice 出站 JWT 请求头，不接受查询字符串或浏览器 cookie 鉴权。不支持部分读取；成功时返回完整副本，不缓存或记录凭据。
          */
         get: operations["getOfficePreviewSource"];
         put?: never;
@@ -4378,9 +4378,7 @@ export interface operations {
     };
     getOfficePreviewSource: {
         parameters: {
-            query: {
-                token: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 previewId: string;

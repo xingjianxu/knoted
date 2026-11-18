@@ -2261,8 +2261,9 @@ paths:
         - Files
       summary: 仅供 Document Server 读取已授权 Office 副本
       operationId: getOfficePreviewSource
-      description: 不使用浏览器 cookie。不支持部分读取；成功时返回完整副本，不缓存或记录查询参数。
-      security: []
+      description: 仅接受 OnlyOffice 出站 JWT 请求头，不接受查询字符串或浏览器 cookie 鉴权。不支持部分读取；成功时返回完整副本，不缓存或记录凭据。
+      security:
+        - OfficeOutboxJWT: []
       parameters:
         - name: previewId
           in: path
@@ -2270,12 +2271,6 @@ paths:
           schema:
             type: string
             format: uuid
-        - name: token
-          in: query
-          required: true
-          schema:
-            type: string
-            pattern: '^[A-Za-z0-9_-]{43}$'
       responses:
         "200":
           description: 固定版本的原件字节
@@ -2865,6 +2860,12 @@ paths:
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
 components:
+  securitySchemes:
+    OfficeOutboxJWT:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Document Server 签发的 HS256 出站 JWT，包含精确取源 URL（payload.url）和 iat/exp。
   schemas:
     ApiError:
       type: object
