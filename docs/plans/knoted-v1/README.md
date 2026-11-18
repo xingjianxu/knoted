@@ -100,6 +100,8 @@
 | [T71](tasks/T71.md) | 功能与故障恢复集成验收 | T70 | pending |
 | [T72](tasks/T72.md) | 最终测试部署和交接 | T71 | pending |
 
+T39—T50 最终组合补修：done（PR [#177](https://github.com/xingjianxu/knoted/pull/177)，主线 `e9da413`，dev `e9da413`；[证据](evidence/t39-t50-integration.md)）。表内主线/dev保留各卡首次完整验收修订；最新运行及最终修复以本条为准。
+
 ## 实施进展（T06—T16）
 
 基线 master `1147172`。每个任务在 `.worktrees/knoted-t0N` 的独立分支（`feat/t0N`、`docs/t12b`、`feat/t12b`）实施，经独立审查（多数任务两轮以上修复循环）后以 PR 普通 merge 进入远程 master；本地主线 `git merge --ff-only` 同步，分支在工作区核验后清理。跨仓库 host 交付在 `/etc/nixos` 独立提交，不混入本仓库。

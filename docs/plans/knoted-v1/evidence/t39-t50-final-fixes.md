@@ -27,3 +27,19 @@
 标准 `uv --project services/intelligence sync --locked` 退出 0，独立环境为 `/data/knoted-dev/tasks/t39-t50-final/build/python-env`。`python -I -B` 证实 `knoted_intelligence.app` 来自修复工作区。`cargo fmt --check`、定向 Clippy、Python Ruff 和 diff 检查均退出 0。冻结清单 `/data/knoted-dev/tasks/t39-t50-final/evidence/code-test-frozen.sha256` 保存每个产品及测试文件的 SHA-256。
 
 本记录覆盖修复工作区的定向回归。整套门禁、独立复审、PR 和更新后开发实例验收由主 Agent 记录。
+
+## 父完整门禁、唯一复审及最终交付
+
+PR [#177](https://github.com/xingjianxu/knoted/pull/177) 普通merge，主线/dev **`e9da413e766ba98e34084ec219da4991f8d7a09d`**。Issue173自动CLOSED；产品Worktree/已合并本地分支已正常移除，远程分支读回不存在，4个忽略项仅pytest cache、未知0；其他任务不动。最终阶段汇总见 [交付记录](t39-t50-integration.md)。
+
+- 父完整Rust：`cargo fmt --check`、`cargo test --workspace --locked`、`cargo clippy --locked --all-targets -- -D warnings` 全exit0，415顶层+8嵌套通过，1既有ignored。原API夹具失败101保留，改为显式启用根后重跑完整Rust；不是跳过失败用例。
+- 父完整Python `uv run --locked --group dev pytest -q` 为171通过/9既有warning、370.68s，Ruff check0；原format1保留。最后`2e5968b`仅删测试一空行，前后AST等同、其余12冻结SHA一致，最终Ruff format28文件/check/7focused均0，无需再跑同产品模型。
+- 最强模型的唯一scoped复审I1/I2/I3均ADDRESSED、Spec PASS/Quality APPROVED、new Critical/Important0；格式项追加最终读回后解除。报告`/data/knoted-dev/tasks/t39-t50/reviews/final-t39-t50-rereview.md`。父按git-commit正常纳入已审7MD，最后feature `78ba568`，主线tree精确且13产品/测试SHA逐项一致。
+- 主线定向Rust9/Python3、fmt和官方fixed build全0；一次错过滤得到的main-relink 0tests不计覆盖，另跑真实两个disabled/换根负例。标准uv环境重新同步至rootmain，实际`app.__file__`已核对。Web/API/锁未改；新旧61个Web产物SHA完全相同，复用T50实际浏览器及PDF看图证据，不声称新SHA重跑浏览器。
+- 固定38320文件manifest SHA256 **`95e309224c9dcc035c4697fc8b20445ab13d90723d0e66af0ebc8a305305e095`**。dev三进程同一完整SHA固定可执行文件、loopback、CPU/只读模型/health正确；一致备份`/data/knoted-dev/service/backups/20261118T045610Z-t39-t50-final-`含原生SQLite/PG/assets/staging及CLI清洁证明。未修改共享服务，本次部署前后PG/Caddy/Strata进程均保持。
+
+真实四源完整复验`live-acceptance-r1` exit0：初代129→后续130→131→清理132。普通DOCX按v3完整发布Before/Table body/After，文本成功，两种customXml包装明确unsupported_format且无提取产物。两轮后续完整扫描保持四源id/content_version/version/observation_version/input ObjectId及成功、失败作业记录相同；整个staging/input闭合对象集合均**114件**，无多余保留、无.part，失败语义不重新启动。清理仅删除自有UUID源目录，四源变missing/fresh=false，历史输入仍在。
+
+首次四源运行已通过正文/失败类型，但私有验收工具复用Btrfs目录FD时首次枚举未见新增4输入，严格集合断言失败。独立同FS探针原106+新增4仍枚举106，独立fresh目录流立即110，修后RED1→GREEN0；仅helper每次从pinned FD打开`.`独立枚举，严格断言不动，补差集日志后全四源重跑通过。更早的helper set与dict直接比较在live前被父离线fakeartifact探针查出并修正。原失败/成功finally/私有修正探针全部保留，不记为产品RED或跳过。
+
+最后`final-runtime-audit` exit0：完整38320清单运行后精确，49个持久Python执行全部GET echo与退出证明有效（34成功/12预期输入失败/1取消/2中断）；health/filejobs active0、.part0，schema15、0present/75missing/成功提取57/预期failed jobs17/Passkey1。当前三shared PID与本次部署before相同；T50期间Strata曾更换PID的历史事实仍按原证据保留，原因未知，不扩大为整个会话都未变化的断言。原始证据根`/data/knoted-dev/tasks/t39-t50-final/`，核心JSON为`evidence/parent-final-verification.json`、`main-verification.json`、`live-acceptance.json`、`final-runtime-audit.json`、`worktree-cleanup.json`。
