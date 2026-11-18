@@ -7,4 +7,5 @@ pub mod context;
 pub mod embedding;
 pub mod providers;
 pub mod retrieval;
+pub mod save_note;
 pub mod vector;

@@ -5,6 +5,7 @@ import type { QueryClientBundle } from "../../lib/query";
 import { searchTagChoicesQuery } from "../search/queries";
 import { projectChoicesQuery } from "../tasks/queries";
 import { CitationList, CitationPanel } from "./CitationPanel";
+import { SaveNoteDialog } from "./SaveNoteDialog";
 import { runQuery, sessionQuery, type ChatMessage, type ChatRequest, type ChatRun, type ChatScope } from "./queries";
 import { runIsActive, useChatRun, viewRun, type ViewedRun } from "./use-run";
 
@@ -159,7 +160,12 @@ function MessageRow({ message, bundle, selected, children }: {
         {message.incomplete && !children && <Badge tone="orange">未完成回答</Badge>}
       </div>
       {children ?? <p className="whitespace-pre-wrap wrap-anywhere">{message.body}</p>}
-      {message.role === "assistant" && !message.incomplete && <CitationPanel bundle={bundle} messageId={message.id} />}
+      {message.role === "assistant" && !message.incomplete && (
+        <>
+          <CitationPanel bundle={bundle} messageId={message.id} />
+          <SaveNoteDialog bundle={bundle} messageId={message.id} />
+        </>
+      )}
     </li>
   );
 }

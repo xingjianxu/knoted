@@ -120,38 +120,60 @@ pub(super) fn check_version(note: &Note, expected: i64) -> Result<(), DomainErro
     Ok(())
 }
 
-pub async fn create(ctx: &AppContext, input: CreateNote) -> Result<Note, DomainError> {
-    title(&input.title)?;
-    let document = validate(ctx, input.document_json)?;
-    let mut tx = repo::begin_write(ctx).await?;
-    let result = async {
-        repo::lock_tree(&mut tx).await?;
-        if let Some(parent) = input.parent_id
-            && repo::find(&mut tx, parent, false).await?.is_none()
-        {
-            return Err(DomainError::Conflict {
-                current_version: None,
-            });
-        }
-        let now = ctx.now();
-        let note = Note {
-            id: Uuid::new_v4(),
-            parent_id: input.parent_id,
-            title: input.title,
-            document,
-            format_version: 1,
-            content_version: 1,
-            position: repo::next_position(&mut tx, input.parent_id).await?,
-            created_at: now,
-            updated_at: now,
-            deleted_at: None,
-        };
-        let note = repo::insert(&mut tx, &note).await?;
-        repo::event(&mut tx, note.id, 1, "created", now).await?;
-        Ok(note)
+pub(crate) struct ValidatedCreateNote {
+    title: String,
+    parent_id: Option<Uuid>,
+    document: Value,
+}
+
+impl CreateNote {
+    pub(crate) fn validate(self, ctx: &AppContext) -> Result<ValidatedCreateNote, DomainError> {
+        title(&self.title)?;
+        Ok(ValidatedCreateNote {
+            title: self.title,
+            parent_id: self.parent_id,
+            document: validate(ctx, self.document_json)?,
+        })
     }
-    .await;
+}
+
+pub async fn create(ctx: &AppContext, input: CreateNote) -> Result<Note, DomainError> {
+    let input = input.validate(ctx)?;
+    let mut tx = repo::begin_write(ctx).await?;
+    let result = create_in_transaction(ctx, &mut tx, input).await;
     finish(tx, result).await
+}
+
+/// The caller owns the transaction and has acquired the reference-write lock.
+pub(crate) async fn create_in_transaction(
+    ctx: &AppContext,
+    tx: &mut sqlx::PgConnection,
+    input: ValidatedCreateNote,
+) -> Result<Note, DomainError> {
+    repo::lock_tree(tx).await?;
+    if let Some(parent) = input.parent_id
+        && repo::find(tx, parent, false).await?.is_none()
+    {
+        return Err(DomainError::Conflict {
+            current_version: None,
+        });
+    }
+    let now = ctx.now();
+    let note = Note {
+        id: Uuid::new_v4(),
+        parent_id: input.parent_id,
+        title: input.title,
+        document: input.document,
+        format_version: 1,
+        content_version: 1,
+        position: repo::next_position(tx, input.parent_id).await?,
+        created_at: now,
+        updated_at: now,
+        deleted_at: None,
+    };
+    let note = repo::insert(tx, &note).await?;
+    repo::event(tx, note.id, 1, "created", now).await?;
+    Ok(note)
 }
 
 pub async fn get(ctx: &AppContext, input: GetNote) -> Result<Note, DomainError> {

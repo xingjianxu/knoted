@@ -4966,9 +4966,11 @@ export interface operations {
     saveChatMessageAsNote: {
         parameters: {
             query?: never;
-            header?: {
+            header: {
                 /** @description 由同源客户端中间件自动附加，值取自 `knoted_csrf` cookie，服务端同时校验 Origin。 */
                 "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
+                /** @description 按账号+操作+键保存请求摘要与结果，7 天过期；同键不同请求返回 409。 */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
                 /** @description 聊天消息 ID。 */
@@ -4994,7 +4996,9 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            413: components["responses"]["PayloadTooLarge"];
             422: components["responses"]["UnprocessableEntity"];
             429: components["responses"]["TooManyRequests"];
             503: components["responses"]["ServiceUnavailable"];
