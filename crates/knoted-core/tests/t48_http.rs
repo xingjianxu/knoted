@@ -5,6 +5,34 @@ use std::{
     process::{Child, Command, Stdio},
     time::Duration,
 };
+fn selected_python(repository: &std::path::Path) -> String {
+    std::env::var("KNOTED_TEST_PYTHON").unwrap_or_else(|_| {
+        std::env::var("UV_PROJECT_ENVIRONMENT")
+            .map(|p| format!("{p}/bin/python"))
+            .unwrap_or_else(|_| {
+                repository
+                    .join("services/intelligence/.venv/bin/python")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+    })
+}
+
+fn python_environment_root() -> std::path::PathBuf {
+    let repository = std::env::var_os("T48_TEST_REPOSITORY")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    let output = Command::new(selected_python(&repository))
+        .args(["-I", "-B", "-c", "import sys; print(sys.prefix)"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "selected Python must report its environment"
+    );
+    std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
+}
+
 struct Service {
     python: String,
     process: Child,
@@ -38,16 +66,7 @@ impl Service {
         let repository = std::env::var_os("T48_TEST_REPOSITORY")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."));
-        let python = std::env::var("KNOTED_TEST_PYTHON").unwrap_or_else(|_| {
-            std::env::var("UV_PROJECT_ENVIRONMENT")
-                .map(|p| format!("{p}/bin/python"))
-                .unwrap_or_else(|_| {
-                    repository
-                        .join("services/intelligence/.venv/bin/python")
-                        .to_string_lossy()
-                        .into_owned()
-                })
-        });
+        let python = selected_python(&repository);
         let process = Command::new(&python)
             .args([
                 "-I",
@@ -193,22 +212,7 @@ async fn t48_real_http_office_artifact_identity_digest_and_metadata() {
 
 #[test]
 fn t48_default_venv_runs_service_and_office_fixture_without_optional_env() {
-    let env_root = std::env::var_os("UV_PROJECT_ENVIRONMENT")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("KNOTED_TEST_PYTHON").map(|p| {
-                std::path::PathBuf::from(p)
-                    .parent()
-                    .unwrap()
-                    .parent()
-                    .unwrap()
-                    .to_owned()
-            })
-        })
-        .unwrap_or_else(|| {
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../services/intelligence/.venv")
-        });
+    let env_root = python_environment_root();
     let repository = tempfile::tempdir_in(std::env::temp_dir()).unwrap();
     let intelligence = repository.path().join("services/intelligence");
     std::fs::create_dir_all(&intelligence).unwrap();
@@ -232,4 +236,39 @@ fn t48_default_venv_runs_service_and_office_fixture_without_optional_env() {
         status.success(),
         "default venv must serve and generate fixtures without optional env"
     );
+}
+
+#[test]
+fn t48_python_overrides_support_path_uv_and_knoted_precedence() {
+    let env_root = python_environment_root();
+    let mut paths = vec![env_root.join("bin")];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let path = std::env::join_paths(paths).unwrap();
+    for mode in ["path", "uv", "both"] {
+        let mut child = Command::new(std::env::current_exe().unwrap());
+        child
+            .args([
+                "--exact",
+                "t48_default_venv_runs_service_and_office_fixture_without_optional_env",
+                "--nocapture",
+            ])
+            .env_remove("KNOTED_TEST_PYTHON")
+            .env_remove("UV_PROJECT_ENVIRONMENT")
+            .env("PATH", &path);
+        if mode != "uv" {
+            child.env("KNOTED_TEST_PYTHON", "python");
+        }
+        if mode == "uv" {
+            child.env("UV_PROJECT_ENVIRONMENT", &env_root);
+        } else if mode == "both" {
+            // A conflicting unusable UV root must never outrank KNOTED.
+            child.env(
+                "UV_PROJECT_ENVIRONMENT",
+                env_root.join("not-an-environment"),
+            );
+        }
+        assert!(child.status().unwrap().success(), "interpreter mode {mode}");
+    }
 }

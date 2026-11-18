@@ -234,3 +234,23 @@ passed / exit0**，含真实 Worker 管线与发布锁跨截止测试；
 `r2-fmt-final`、`r2-clippy-final`、`r2-ruff-final`、`r2-format-final` 全 exit0。
 代码/测试冻结后仅更新本证据与报告；父将独立完整 Python 复验同一快照。
 本轮不重复完整 Rust/Python，无远程、部署、SourceRoot 或模型宿主变更。
+
+
+### 独立审查修复第 3 轮（仅测试 I4）
+
+轮 2 I1/I2/I3 已复审解决；主 Agent 在 cf96 已验证完整 Rust 394 顶层 +
+2 嵌套 passed / 1 ignored，Python 168 passed / 9 既有 warnings /249.13 秒。
+收到门禁结束通知后，本轮只修改 `crates/knoted-core/tests/t48_http.rs`。
+
+新增默认环境回归原先把 KNOTED_TEST_PYTHON 当绝对路径剥父目录，又与服务的
+环境变量优先级不一致。冻结二进制在 PATH-only 与冲突 UV 两种环境下均真实
+exit101（`r3-path-red` / `r3-priority-red`）。现在服务与回归共享选择函数，
+保持 KNOTED > UV > 默认 .venv，由所选解释器只读报告 sys.prefix 作为临时
+默认环境链接目标。无手建环境或 site-packages 修改。
+
+`r3-http-final` 完整 HTTP 模块 **3 顶层 + 7 嵌套 passed / exit0 /37.76 秒**：
+默认 case、PATH 命令名、UV-only、KNOTED 与无效 UV 冲突均经过真实三格式
+HTTP 子测试。`r3-fmt-final`、`r3-clippy-final` 与 diffcheck 全 exit0。
+所有命令/原始输出/退出码仍在 `/data/knoted-dev/tasks/t48/logs/`。
+Python 全部源/测试和 Rust 产品字节未改，不重复模型或完整 Rust/Worker 管线。
+最终提交与完整差异哈希见外部实施报告；继续冻结交父独立复验与 scoped 审查。
