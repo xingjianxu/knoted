@@ -37,10 +37,7 @@ async fn t44_dispatcher_captures_after_scan_via_shared_queue() {
 }
 
 fn temp() -> std::path::PathBuf {
-    let p = std::path::PathBuf::from(format!(
-        "/data/knoted-dev/tasks/t44/tmp/{}",
-        uuid::Uuid::new_v4()
-    ));
+    let p = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&p).unwrap();
     p
 }

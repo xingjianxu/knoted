@@ -8,10 +8,9 @@ ids and digests the worker verifies.
 
 Every transition is a conditional ``UPDATE ... WHERE state = ...`` so a late
 worker cannot overwrite a cancellation that arrived while it was computing.
-``open()`` also recovers: rows left in ``queued``/``running``/
-``cancel_requested`` by a previous process become ``interrupted``, a retryable
-terminal state. The service never resumes a half-finished computation, and a
-queued row is dead as well because its in-memory queue is gone.
+Recovery runs only after the API acquires its exclusive instance lock. Old
+nonterminal rows become interrupted, but resource release requires a validated
+guardian receipt; opening SQLite alone never asserts that a process exited.
 """
 
 from __future__ import annotations
@@ -123,6 +122,7 @@ class ExecutionRow:
     result_size: int | None
     result_media_type: str | None
     result_metadata: dict[str, str] | None
+    compute_exit_confirmed: bool
 
 
 class LedgerConflict(Exception):
@@ -165,10 +165,16 @@ class Ledger:
             connection.execute("PRAGMA synchronous=FULL")
             connection.execute("PRAGMA busy_timeout=5000")
             connection.executescript(_SCHEMA)
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(executions)")}
+            if "compute_exit_confirmed" not in columns:
+                connection.execute(
+                    "ALTER TABLE executions ADD COLUMN "
+                    "compute_exit_confirmed INTEGER NOT NULL DEFAULT 0"
+                )
+            from .supervision import SCHEMA
+
+            connection.executescript(SCHEMA)
             self._connection = connection
-        recovered = self.interrupt_unfinished(datetime.now(UTC))
-        if recovered:
-            logger.warning("marked %d in-flight execution(s) as interrupted", recovered)
 
     def close(self) -> None:
         with self._lock:
@@ -292,6 +298,7 @@ class Ledger:
         from_states: Iterable[str] = IN_FLIGHT_STATES,
         error: ExecutionErrorDetail | None = None,
         result: ExecutionResultDetail | None = None,
+        compute_exit_confirmed: bool = False,
     ) -> bool:
         """Writes a terminal state, but only if the row is still in ``from_states``."""
 
@@ -307,7 +314,7 @@ class Ledger:
                    SET state = ?, updated_at = ?, finished_at = ?,
                        error_code = ?, error_message = ?, error_request_id = ?,
                        result_object_id = ?, result_sha256 = ?, result_size = ?,
-                       result_media_type = ?, result_metadata = ?
+                       result_media_type = ?, result_metadata = ?, compute_exit_confirmed = ?
                  WHERE execution_id = ? AND state IN ({placeholders})
                 """,
                 (
@@ -322,11 +329,30 @@ class Ledger:
                     result.size if result else None,
                     result.media_type if result else None,
                     metadata,
+                    int(compute_exit_confirmed),
                     execution_id,
                     *states,
                 ),
             )
             return cursor.rowcount == 1
+
+    def all_rows(self) -> list[ExecutionRow]:
+        with self._lock:
+            return [
+                _row(row) for row in self._connection_or_raise().execute("SELECT * FROM executions")
+            ]
+
+    def confirm_exit(self, execution_id: str) -> None:
+        from .supervision import validated_receipt
+
+        with self._lock:
+            db = self._connection_or_raise()
+            if validated_receipt(db, execution_id):
+                db.execute(
+                    "UPDATE executions SET compute_exit_confirmed=1 WHERE execution_id=? "
+                    "AND state IN ('succeeded','failed','cancelled','interrupted')",
+                    (execution_id,),
+                )
 
     def interrupt_unfinished(self, now: datetime) -> int:
         """Turns rows a dead process left in flight into ``interrupted``."""
@@ -381,4 +407,5 @@ def _row(row: sqlite3.Row) -> ExecutionRow:
         result_size=row["result_size"],
         result_media_type=row["result_media_type"],
         result_metadata=metadata,
+        compute_exit_confirmed=bool(row["compute_exit_confirmed"]),
     )

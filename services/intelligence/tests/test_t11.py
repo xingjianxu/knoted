@@ -564,7 +564,7 @@ def test_t11_6_embed_input_admission(tmp_path: Path) -> None:
             assert created.status_code == 201, created.text
             record = wait_for_state(client, execution_id, {"failed", "succeeded"}, timeout=120.0)
             assert record["state"] == "failed", record
-            assert record["error"]["code"] == "execution_failed", record
+            assert record["error"]["code"] == expected_code, record
             assert expected_code in record["error"]["message"], record["error"]["message"]
 
 

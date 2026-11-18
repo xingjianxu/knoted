@@ -73,8 +73,9 @@ impl Handler for Dispatcher {
             },
         }
     }
-    // No child process or detached blocking task is started. Dropping execute
-    // interrupts traversal at its next await, before it can publish anything.
+    async fn cancel_and_wait<'a>(&'a self, lease: &'a Lease) -> bool {
+        super::extract::cancel_and_wait(&self.ctx, lease).await
+    }
 }
 async fn execute_scan(ctx: &AppContext, lease: &Lease) -> ExecutionOutcome {
     let config = ctx.files();
@@ -187,10 +188,12 @@ async fn schedule(ctx: AppContext) -> ! {
     }
 }
 
-pub async fn run(ctx: AppContext) -> ! {
+pub async fn run(ctx: AppContext) {
     if !ctx.files().enabled {
-        std::future::pending::<()>().await;
-        unreachable!();
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("SIGTERM listener");
+        tokio::select! { _ = term.recv() => {}, _ = tokio::signal::ctrl_c() => {} }
+        return;
     }
     let runner = WorkerRunner::with_context(
         ctx.clone(),
@@ -199,6 +202,6 @@ pub async fn run(ctx: AppContext) -> ! {
     );
     tokio::select! {
         _=schedule(ctx)=>unreachable!(),
-        _=runner.run()=>unreachable!(),
+        _=runner.run()=>{},
     }
 }

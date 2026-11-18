@@ -81,6 +81,7 @@ pub struct AppContext {
     clock: Arc<dyn Clock>,
     asset_root: std::path::PathBuf,
     files: crate::config::FilesConfig,
+    intelligence: crate::config::IntelligenceConfig,
 }
 
 impl AppContext {
@@ -91,6 +92,7 @@ impl AppContext {
             clock: Arc::new(SystemClock),
             asset_root: crate::config::AssetsConfig::default().root,
             files: crate::config::FilesConfig::default(),
+            intelligence: crate::config::IntelligenceConfig::default(),
         }
     }
 
@@ -108,6 +110,14 @@ impl AppContext {
 
     pub fn asset_root(&self) -> &std::path::Path {
         &self.asset_root
+    }
+
+    pub fn with_intelligence(mut self, config: crate::config::IntelligenceConfig) -> Self {
+        self.intelligence = config;
+        self
+    }
+    pub fn intelligence(&self) -> &crate::config::IntelligenceConfig {
+        &self.intelligence
     }
 
     pub fn with_files(mut self, config: crate::config::FilesConfig) -> Self {

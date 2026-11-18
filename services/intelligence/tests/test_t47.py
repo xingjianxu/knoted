@@ -1,4 +1,4 @@
-"""Phase A: real input admission and offline OCR; supervision belongs to Phase B."""
+"""PDF/image admission, real offline OCR and execution exit confirmation."""
 
 import socket
 from pathlib import Path
@@ -114,3 +114,232 @@ def test_t47_pixel_limit_before_models(tmp_path, monkeypatch, width, height, acc
         with pytest.raises(models.ParseError) as error:
             parse(path)
         assert error.value.code == "image_too_large"
+
+
+def test_t47_wire_strict_exit_proof():
+    import json
+
+    from pydantic import ValidationError
+
+    from knoted_intelligence.app import ExecutionRecord
+
+    root = Path(__file__).resolve().parents[3] / "api/examples"
+    value = json.loads((root / "valid/execution-record-exit-confirmed.json").read_text())
+    legacy = dict(value)
+    legacy.pop("compute_exit_confirmed")
+    assert ExecutionRecord.model_validate(legacy).compute_exit_confirmed is False
+    for state in ("succeeded", "failed", "cancelled", "interrupted"):
+        for proof in (True, False):
+            record = ExecutionRecord.model_validate(
+                dict(value, state=state, compute_exit_confirmed=proof)
+            )
+            assert record.compute_exit_confirmed is proof
+    for invalid in (1, "true", None):
+        with pytest.raises(ValidationError):
+            ExecutionRecord.model_validate(dict(value, compute_exit_confirmed=invalid))
+    for state in ("queued", "running", "cancel_requested"):
+        with pytest.raises(ValidationError):
+            ExecutionRecord.model_validate(dict(value, state=state))
+
+
+def test_t47_plain_ledger_open_does_not_invent_recovery(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    from knoted_intelligence.ledger import Ledger
+
+    path = tmp_path / "executions.db"
+    first = Ledger(path)
+    first.open()
+    first.insert(
+        execution_id="legacy",
+        kind="parse",
+        input_object_id="input",
+        input_sha256="0" * 64,
+        source_version=1,
+        options_revision="v1",
+        deadline=datetime.now(UTC) + timedelta(seconds=60),
+        now=datetime.now(UTC),
+    )
+    first.mark_started("legacy", datetime.now(UTC))
+    second = Ledger(path)
+    second.open()
+    try:
+        assert second.get("legacy").state == "running"
+        assert second.get("legacy").compute_exit_confirmed is False
+    finally:
+        second.close()
+        first.close()
+
+
+def test_t47_expired_first_materialize_is_durable_and_deadline_immutable(tmp_path):
+    import hashlib
+    from datetime import UTC, datetime, timedelta
+    from uuid import uuid4
+
+    from fastapi.testclient import TestClient
+
+    from knoted_intelligence.app import create_app
+    from knoted_intelligence.config import Settings
+
+    settings = Settings(state_dir=tmp_path / "state", staging_dir=tmp_path / "staging")
+    request = dict(
+        execution_id=str(uuid4()),
+        kind="parse",
+        input_object_id="missing",
+        input_sha256=hashlib.sha256(b"missing").hexdigest(),
+        source_version=1,
+        options_revision="v1",
+        deadline=(datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
+    )
+    with TestClient(create_app(settings)) as client:
+        result = client.post("/internal/v1/executions", json=request)
+        assert result.status_code == 201
+        assert result.json()["state"] == "failed"
+        assert result.json()["compute_exit_confirmed"] is True
+        assert client.post("/internal/v1/executions", json=request).status_code == 200
+        changed = dict(request, deadline=(datetime.now(UTC) + timedelta(seconds=60)).isoformat())
+        assert client.post("/internal/v1/executions", json=changed).status_code == 409
+    with TestClient(create_app(settings)) as client:
+        replay = client.post("/internal/v1/executions", json=request)
+        assert replay.json()["compute_exit_confirmed"] is True
+
+
+def test_t47_single_instance_lock_and_legacy_fail_closed(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from knoted_intelligence.app import create_app
+    from knoted_intelligence.config import Settings
+
+    settings = Settings(state_dir=tmp_path / "state", staging_dir=tmp_path / "staging")
+    with TestClient(create_app(settings)):
+        with pytest.raises(RuntimeError, match="already owned"):
+            with TestClient(create_app(settings)):
+                pass
+
+
+def test_t47_2_deadline_reaps_compute_without_partial_publication(tmp_path):
+    import hashlib
+    import time
+    from datetime import UTC, datetime, timedelta
+    from uuid import uuid4
+
+    from fastapi.testclient import TestClient
+
+    from knoted_intelligence.app import create_app
+    from knoted_intelligence.config import Settings
+    from knoted_intelligence.supervision import inspect
+
+    settings = Settings(
+        state_dir=tmp_path / "state",
+        staging_dir=tmp_path / "staging",
+        child_hold_ms=60000,
+        child_ignore_sigterm=True,
+        cancel_grace_seconds=0.1,
+    )
+    settings.prepare()
+    (settings.input_dir / "input").write_bytes(b"never published")
+    execution_id = str(uuid4())
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/internal/v1/executions",
+            json=dict(
+                execution_id=execution_id,
+                kind="parse",
+                input_object_id="input",
+                input_sha256=hashlib.sha256(b"never published").hexdigest(),
+                source_version=1,
+                options_revision="test",
+                deadline=(datetime.now(UTC) + timedelta(seconds=0.5)).isoformat(),
+            ),
+        )
+        assert response.status_code == 201
+        end = time.monotonic() + 15
+        while time.monotonic() < end:
+            row = client.get(f"/internal/v1/executions/{execution_id}").json()
+            if row["compute_exit_confirmed"]:
+                break
+            time.sleep(0.02)
+        assert row["compute_exit_confirmed"] is True
+        assert row["state"] == "failed"
+        assert row["error"]["code"] == "deadline_exceeded"
+        assert client.get(f"/internal/v1/executions/{execution_id}/result").status_code == 422
+    assert inspect(settings.state_dir)["clean"] is True
+    assert not list(settings.output_dir.rglob("*-parse.json"))
+
+
+def test_t47_corrupt_receipt_never_echoes_previously_confirmed_true(tmp_path):
+    import sqlite3
+    from datetime import UTC, datetime, timedelta
+    from uuid import uuid4
+
+    from fastapi.testclient import TestClient
+
+    from knoted_intelligence.app import create_app
+    from knoted_intelligence.config import Settings
+
+    settings = Settings(state_dir=tmp_path / "state", staging_dir=tmp_path / "staging")
+    request = dict(
+        execution_id=str(uuid4()),
+        kind="parse",
+        input_object_id="absent",
+        input_sha256="0" * 64,
+        source_version=1,
+        options_revision="v1",
+        deadline=(datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
+    )
+    with TestClient(create_app(settings)) as client:
+        assert client.post("/internal/v1/executions", json=request).json()["compute_exit_confirmed"]
+        with sqlite3.connect(settings.state_dir / "executions.db") as db:
+            db.execute("UPDATE supervision SET receipt='{}'")
+        assert client.get(f"/internal/v1/executions/{request['execution_id']}").status_code == 503
+        assert client.post("/internal/v1/executions", json=request).status_code == 503
+        assert client.get("/internal/v1/health").json()["status"] == "degraded"
+
+
+def test_t47_cancel_between_input_check_and_started_has_never_started_proof(tmp_path, monkeypatch):
+    import hashlib
+    import time
+    from datetime import UTC, datetime, timedelta
+    from uuid import uuid4
+
+    from knoted_intelligence.config import Settings
+    from knoted_intelligence.executor import ExecutionSpec, Scheduler
+    from knoted_intelligence.ledger import Ledger
+
+    settings = Settings(state_dir=tmp_path / "state", staging_dir=tmp_path / "staging")
+    settings.prepare()
+    ledger = Ledger(settings.state_dir / "executions.db")
+    ledger.open()
+    scheduler = Scheduler(ledger, settings)
+    (settings.input_dir / "source").write_bytes(b"hello")
+    original = ledger.mark_started
+
+    def cancel_first(execution_id, now):
+        scheduler._supervision.request_stop(execution_id)
+        return original(execution_id, now)
+
+    monkeypatch.setattr(ledger, "mark_started", cancel_first)
+    execution_id = str(uuid4())
+    scheduler.submit(
+        ExecutionSpec(
+            execution_id,
+            "parse",
+            "source",
+            hashlib.sha256(b"hello").hexdigest(),
+            1,
+            "test",
+            datetime.now(UTC) + timedelta(seconds=30),
+        )
+    )
+    try:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            row = scheduler.record(execution_id)
+            if row.compute_exit_confirmed:
+                break
+            time.sleep(0.02)
+        assert row.state == "cancelled" and row.compute_exit_confirmed
+        assert scheduler._supervision.receipt(execution_id)["reason"] == "never_started"
+    finally:
+        scheduler.shutdown()
+        ledger.close()

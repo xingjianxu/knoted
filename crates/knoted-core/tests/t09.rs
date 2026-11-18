@@ -54,6 +54,7 @@ fn record_with(
     finished_at: Option<DateTime<Utc>>,
 ) -> ExecutionRecord {
     ExecutionRecord {
+        compute_exit_confirmed: state.is_terminal(),
         execution_id: request.execution_id,
         kind: request.kind,
         state,
