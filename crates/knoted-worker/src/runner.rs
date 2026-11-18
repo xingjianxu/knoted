@@ -170,10 +170,20 @@ impl<H: Handler> WorkerRunner<H> {
             return self.confirm_cancel(&lease).await;
         }
 
-        let outcome = match self.drive_handler(&lease).await? {
+        let attempt = match self.drive_handler(&lease).await {
+            Ok(attempt) => attempt,
+            Err(error) => {
+                let _ = self.handler.cancel_and_wait(&lease).await;
+                return Err(error);
+            }
+        };
+        let outcome = match attempt {
             Attempt::Ready(outcome) => outcome,
             Attempt::CancelRequested => return self.confirm_cancel(&lease).await,
-            Attempt::LeaseLost => return Err(RunnerError::LeaseLost { lease }),
+            Attempt::LeaseLost => {
+                let _ = self.handler.cancel_and_wait(&lease).await;
+                return Err(RunnerError::LeaseLost { lease });
+            }
         };
 
         // The handler may have finished between two heartbeats. Check once more
@@ -333,15 +343,43 @@ impl<H: Handler> WorkerRunner<H> {
     /// retried after [`WorkerRunner::with_idle_backoff`] instead of ending the
     /// process.
     pub async fn run(&self) {
+        self.run_until(async {
+            let mut term =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .expect("SIGTERM listener");
+            tokio::select! { _ = term.recv() => {}, _ = tokio::signal::ctrl_c() => {} }
+        })
+        .await;
+    }
+
+    /// Stop admission before dropping the active future, then consult the
+    /// durable attempts owned by this worker. No Drop future is an exit proof.
+    pub async fn run_until(&self, shutdown: impl Future<Output = ()> + Send) {
+        tokio::pin!(shutdown);
         loop {
-            match self.step().await {
-                Ok(StepOutcome::Finished { .. }) => {}
-                Ok(StepOutcome::CancellationPending { .. }) | Ok(StepOutcome::Idle) => {
-                    tokio::time::sleep(self.idle_backoff).await;
-                }
-                Err(error) => {
-                    eprintln!("knoted-worker {}: {error}", self.worker);
-                    tokio::time::sleep(self.idle_backoff).await;
+            let result = tokio::select! {
+                biased;
+                _ = &mut shutdown => break,
+                result = self.step() => result,
+            };
+            if let Err(error) = &result {
+                eprintln!("worker attempt failed: {error}");
+            }
+            if !matches!(result, Ok(StepOutcome::Finished { .. })) {
+                tokio::select! { _ = &mut shutdown => break, _ = tokio::time::sleep(self.idle_backoff) => {} }
+            }
+        }
+        // A dropped claim/execute has no detached SQL/HTTP producer. Registered
+        // executions remain in the payload even if the lease is no longer live.
+        let owned: Result<Vec<Job>, _> =
+            sqlx::query_as("SELECT * FROM jobs WHERE locked_by=$1 AND lease_token IS NOT NULL")
+                .bind(&self.worker)
+                .fetch_all(self.ctx.pool())
+                .await;
+        if let Ok(jobs) = owned {
+            for job in jobs {
+                if let Some(lease) = job.lease() {
+                    let _ = self.handler.cancel_and_wait(&lease).await;
                 }
             }
         }

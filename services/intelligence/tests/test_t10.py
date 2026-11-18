@@ -296,7 +296,7 @@ def test_t10_3_failure_reports_locked_combination(tmp_path: Path) -> None:
         assert created.status_code == 201, created.text
 
         record = wait_for_state(client, execution_id, {"failed"}, timeout=120.0)
-        assert record["error"]["code"] == "execution_failed", record
+        assert record["error"]["code"] == "corrupt_input", record
         message = record["error"]["message"]
         for part in summary_parts:
             assert part in message, message
@@ -337,7 +337,7 @@ def test_t10_3b_missing_models_reported_via_execution(
 
         record = wait_for_state(client, execution_id, {"failed"}, timeout=120.0)
 
-    assert record["error"]["code"] == "execution_failed", record
+    assert record["error"]["code"] == "models_missing", record
     message = record["error"]["message"]
     assert "models_missing" in message, message
     # The whole summary, not a prefix of it, reaches the record.
@@ -438,8 +438,8 @@ def test_t10_4b_artifact_volume_is_bounded(tmp_path: Path, monkeypatch: pytest.M
 
     # The real handler applies the check to the serialized artifact. A tiny
     # synthetic limit exercises the real `_compute` path without a huge input.
-    source = tmp_path / "artifact-volume.txt"
-    source.write_text("Knoted artifact volume\nsecond line\n", encoding="utf-8")
+    source = tmp_path / "artifact-volume.png"
+    source.write_bytes(SAMPLE_PNG.read_bytes())
     spec = {
         "kind": "parse",
         "input_path": str(source),

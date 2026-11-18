@@ -27,6 +27,7 @@ cd "$source_dir"
 cargo build --locked --release -p knoted-api -p knoted-worker
 pnpm install --frozen-lockfile --store-dir "$task_root/cache/pnpm-store"
 pnpm --filter @knoted/web build
+(cd "$repository" && bash "$source_dir/tools/dev/build-intelligence.sh" "$revision" "$output")
 mkdir -p "$output/bin" "$output/share/knoted"
 install -m 0755 "$CARGO_TARGET_DIR/release/knoted-api" "$output/bin/knoted-api"
 install -m 0755 "$CARGO_TARGET_DIR/release/knoted-worker" "$output/bin/knoted-worker"

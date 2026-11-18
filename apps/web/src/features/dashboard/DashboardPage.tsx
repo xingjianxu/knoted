@@ -23,7 +23,7 @@ export function DashboardPage({ bundle, onSelectNote, onSelectTask }: {
       <p>笔记：{data.counts.notes} · 未完成事项：{data.counts.tasks_open} · 活跃项目：{data.counts.projects_active}</p>
       <p>今日到期：{data.counts.tasks_due_today} · 失败任务：{data.job_failures}</p>
       <p>待办：{data.tasks_by_status.todo} · 进行中：{data.tasks_by_status.in_progress} · 已完成：{data.tasks_by_status.done} · 已取消：{data.tasks_by_status.cancelled}</p>
-      <p>文件：{data.counts.files}（已支持文本解析，文件浏览与其他格式解析暂未开放）</p>
+      <p>文件：{data.counts.files}（已开放文件浏览；支持文本、PDF、PNG、JPEG、WebP、DOCX、XLSX、PPTX 解析）</p>
       {!data.indexing_enabled && <Badge>索引未启用</Badge>}
     </Card>
     <Card title="到期与逾期事项">

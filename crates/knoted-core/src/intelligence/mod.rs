@@ -164,7 +164,7 @@ pub struct ExecutionRequest {
 
 /// Durable record of one execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, try_from = "UncheckedExecutionRecord")]
 pub struct ExecutionRecord {
     /// Execution id the worker chose.
     pub execution_id: Uuid,
@@ -172,6 +172,9 @@ pub struct ExecutionRecord {
     pub kind: ExecutionKind,
     /// Current state.
     pub state: ExecutionState,
+    /// Whole supervised compute tree is durably confirmed gone. Missing legacy proof is false.
+    #[serde(default)]
+    pub compute_exit_confirmed: bool,
     /// Digest echoed from the request.
     pub input_sha256: Sha256Hex,
     /// Source version echoed from the request.
@@ -190,7 +193,73 @@ pub struct ExecutionRecord {
     pub error: Option<ApiError>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UncheckedExecutionRecord {
+    /// Execution id the worker chose.
+    execution_id: Uuid,
+    /// Kind of work.
+    kind: ExecutionKind,
+    /// Current state.
+    state: ExecutionState,
+    /// Whole supervised compute tree is durably confirmed gone. Missing legacy proof is false.
+    #[serde(default)]
+    compute_exit_confirmed: bool,
+    /// Digest echoed from the request.
+    input_sha256: Sha256Hex,
+    /// Source version echoed from the request.
+    source_version: i64,
+    /// Options revision echoed from the request.
+    options_revision: String,
+    /// When the execution was accepted.
+    created_at: DateTime<Utc>,
+    /// When the record last changed.
+    updated_at: DateTime<Utc>,
+    /// When a slot was taken and the child started.
+    started_at: Option<DateTime<Utc>>,
+    /// When the execution reached a terminal state.
+    finished_at: Option<DateTime<Utc>>,
+    /// Diagnostic for a non-success terminal state.
+    error: Option<ApiError>,
+}
+impl TryFrom<UncheckedExecutionRecord> for ExecutionRecord {
+    type Error = String;
+    fn try_from(raw: UncheckedExecutionRecord) -> Result<Self, Self::Error> {
+        if raw.compute_exit_confirmed && !raw.state.is_terminal() {
+            return Err("compute_exit_confirmed requires a terminal state".to_owned());
+        }
+        Ok(Self {
+            execution_id: raw.execution_id,
+            kind: raw.kind,
+            state: raw.state,
+            compute_exit_confirmed: raw.compute_exit_confirmed,
+            input_sha256: raw.input_sha256,
+            source_version: raw.source_version,
+            options_revision: raw.options_revision,
+            created_at: raw.created_at,
+            updated_at: raw.updated_at,
+            started_at: raw.started_at,
+            finished_at: raw.finished_at,
+            error: raw.error,
+        })
+    }
+}
+
 impl ExecutionRecord {
+    /// Resource proof is independent of whether a cancellation command won.
+    pub fn verify_resource_exit(
+        &self,
+        request: &ExecutionRequest,
+    ) -> Result<(), IntelligenceError> {
+        self.verify_echo(request)?;
+        if !self.state.is_terminal() || !self.compute_exit_confirmed {
+            return Err(IntelligenceError::CancelUnconfirmed {
+                execution_id: self.execution_id,
+            });
+        }
+        Ok(())
+    }
+
     /// Checks that the record describes the request the caller sent.
     ///
     /// The contract has no separate execution token, so this echo — together
