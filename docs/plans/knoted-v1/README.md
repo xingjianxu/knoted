@@ -79,7 +79,7 @@
 | [T50](tasks/T50.md) | PDF图片文本预览 | T49 | done（PR [#162](https://github.com/xingjianxu/knoted/pull/162)，主线 `2c89043`，dev `2c89043`；[证据](evidence/t50-preview.md)） |
 | [T51](tasks/T51.md) | OnlyOffice授权后端 | T49, T15 | done（PR [#181](https://github.com/xingjianxu/knoted/pull/181)，主线/dev 后端验收 `dadbef7`；[证据](evidence/t51-office-authorization.md)） |
 | [T52](tasks/T52.md) | OnlyOffice网页接入 | T51, T50 | done（PR [#183](https://github.com/xingjianxu/knoted/pull/183)，主线/dev `4e72231`；[证据](evidence/t52-office-preview.md)） |
-| [T53](tasks/T53.md) | 全文索引发布 | T07, T48, T36 | in-progress（实现与本地验证完成，待审查/集成；[证据](evidence/t53-fulltext.md)） |
+| [T53](tasks/T53.md) | 全文索引发布 | T07, T48, T36 | done（主线与 dev 真实发布；[证据](evidence/t53-fulltext.md)） |
 | [T54](tasks/T54.md) | 统一搜索接口 | T53, T37 | pending |
 | [T55](tasks/T55.md) | 搜索界面 | T54, T19 | pending |
 | [T56](tasks/T56.md) | 索引任务状态与重试 | T08, T54 | pending |
