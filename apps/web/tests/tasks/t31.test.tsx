@@ -523,3 +523,19 @@ it("uppercase UUID retains the initialized draft after401 and a failed reauthent
   expect(screen.getByRole("textbox", { name: "笔记标题" })).toHaveValue("大写路径失效后保留草稿");
   expect(router.state.location.pathname).toBe(path);
 });
+
+it("t67_editor refuses to insert a reclaimed image returned on upload replay", async () => {
+  intercept = (request, url) => request.method === "POST" && url.pathname === "/api/v1/assets"
+    ? json({ id: id(98), mime: "image/png", size: 68, sha256: "a".repeat(64), state: "deleted", created_at: "2026-11-17T00:00:00Z" }, 201) : undefined;
+  await mount();
+  await title();
+  const form = await new BrowserRequest("/", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: "" }).formData();
+  vi.stubGlobal("FormData", form.constructor);
+  vi.stubGlobal("File", NodeFile);
+  fireEvent.change(screen.getByLabelText("选择文件"), {
+    target: { files: [new File(["public PNG fixture"], "retired.png", { type: "image/png" })] },
+  });
+  expect(await screen.findByText("图片已回收，请重新选择文件")).toBeInTheDocument();
+  expect(screen.queryByRole("img", { name: "笔记图片" })).not.toBeInTheDocument();
+  expect(calls("PATCH", id(1))).toHaveLength(0);
+});

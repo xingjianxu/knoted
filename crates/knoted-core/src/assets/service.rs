@@ -83,6 +83,7 @@ async fn upload_inner(ctx: &AppContext, input: UploadAsset) -> Result<Asset, Dom
             if prior != digest {
                 return Err(DomainError::Conflict);
             }
+            // A retired asset remains the result for this key until expiry.
             let asset = repo::find(&mut tx, id, input.owner_id)
                 .await?
                 .ok_or(DomainError::NotFound)?;
@@ -142,6 +143,7 @@ async fn upload_inner(ctx: &AppContext, input: UploadAsset) -> Result<Asset, Dom
 pub async fn read(ctx: &AppContext, input: ReadAsset) -> Result<AssetContent, DomainError> {
     let asset = repo::find(&mut *ctx.pool().acquire().await?, input.id, input.owner_id)
         .await?
+        .filter(|asset| asset.state == "ready")
         .ok_or(DomainError::NotFound)?;
     let root = ctx.asset_root().to_path_buf();
     let bytes = tokio::task::spawn_blocking(move || storage::read(&root, input.id))

@@ -94,7 +94,8 @@ export function ImageBlockControls({ client, blockId }: ImageBlockControlsProps)
       signal: requestSignal,
     });
     if (requestSignal.aborted || !validTarget()) throw new Error("图片上传已取消或目标已失效");
-    if (!data || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(data.id)) throw new Error("图片资产响应无效");
+    if (data?.state === "deleted") throw new Error("图片已回收，请重新选择文件");
+    if (!data || data.state !== "ready" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(data.id)) throw new Error("图片资产响应无效");
     // Stop watching before our own single atomic document change.
     intent.unsubscribe();
     pending.current.delete(intent);
