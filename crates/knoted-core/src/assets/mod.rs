@@ -1,4 +1,5 @@
 //! Private image assets. Files become readable only after registration commits.
+pub mod gc;
 pub mod references;
 mod repository;
 pub mod service;

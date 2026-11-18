@@ -121,6 +121,10 @@ pub fn stage_embedding_batch(
     )
 }
 
+pub(crate) fn staged_input_id(execution_id: Uuid, digest: &Sha256Hex) -> String {
+    format!("embed-{execution_id}-{digest}.json")
+}
+
 fn stage_request(
     ctx: &AppContext,
     source_version: i64,
@@ -129,7 +133,7 @@ fn stage_request(
     bytes: &[u8],
 ) -> Result<ExecutionRequest, DomainError> {
     let digest = Sha256Hex::digest(bytes);
-    let object_id = ObjectId::parse(format!("embed-{execution_id}-{digest}.json"))?;
+    let object_id = ObjectId::parse(staged_input_id(execution_id, &digest))?;
     let root = ctx
         .files()
         .staging_root
