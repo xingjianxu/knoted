@@ -78,7 +78,7 @@
 | [T49](tasks/T49.md) | 文件浏览备注下载 | T45, T48, T32 | done（PR [#161](https://github.com/xingjianxu/knoted/pull/161)，主线 `8ffb240`，dev `8ffb240`；[证据](evidence/t49-files.md)） |
 | [T50](tasks/T50.md) | PDF图片文本预览 | T49 | done（PR [#162](https://github.com/xingjianxu/knoted/pull/162)，主线 `2c89043`，dev `2c89043`；[证据](evidence/t50-preview.md)） |
 | [T51](tasks/T51.md) | OnlyOffice授权后端 | T49, T15 | done（PR [#181](https://github.com/xingjianxu/knoted/pull/181)，主线/dev 后端验收 `dadbef7`；[证据](evidence/t51-office-authorization.md)） |
-| [T52](tasks/T52.md) | OnlyOffice网页接入 | T51, T50 | pending |
+| [T52](tasks/T52.md) | OnlyOffice网页接入 | T51, T50 | done（PR [#183](https://github.com/xingjianxu/knoted/pull/183)，主线/dev `4e72231`；[证据](evidence/t52-office-preview.md)） |
 | [T53](tasks/T53.md) | 全文索引发布 | T07, T48, T36 | pending |
 | [T54](tasks/T54.md) | 统一搜索接口 | T53, T37 | pending |
 | [T55](tasks/T55.md) | 搜索界面 | T54, T19 | pending |

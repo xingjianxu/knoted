@@ -4,6 +4,8 @@
 
 **Goal:** 从文件详情打开固定版本的原版式 Office 只读预览，退出后不再授权取源。
 
+**验收证据:** [T51 后端](knoted-v1/evidence/t51-office-authorization.md)；[T52 网页](knoted-v1/evidence/t52-office-preview.md)。
+
 **Architecture:** T51 用 T49 稳定校验读取和单进程带界副本实现预览授权，签名浏览器 DocEditor 配置并以官方出站 JWT 验证 Document Server 的短时取源。T52 复用现有文件详情 Dialog 和构建时信任来源，不改共享代理或其它服务。
 
 **Tech Stack:** Rust 2024/Axum/Tokio/SQLx、OpenAPI + pnpm 客户端、React/Vite/Vitest、mtone 0.4.0、现有 OnlyOffice Docs、pcwrap 固定 dev 产物。
@@ -37,11 +39,11 @@
 - `GET /api/v1/office-preview-sources/{previewId}` 给 Document Server；只接受官方 `Authorization: Bearer` 出站 HS256 JWT，验签、检查 `iat`/`exp`，`payload.url` 必须严格等于配置 origin 的该预览 URL。预览 URL 不含凭据，禁止任何查询、Cookie 鉴权及旧 token 回退。未知、失效、错误 JWT 统一 404。成功原始只读副本，按格式 MIME、`Cache-Control: private, no-store` 和 `X-Content-Type-Options: nosniff`；不准任意路径、Range 部分读取或重定向。不将头或 JWT 写入日志/证据。
 - `[office]` 启用条件为配置规范的 `document_server_origin` 和 `jwt_secret_file`，缺省关闭；Knoted 对外 origin 沿用经验证的 `auth.origin`。JWT 使用现有底层密码库 HS256；文档 key 每预览唯一、写权限均 false、`editorConfig.mode=view`、禁插件/宏、无 callbackUrl。域层以 `AppContext`/命名参数验证创建、撤销和交付；读取复用 T49，经事务重核选定 `content_version`，在文件分配前应用预览尺寸限额，不影响 T49 下载。
 
-- [ ] **登记契约**：先更新 OpenAPI，并运行 `pnpm api:check` 和 `pnpm api:generate`；确认生成接口符合上文，内部 intelligence schema 不动。
-- [ ] **先写入口测试**：`t51_1` 用 `FixedClock` 验证创建后 119 秒可取、120 秒与撤销后 404；`t51_2` 核对缺少/篡改/过期/错地址 JWT、不得用浏览器签名 JWT 或查询凭据取源、跨实例 ID/目录与浏览器会话范围；`t51_3` 原件改后取源字节仍等于创建时，另开旧版本不成功；`t51_4` 两份（含并发/未消费的响应）可准入，第三份 429，释放后可重试；`t51_5` 检查 CSRF、未登录、已撤会话、缺配置、错误格式/超限和签名配置的权限/无回调/TTL，不以弱宏判断只读。
-- [ ] **观察 RED**：`cargo test --workspace t51_`，记录端点尚未实现的断言；不可把 PG 不可用、跳过或 0 用例当 RED。
-- [ ] **实现**：预留两份内存预算（准入许可随备份或响应所有权释放）；通过已有 FD 安全读取构造缓存条目；不持锁跨 `await` 的会话查询，交付前重核最新授权（撤销、过期、句柄）及会话有效性而不触碰 idle 时间。以过期回收和快速清理形成界限。路由映射统一错误、限制响应缓存；OnlyOffice 未配置不影响其余 API。dev 通过 pcwrap 可选变量配置 origin/凭据绝对路径，凭据不复制到产物。
-- [ ] **验证和提交**：专项 T51 和既有 T49，真实运行 `cargo fmt --check`、`cargo test --workspace`、`cargo clippy --all-targets -- -D warnings`、必要 `pnpm api:check`/client lint/typecheck、`pnpm test:pc`；独立 reviewer 后重复受影响检查。用有效 `git-commit`，默认普通 merge，主线验证、固定产物与真实 HTTPS 取源后保留证据并清理。仅可验收后端，不误记 T52 已通过。
+- [x] **登记契约**：先更新 OpenAPI，并运行 `pnpm api:check` 和 `pnpm api:generate`；确认生成接口符合上文，内部 intelligence schema 不动。
+- [x] **先写入口测试**：`t51_1` 用 `FixedClock` 验证创建后 119 秒可取、120 秒与撤销后 404；`t51_2` 核对缺少/篡改/过期/错地址 JWT、不得用浏览器签名 JWT 或查询凭据取源、跨实例 ID/目录与浏览器会话范围；`t51_3` 原件改后取源字节仍等于创建时，另开旧版本不成功；`t51_4` 两份（含并发/未消费的响应）可准入，第三份 429，释放后可重试；`t51_5` 检查 CSRF、未登录、已撤会话、缺配置、错误格式/超限和签名配置的权限/无回调/TTL，不以弱宏判断只读。
+- [x] **观察 RED**：`cargo test --workspace t51_`，记录端点尚未实现的断言；不可把 PG 不可用、跳过或 0 用例当 RED。
+- [x] **实现**：预留两份内存预算（准入许可随备份或响应所有权释放）；通过已有 FD 安全读取构造缓存条目；不持锁跨 `await` 的会话查询，交付前重核最新授权（撤销、过期、句柄）及会话有效性而不触碰 idle 时间。以过期回收和快速清理形成界限。路由映射统一错误、限制响应缓存；OnlyOffice 未配置不影响其余 API。dev 通过 pcwrap 可选变量配置 origin/凭据绝对路径，凭据不复制到产物。
+- [x] **验证和提交**：专项 T51 和既有 T49，真实运行 `cargo fmt --check`、`cargo test --workspace`、`cargo clippy --all-targets -- -D warnings`、必要 `pnpm api:check`/client lint/typecheck、`pnpm test:pc`；独立 reviewer 后重复受影响检查。用有效 `git-commit`，默认普通 merge，主线验证、固定产物与真实 HTTPS 取源后保留证据并清理。仅可验收后端，不误记 T52 已通过。
 
 ### Task 2: T52 — 网页查看与精确来源
 
@@ -49,7 +51,7 @@
 
 **Interfaces:** `OfficePreview({api, file})` 置于既有 Dialog，父页向同源 `/office-preview.html` 的 `credentialless` 宿主页按打开实例建立验证来源/窗口的 MessageChannel，只在通道内传签名配置。Vite 额外静态入口打包宿主脚本。父页仅 `script-src 'self'; frame-src 'self' blob:; object-src 'none'`；宿主页以 `KNOTED_OFFICE_ORIGIN` 唯一规范 HTTPS DNS/IPv4 origin 建立 `script-src 'self' <origin>; frame-src <origin>; object-src 'none'`，默认无额外来源，无 IPv6/wildcard 或 inline/eval。宿主页不访问会话 API；不支持 credentialless 时不领取预览授权。预览启动 45 秒内未取得 ready / error 时关闭宿主、撤销、提示重试，不使迟到回执复活。
 
-- [ ] **先写失败测试**：`t52_1` 用假的 DocsAPI 核对 signed `cell` 配置与 viewer 事件，另用真 Chromium 验收工作表切换；`t52_2` 关掉/切换时销毁实例，晚到成功仅 DELETE 该 ID，不创建实例；`t52_3` 测精确协议/主机/端口、恶意或空的 origin、静态 CSP 无通配符并保留 PDF Blob；`t52_4` 脚本/Viewer 初始化失败可重试，循环无重复加载或串撤，401 关闭并沿用登录处理。
-- [ ] **观察 RED**：`pnpm --filter @knoted/web exec vitest run tests/tasks/t52.test.tsx`，记录预期失败（不以工具缺失为证）。
-- [ ] **实现**：同一生命周期最多拥有一个 SDK 实例和已取得预览 ID；关闭/切换必须同步禁止事件/新渲染、销毁实例、发出幂等撤销。不要仅靠取消 POST 假定服务端未创建；晚到回执仍辨认其所有者并撤销，丢失回执由服务端 TTL 保底。父页不加载远端脚本；只在按打开实例隔离的宿主页拼接受信 origin 的固定 `/web-apps/apps/api/documents/api.js`，不变更签名配置，仅追加 SDK 的事件/布局。使用 mtone 显示忙、错误、重试和浏览器降级，保留原件下载。测试发布父/宿主 HTML 中早于 module 的各自 CSP，另验真实 Cookie 不附带。
-- [ ] **验证和提交**：专项 T52、T50 回归及 Web 完整 lint/test/typecheck/build，实际启用和未启用构建分别检查 HTML 与 origin；独立审查。真实 Chrome 验收两工作表有可辨内容的 XLSX、DOCX/PPTX 只读、普通 PDF、缓存/撤销与 CSP；保留退出码和实际截图/断言（脱敏）。主线 merge 后部署固定 SHA，只更新 Knoted dev，核对运行 SHA、共享服务不变和自有样本清理，回填任务卡、证据、README 后清理各自 Worktree/已合并分支。
+- [x] **先写失败测试**：`t52_1` 用假的 DocsAPI 核对 signed `cell` 配置与 viewer 事件，另用真 Chromium 验收工作表切换；`t52_2` 关掉/切换时销毁实例，晚到成功仅 DELETE 该 ID，不创建实例；`t52_3` 测精确协议/主机/端口、恶意或空的 origin、静态 CSP 无通配符并保留 PDF Blob；`t52_4` 脚本/Viewer 初始化失败可重试，循环无重复加载或串撤，401 关闭并沿用登录处理。
+- [x] **观察 RED**：`pnpm --filter @knoted/web exec vitest run tests/tasks/t52.test.tsx`，记录预期失败（不以工具缺失为证）。
+- [x] **实现**：同一生命周期最多拥有一个 SDK 实例和已取得预览 ID；关闭/切换必须同步禁止事件/新渲染、销毁实例、发出幂等撤销。不要仅靠取消 POST 假定服务端未创建；晚到回执仍辨认其所有者并撤销，丢失回执由服务端 TTL 保底。父页不加载远端脚本；只在按打开实例隔离的宿主页拼接受信 origin 的固定 `/web-apps/apps/api/documents/api.js`，不变更签名配置，仅追加 SDK 的事件/布局。使用 mtone 显示忙、错误、重试和浏览器降级，保留原件下载。测试发布父/宿主 HTML 中早于 module 的各自 CSP，另验真实 Cookie 不附带。
+- [x] **验证和提交**：专项 T52、T50 回归及 Web 完整 lint/test/typecheck/build，实际启用和未启用构建分别检查 HTML 与 origin；独立审查。真实 Chrome 验收两工作表有可辨内容的 XLSX、DOCX/PPTX 只读、普通 PDF、缓存/撤销与 CSP；保留退出码和实际截图/断言（脱敏）。主线 merge 后部署固定 SHA，只更新 Knoted dev，核对运行 SHA、共享服务不变和自有样本清理，回填任务卡、证据、README 后清理各自 Worktree/已合并分支。
