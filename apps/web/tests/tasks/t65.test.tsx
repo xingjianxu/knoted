@@ -13,6 +13,7 @@ type Message = components["schemas"]["ChatMessage"];
 type Session = components["schemas"]["ChatSessionDetail"];
 type Event = components["schemas"]["ChatEvent"];
 type Citation = components["schemas"]["Citation"];
+type SearchHit = components["schemas"]["SearchHit"];
 
 const sessionA = "76891566-0202-4033-88c7-0b88f225cded";
 const sessionB = "5ac65ac9-5c1d-4b4e-8180-f9b5297a0d36";
@@ -27,10 +28,10 @@ const timestamp = "2026-11-18T07:00:00Z";
 const buildRun = (state: Run["state"], sessionId = sessionA) => ({
   id: runID,
   session_id: sessionId,
-  message_id: answerID,
+  message_id: questionID,
   state,
   partial: state === "failed" || state === "cancelled",
-  error: state === "failed" ? "interrupted" : null,
+  error: state === "failed" ? "generation_interrupted" : null,
   created_at: timestamp,
   updated_at: timestamp,
 }) satisfies Run;
@@ -40,7 +41,7 @@ const question: Message = {
   session_id: sessionA,
   role: "user",
   body: "这个项目有哪些风险？",
-  run_id: runID,
+  run_id: null,
   incomplete: false,
   created_at: timestamp,
 };
@@ -145,6 +146,47 @@ it("t65_1 retains partial text after disconnect and queries the run without rese
   expect(view.requests.filter(toMessages)).toHaveLength(1);
 });
 
+it("keeps failure without an answer separate from partial output", async () => {
+  await openApp((path) => {
+    if (path !== `/chat/runs/${runID}/events`) return undefined;
+    return closedStream({
+      type: "failed",
+      run_id: runID,
+      seq: 1,
+      error: { code: "context_too_large", message: "context too large", request_id: runID },
+    });
+  });
+  await sendQuestion();
+  expect(await screen.findByText("生成失败")).toBeInTheDocument();
+  expect(screen.queryByText("未完成回答")).not.toBeInTheDocument();
+});
+
+it("shows the persisted answer when terminal validation changes the draft", async () => {
+  let terminalSent = false;
+  let publishHistory: ((response: Response) => void) | undefined;
+  await openApp((path) => {
+    if (path === `/chat/runs/${runID}/events`) {
+      terminalSent = true;
+      return closedStream(
+        { type: "delta", run_id: runID, seq: 1, delta: "模型原始草稿 [cite:未知]" },
+        { type: "completed", run_id: runID, seq: 2 },
+      );
+    }
+    if (terminalSent && path === `/chat/sessions/${sessionA}`) {
+      return new Promise<Response>((resolve) => { publishHistory = resolve; });
+    }
+    return undefined;
+  });
+  await sendQuestion();
+  await screen.findByText("已完成");
+  expect(screen.queryByText("模型原始草稿 [cite:未知]")).not.toBeInTheDocument();
+  await waitFor(() => expect(publishHistory).toBeDefined());
+  await act(async () => {
+    publishHistory?.(json(session(sessionA, [question, { ...answer, body: "依据不足。" }])));
+  });
+  expect(await screen.findByText("依据不足。")).toBeInTheDocument();
+});
+
 it("t65_2 shows an immutable snapshot and deletion marker without linking to the source", async () => {
   const citation: Citation = {
     id: citationID,
@@ -156,16 +198,24 @@ it("t65_2 shows an immutable snapshot and deletion marker without linking to the
     snippet: "引用片段快照",
     source_state: "deleted",
   };
+  const current: Citation = {
+    ...citation,
+    id: newRunID,
+    title: "有效文件来源",
+    source_type: "file",
+    source_state: "current",
+  };
   await openApp((path) => {
     if (path === `/chat/sessions/${sessionA}`) return json(session(sessionA, [question, answer]));
-    if (path === `/chat/messages/${answerID}/citations`) return json({ items: [citation], next_cursor: null });
+    if (path === `/chat/messages/${answerID}/citations`) return json({ items: [citation, current], next_cursor: null });
     return undefined;
   });
   fireEvent.click(await screen.findByRole("button", { name: "查看引用" }));
   expect(await screen.findByText("来源已删除")).toBeInTheDocument();
-  expect(screen.getByText("引用片段快照")).toBeInTheDocument();
-  expect(screen.getByText("第 2 段")).toBeInTheDocument();
+  expect(screen.getAllByText("引用片段快照")).toHaveLength(2);
+  expect(screen.getAllByText("第 2 段")).toHaveLength(2);
   expect(screen.queryByRole("link", { name: "被删除的笔记" })).not.toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "有效文件来源" })).toHaveAttribute("href", `/files/${questionID}`);
 });
 
 it("t65_3 aborts the old stream when navigating to a different session", async () => {
@@ -230,7 +280,7 @@ it("opens a chat search hit at the message in its session", async () => {
         updated_at: timestamp,
         path: null,
         score: null,
-      }], next_cursor: null });
+      } satisfies SearchHit], next_cursor: null });
     }
     if (path === `/chat/sessions/${sessionA}`) return json(session(sessionA, [question, answer]));
     return undefined;

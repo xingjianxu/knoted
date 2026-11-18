@@ -38,7 +38,7 @@ function applyEvent(view: ViewedRun, event: ChatEvent): ViewedRun {
     case "cancelled":
       return {
         ...view,
-        run: { ...run, state: event.type, partial: true, error: event.error?.code ?? null },
+        run: { ...run, state: event.type, error: event.error?.code ?? null },
         stopping: false,
       };
   }

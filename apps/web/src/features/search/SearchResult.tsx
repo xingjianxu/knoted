@@ -18,7 +18,7 @@ function highlighted(text: string, query: string): ReactNode {
 const uuid = z.uuid();
 
 function chatTarget(hit: SearchHit) {
-  if (hit.entity_type !== "chat" || !("session_id" in hit)) return undefined;
+  if (hit.entity_type !== "chat") return undefined;
   const chatSessionId = uuid.safeParse(hit.session_id).data;
   const message = uuid.safeParse(hit.id).data;
   return chatSessionId && message ? { chatSessionId, message } : undefined;

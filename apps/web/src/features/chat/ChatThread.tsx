@@ -22,7 +22,7 @@ function stateLabel({ run, disconnected, stopping }: ViewedRun) {
     case "started": return "生成中";
     case "completed": return run.partial ? "生成中断" : "已完成";
     case "cancelled": return "已停止";
-    case "failed": return run.error === "interrupted" ? "生成中断" : "生成失败";
+    case "failed": return run.error === "generation_interrupted" ? "生成中断" : "生成失败";
   }
 }
 
@@ -37,13 +37,15 @@ export function StreamMessage({ view, actions, busy }: {
 }) {
   const { run } = view;
   const active = runIsActive(run);
+  // A finished answer may have been rewritten by citation validation.
+  const showDraft = run.state !== "completed" || run.partial;
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2" aria-live="polite">
         <Badge tone={run.state === "failed" || view.disconnected ? "orange" : "neutral"}>{stateLabel(view)}</Badge>
         {run.partial && !active && <Badge tone="orange">未完成回答</Badge>}
       </div>
-      {view.body && <p className="whitespace-pre-wrap wrap-anywhere">{view.body}</p>}
+      {showDraft && view.body && <p className="whitespace-pre-wrap wrap-anywhere">{view.body}</p>}
       {view.citations.length > 0 && <CitationList citations={view.citations} />}
       <div className="flex flex-wrap gap-2">
         {active && <Button disabled={busy || view.stopping} onClick={() => void actions.stop(run)}>停止生成</Button>}
