@@ -99,6 +99,7 @@ const REQUIRED_BROWSER_OPERATIONS = [
   "POST /files/{fileId}/relink",
   "POST /files/{fileId}/office-preview",
   "DELETE /files/{fileId}/office-preview",
+  "GET /office-preview-sources/{previewId}",
   "GET /search",
   "GET /jobs",
   "POST /jobs/{jobId}/retry",
@@ -664,10 +665,21 @@ function checkOperations(document, documentName, operations, requiredInventory) 
     }
 
     if (documentName === BROWSER_DOCUMENT) {
-      check(
-        operation.responses["401"] !== undefined,
-        `${label}: 缺少 401 Unauthorized`,
-      );
+      if (operation.operationId === "getOfficePreviewSource") {
+        // The service capability deliberately hides every authorization failure as 404.
+        check(
+          operation.security?.length === 0 &&
+            operation.responses["401"] === undefined &&
+            operation.responses["403"] === undefined &&
+            operation.responses["404"] !== undefined,
+          `${label}: Document Server 取源必须以 404 隐藏授权失败，不使用浏览器会话`,
+        );
+      } else {
+        check(
+          operation.responses["401"] !== undefined,
+          `${label}: 缺少 401 Unauthorized`,
+        );
+      }
     }
 
     const response200Or201 = operation.responses["200"] ?? operation.responses["201"];

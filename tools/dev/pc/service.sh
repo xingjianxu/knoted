@@ -16,6 +16,7 @@
 #   KNOTED_HTTPS_DOMAIN   wlab.132140.xyz
 #   DATABASE_URL          postgres://xingjian@127.0.0.1:5432/knoted_dev
 #   KNOTED_LOG_LEVEL      info
+#   KNOTED_OFFICE_ORIGIN / KNOTED_OFFICE_JWT_SECRET_FILE  可选，必须同时提供；只记录凭据路径
 set -euo pipefail
 # 与 tools/dev/build-artifact.sh 一致：清单排序必须固定字节序，否则 locale 会改变 sort 结果。
 export LC_ALL=C
@@ -174,6 +175,20 @@ check_ports() {
   done
 }
 
+office_config_block() {
+  local origin=${KNOTED_OFFICE_ORIGIN:-} path=${KNOTED_OFFICE_JWT_SECRET_FILE:-}
+  if [ -z "$origin" ] && [ -z "$path" ]; then
+    return 0
+  fi
+  local https_origin='^https://([a-zA-Z0-9.-]+|\[[a-fA-F0-9:.]+\])(:[0-9]{1,5})?$'
+  # Keep interpolation TOML-safe; the API additionally validates the exact
+  # canonical origin. Prepare never opens or copies the referenced key file.
+  if [[ ! $origin =~ $https_origin || $path != /* || $path == *['"\']* || $path =~ [[:cntrl:]] ]]; then
+    die "Office 需要一起配置 HTTPS origin 与绝对凭据文件路径"
+  fi
+  printf '\n[office]\ndocument_server_origin = "%s"\njwt_secret_file = "%s"\n' "$origin" "$path"
+}
+
 command_prepare() {
   # 顺序：守卫 → 验产物 → 验依赖 → 建目录 → 渲染，失败时不留半个实例。
   guard_worktree
@@ -181,6 +196,8 @@ command_prepare() {
   revision=$(verify_runtime)
   log "固定产物 revision=$revision"
   require_tools
+  local office
+  office=$(office_config_block)
   prepare_instance_root
   install -d -m 0700 "$config_dir" "$state_dir" \
     "$logs_dir" "$assets_dir" "$staging_dir" "$backups_dir" \
@@ -198,7 +215,8 @@ command_prepare() {
     @HTTPS_PORT@ "$https_port" \
     @LOG_LEVEL@ "$log_level" \
     @ASSETS_ROOT@ "$instance_root/assets" \
-    @STAGING_ROOT@ "$instance_root/staging"
+    @STAGING_ROOT@ "$instance_root/staging" \
+    @OFFICE_CONFIG@ "$office"
 
   check_ports
   log "prepare 完成：配置 $config_file；HTTPS 由宿主 Caddy 管理"

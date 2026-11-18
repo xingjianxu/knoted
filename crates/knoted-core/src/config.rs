@@ -185,6 +185,37 @@ impl IntelligenceConfig {
     }
 }
 
+/// Optional server-side Office preview. Configuration contains a path, never a JWT secret.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OfficeConfig {
+    pub document_server_origin: String,
+    pub jwt_secret_file: PathBuf,
+}
+
+impl OfficeConfig {
+    pub(crate) fn validate(&self) -> Result<(), ConfigError> {
+        if !is_canonical_https_origin(&self.document_server_origin) {
+            return Err(ConfigError::Invalid {
+                field: "office.document_server_origin",
+                message: "requires a canonical HTTPS origin without a path or credentials".into(),
+            });
+        }
+        if !self.jwt_secret_file.is_absolute() {
+            return Err(ConfigError::Invalid {
+                field: "office.jwt_secret_file",
+                message: "requires an absolute file path".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn is_canonical_https_origin(value: &str) -> bool {
+    url::Url::parse(value)
+        .is_ok_and(|url| url.scheme() == "https" && url.origin().ascii_serialization() == value)
+}
+
 /// Disabled unless explicitly configured. Sources remain read-only; staging
 /// must live outside the observed tree.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -293,6 +324,7 @@ pub struct AppConfig {
     pub assets: AssetsConfig,
     pub files: FilesConfig,
     pub intelligence: IntelligenceConfig,
+    pub office: Option<OfficeConfig>,
     secrets: BTreeMap<String, String>,
 }
 
@@ -307,6 +339,7 @@ impl fmt::Debug for AppConfig {
             .field("assets", &self.assets)
             .field("files", &self.files)
             .field("intelligence", &self.intelligence)
+            .field("office_configured", &self.office.is_some())
             .field("loaded_credentials", &self.secrets.len())
             .finish()
     }
@@ -388,6 +421,9 @@ impl AppConfig {
         validate_auth(&file.auth)?;
         file.files.validate()?;
         file.intelligence.validate()?;
+        if let Some(office) = &file.office {
+            office.validate()?;
+        }
         if file.files.enabled {
             let source = resolve_existing(file.files.root.as_ref().expect("validated root"))
                 .map_err(|_| ConfigError::Invalid {
@@ -430,6 +466,7 @@ impl AppConfig {
             assets: file.assets,
             files: file.files,
             intelligence: file.intelligence,
+            office: file.office,
             secrets,
         })
     }
@@ -481,6 +518,7 @@ struct ConfigFile {
     files: FilesConfig,
     #[serde(default)]
     intelligence: IntelligenceConfig,
+    office: Option<OfficeConfig>,
 }
 
 #[derive(Deserialize)]

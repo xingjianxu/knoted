@@ -953,11 +953,34 @@ export interface paths {
         put?: never;
         /**
          * 生成 Office 短时只读预览配置
-         * @description 只读且短时有效；源变化或授权过期后不能获取新源或扩大目录访问。
+         * @description 绑定选定的内容版本和当前浏览器会话，创建有效期最长 120 秒的只读副本。响应含短时凭据，不得记录或缓存。
          */
         post: operations["createOfficePreview"];
-        /** 撤销 Office 预览配置 */
+        /**
+         * 撤销 Office 预览配置
+         * @description 仅撤销当前会话为此文件创建的指定预览；无匹配授权时同样成功，不收回已交付的副本。
+         */
         delete: operations["deleteOfficePreview"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/office-preview-sources/{previewId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 仅供 Document Server 读取已授权 Office 副本
+         * @description 不使用浏览器 cookie。不支持部分读取；成功时返回完整副本，不缓存或记录查询参数。
+         */
+        get: operations["getOfficePreviewSource"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1723,11 +1746,68 @@ export interface components {
             /** @description FileSource.version；不是 content_version。 */
             expected_version: number;
         };
+        OfficePreviewRequest: {
+            expected_content_version: number;
+        };
         OfficePreview: {
-            /** Format: uri */
-            url: string;
+            /** Format: uuid */
+            preview_id: string;
             /** Format: date-time */
             expires_at: string;
+            /** Format: uri */
+            document_server_origin: string;
+            config: components["schemas"]["OfficeEditorConfig"];
+        };
+        OfficeEditorConfig: {
+            /** @enum {string} */
+            documentType: "word" | "cell" | "slide";
+            document: {
+                /** @enum {string} */
+                fileType: "docx" | "xlsx" | "pptx";
+                key: string;
+                title: string;
+                /** Format: uri */
+                url: string;
+                permissions: {
+                    /** @constant */
+                    edit: false;
+                    /** @constant */
+                    review: false;
+                    /** @constant */
+                    comment: false;
+                    /** @constant */
+                    fillForms: false;
+                    /** @constant */
+                    modifyFilter: false;
+                    /** @constant */
+                    modifyContentControl: false;
+                    /** @constant */
+                    chat: false;
+                    /** @constant */
+                    download: false;
+                    /** @constant */
+                    print: false;
+                    /** @constant */
+                    copy: false;
+                    /** @constant */
+                    changeHistory: false;
+                    /** @constant */
+                    protect: false;
+                };
+            };
+            editorConfig: {
+                /** @constant */
+                mode: "view";
+                customization: {
+                    /** @constant */
+                    plugins: false;
+                    /** @constant */
+                    macros: false;
+                    /** @constant */
+                    macrosMode: "disable";
+                };
+            };
+            token: string;
         };
         /** @enum {string} */
         SearchType: "note" | "file" | "task" | "project" | "chat";
@@ -4241,7 +4321,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OfficePreviewRequest"];
+            };
+        };
         responses: {
             /** @description 成功 */
             201: {
@@ -4264,7 +4348,9 @@ export interface operations {
     };
     deleteOfficePreview: {
         parameters: {
-            query?: never;
+            query: {
+                preview_id: string;
+            };
             header?: {
                 /** @description 由同源客户端中间件自动附加，值取自 `knoted_csrf` cookie，服务端同时校验 Origin。 */
                 "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
@@ -4277,7 +4363,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description 预览配置已撤销。 */
+            /** @description 请求处理完毕，无正文。 */
             204: {
                 headers: {
                     [name: string]: unknown;
@@ -4287,10 +4373,36 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            429: components["responses"]["TooManyRequests"];
             503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    getOfficePreviewSource: {
+        parameters: {
+            query: {
+                token: string;
+            };
+            header?: never;
+            path: {
+                previewId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 固定版本的原件字节 */
+            200: {
+                headers: {
+                    "Cache-Control"?: "private, no-store";
+                    "X-Content-Type-Options"?: "nosniff";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": string;
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": string;
+                    "application/vnd.openxmlformats-officedocument.presentationml.presentation": string;
+                };
+            };
+            404: components["responses"]["NotFound"];
         };
     };
     search: {
