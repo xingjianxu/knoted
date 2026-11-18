@@ -134,13 +134,21 @@ fn mounted_paths_overlap(
             let mut field = || fields.next().ok_or(io::ErrorKind::InvalidData);
             let id = field()?;
             field()?; // Parent mount ID.
-            Ok(MountRoot {
+            let device = field()?;
+            let root = field()?;
+            // nsfs entries mounted as files can have roots like net:[123].
+            // A selected directory must still resolve to an absolute mount root.
+            if !root.starts_with(b"/") {
+                return Ok(None);
+            }
+            Ok(Some(MountRoot {
                 id,
-                device: field()?,
-                root: decode_mount_path(field()?)?,
+                device,
+                root: decode_mount_path(root)?,
                 target: decode_mount_path(field()?)?,
-            })
+            }))
         })
+        .filter_map(Result::transpose)
         .collect::<io::Result<Vec<_>>>()?;
     let by_id = |id: u64| {
         let id = id.to_string();
@@ -319,6 +327,20 @@ mod collection_tests {
                 61,
                 Path::new("/source"),
                 41
+            )
+            .unwrap()
+        );
+    }
+    #[test]
+    fn t67_10_non_path_namespace_mount_does_not_block_directory_collection() {
+        let info = b"41 0 0:35 /@ / rw - btrfs /dev/root rw\n68 41 0:54 /@data /data rw - btrfs /dev/data rw\n481 41 0:7 net:[1234] /run/netns/fixture rw - nsfs nsfs rw\n";
+        assert!(
+            !mounted_paths_overlap(
+                info,
+                Path::new("/data/dev/assets"),
+                68,
+                Path::new("/data/source"),
+                68
             )
             .unwrap()
         );
