@@ -193,6 +193,8 @@ pub struct SearchConfig {
     pub enabled: bool,
     pub base_url: String,
     pub index_uid: String,
+    /// Independent generation for lexical RAG chunks.
+    pub rag_chunk_index_uid: String,
     /// Credential name in the shared credential file, `None` for an engine that
     /// accepts unauthenticated loopback traffic.
     pub api_key_credential: Option<String>,
@@ -203,6 +205,7 @@ impl Default for SearchConfig {
             enabled: false,
             base_url: "http://127.0.0.1:15605".into(),
             index_uid: "knoted_documents".into(),
+            rag_chunk_index_uid: "knoted_rag_chunks".into(),
             api_key_credential: None,
         }
     }
@@ -233,20 +236,31 @@ impl SearchConfig {
                 "base_url requires an HTTP loopback IP-literal origin without credentials or a path",
             ));
         }
-        // Meilisearch index uids are also used as URL path segments.
-        if self.index_uid.is_empty()
-            || self.index_uid.len() > 400
-            || !self
-                .index_uid
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-        {
-            return Err(invalid(
-                "index_uid requires 1-400 alphanumeric, `-` or `_` characters",
-            ));
+        // Both generation UIDs become URL path segments.
+        for uid in [&self.index_uid, &self.rag_chunk_index_uid] {
+            if uid.is_empty()
+                || uid.len() > 400
+                || !uid
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            {
+                return Err(invalid(
+                    "index_uid and rag_chunk_index_uid require 1-400 alphanumeric, `-` or `_` characters",
+                ));
+            }
+        }
+        if self.index_uid == self.rag_chunk_index_uid {
+            return Err(invalid("document and chunk index UIDs must differ"));
         }
         Ok(())
     }
+}
+
+/// Enables automatic dense vectors for current chunk sets.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct VectorsConfig {
+    pub enabled: bool,
 }
 
 /// Optional server-side Office preview. Configuration contains a path, never a JWT secret.
@@ -389,6 +403,7 @@ pub struct AppConfig {
     pub files: FilesConfig,
     pub intelligence: IntelligenceConfig,
     pub search: SearchConfig,
+    pub vectors: VectorsConfig,
     pub office: Option<OfficeConfig>,
     secrets: BTreeMap<String, String>,
 }
@@ -405,6 +420,7 @@ impl fmt::Debug for AppConfig {
             .field("files", &self.files)
             .field("intelligence", &self.intelligence)
             .field("search", &self.search)
+            .field("vectors", &self.vectors)
             .field("office_configured", &self.office.is_some())
             .field("loaded_credentials", &self.secrets.len())
             .finish()
@@ -547,6 +563,7 @@ impl AppConfig {
             files: file.files,
             intelligence: file.intelligence,
             search: file.search,
+            vectors: file.vectors,
             office: file.office,
             secrets,
         })
@@ -601,6 +618,8 @@ struct ConfigFile {
     intelligence: IntelligenceConfig,
     #[serde(default)]
     search: SearchConfig,
+    #[serde(default)]
+    vectors: VectorsConfig,
     office: Option<OfficeConfig>,
 }
 

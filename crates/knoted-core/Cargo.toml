@@ -23,6 +23,7 @@ url.workspace = true
 # Needed by the test-only schema helper, which cleans up after a panicking test
 # from a dedicated runtime.
 tokio.workspace = true
+tokenizers = { version = "=0.23.2", default-features = false, features = ["fancy-regex"] }
 uuid.workspace = true
 webauthn-rs.workspace = true
 chrono-tz.workspace = true
