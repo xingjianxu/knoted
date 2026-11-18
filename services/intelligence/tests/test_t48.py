@@ -5,6 +5,7 @@ import json
 import socket
 import subprocess
 import zipfile
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -185,7 +186,11 @@ def test_unsupported_docx_content_is_not_partial_success(tmp_path, change):
 )
 def test_package_security_refusals(tmp_path, extra, code):
     path = docx(tmp_path)
-    rewrite(path, extra=[extra])
+    if extra[0] == "word/document.xml":
+        with pytest.warns(UserWarning, match="Duplicate name"):
+            rewrite(path, extra=[extra])
+    else:
+        rewrite(path, extra=[extra])
     with pytest.raises(ParseError) as error:
         parser().parse_office(path)
     assert error.value.code == code
@@ -611,3 +616,236 @@ def test_docx_hyperlink_and_markup_keep_body_in_order(tmp_path):
         },
     )
     assert parser().parse_office(path).full_text == "linked\ttext\nline"
+
+
+@pytest.mark.parametrize("format", ["docx", "xlsx", "pptx"])
+def test_t48_execution_dispatch_uses_office_identity_on_opaque_staging(tmp_path, format):
+    import hashlib
+
+    from knoted_intelligence.executor import _compute
+
+    path = tmp_path / "opaque-staged-object.bin"
+    if format == "docx":
+        doc = Document()
+        doc.add_paragraph("Office中文")
+        doc.save(path)
+    elif format == "xlsx":
+        book = Workbook()
+        book.active.title = "原表名"
+        book.active["C3"] = "Office中文"
+        book.save(path)
+    else:
+        deck = Presentation()
+        slide = deck.slides.add_slide(deck.slide_layouts[6])
+        slide.shapes.add_textbox(0, 0, Inches(2), Inches(1)).text = "Office中文"
+        deck.save(path)
+    mod = parser()
+    spec = dict(
+        kind="parse",
+        input_path=str(path),
+        source_version=7,
+        input_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+        options_revision=mod.options_revision(),
+    )
+    result = _compute(spec)
+    assert result["source_format"] == format
+    assert result["blocks"][0]["text"] == "Office中文"
+    assert result["options_revision"] == mod.options_revision()
+    assert result["parser"] == {
+        "parser_revision": mod.POLICY_REVISION,
+        "options_revision": mod.options_revision(),
+        "limits": __import__("dataclasses").asdict(mod.DEFAULT_LIMITS),
+    }
+    assert result["text_length"] == 8
+    assert result["source_version"] == 7 and result["truncated"] is False
+    assert result["page_count"] == (1 if format == "pptx" else None)
+
+
+# Real loopback service, guardian and SQLite; no mocked execution state.
+
+
+@contextmanager
+def office_http(root, hold_ms=0):
+    import os
+    import sys
+
+    import httpx
+    from test_t47_http import wait_for
+
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    env = os.environ | {
+        "KNOTED_INTELLIGENCE_HOST": "127.0.0.1",
+        "KNOTED_INTELLIGENCE_PORT": str(port),
+        "KNOTED_INTELLIGENCE_STATE_DIR": str(root / "state"),
+        "KNOTED_INTELLIGENCE_STAGING_DIR": str(root / "staging"),
+        "KNOTED_INTELLIGENCE_CHILD_HOLD_MS": str(hold_ms),
+        "KNOTED_INTELLIGENCE_CHILD_IGNORE_SIGTERM": "1",
+        "KNOTED_INTELLIGENCE_CANCEL_GRACE_SECONDS": "0.1",
+        "CUDA_VISIBLE_DEVICES": "",
+        "KNOTED_EMBED_GPU_UUID": "",
+        "KNOTED_INTELLIGENCE_DOCLING_DEVICE": "cpu",
+    }
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / "http.log").open("a") as log:
+        process = subprocess.Popen(
+            [sys.executable, "-I", "-B", "-c", "from knoted_intelligence.app import main;main()"],
+            env=env,
+            stdout=log,
+            stderr=log,
+        )
+        with httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=30) as client:
+
+            def ready():
+                assert process.poll() is None, "owned Office test service exited"
+                try:
+                    return client.get("/internal/v1/health").status_code == 200
+                except httpx.TransportError:
+                    return False
+
+            try:
+                wait_for(ready)
+                yield client
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                process.wait(timeout=30)
+
+
+def office_request(path, seconds=60):
+    import hashlib
+    from datetime import UTC, datetime, timedelta
+    from uuid import uuid4
+
+    return dict(
+        execution_id=str(uuid4()),
+        kind="parse",
+        input_object_id=path.name,
+        input_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+        source_version=7,
+        options_revision=parser().options_revision(),
+        deadline=(datetime.now(UTC) + timedelta(seconds=seconds)).isoformat(),
+    )
+
+
+def office_terminal(client, request):
+    from test_t47_http import wait_for
+
+    def completed():
+        record = client.get(f"/internal/v1/executions/{request['execution_id']}").json()
+        return record if record.get("compute_exit_confirmed") else None
+
+    return wait_for(completed, seconds=60)
+
+
+def test_t48_real_http_manifest_success_and_permanent_codes(tmp_path):
+    import hashlib
+    import sys
+
+    fixtures = tmp_path / "fixtures"
+    script = Path(__file__).resolve().parents[3] / "crates/knoted-core/tests/fixtures/t48_office.py"
+    subprocess.run([sys.executable, "-I", "-B", str(script), str(fixtures)], check=True)
+    with office_http(tmp_path) as client:
+        inputs = tmp_path / "staging/input"
+        for format in ("docx", "xlsx", "pptx"):
+            path = inputs / ("opaque-" + format)  # no filename hint reaches parser
+            path.write_bytes((fixtures / ("sample." + format)).read_bytes())
+            request = office_request(path)
+            assert client.post("/internal/v1/executions", json=request).status_code == 201
+            record = office_terminal(client, request)
+            assert record["state"] == "succeeded", record
+            result = client.get(f"/internal/v1/executions/{request['execution_id']}/result").json()
+            raw = (
+                tmp_path / "staging/output" / request["execution_id"] / result["object_id"]
+            ).read_bytes()
+            assert len(raw) == result["size"]
+            assert hashlib.sha256(raw).hexdigest() == result["sha256"]
+            artifact = json.loads(raw)
+            assert artifact["source_format"] == format
+            assert artifact["options_revision"] == request["options_revision"]
+            assert artifact["parser"] == parser().parser_summary()
+            assert artifact["source_version"] == 7 and artifact["truncated"] is False
+            assert artifact["page_count"] == (2 if format == "pptx" else None)
+            if format == "xlsx":
+                assert json.loads(artifact["blocks"][0]["structure"])["sheet"] == "中文'原名"
+            if format == "pptx":
+                assert artifact["blocks"][0]["page"] == 2
+            for key in ("options_revision", "input_sha256"):
+                assert result["metadata"][key] == request[key]
+            assert result["metadata"]["source_version"] == "7"
+            # Terminal cancel conflict cannot revoke successful exit proof.
+            assert (
+                client.post(f"/internal/v1/executions/{request['execution_id']}/cancel").status_code
+                == 409
+            )
+            assert client.post("/internal/v1/executions", json=request).json()[
+                "compute_exit_confirmed"
+            ]
+        budget = tmp_path / "budget.docx"
+        budget.write_bytes((fixtures / "sample.docx").read_bytes())
+        rewrite(budget, extra=[("bomb.xml", b"<x>" + b"a" * 60000 + b"</x>")])
+        for payload, code in [
+            (budget.read_bytes(), "office_budget_exceeded"),
+            (b"broken", "corrupt_input"),
+            (bytes.fromhex("d0cf11e0a1b11ae1"), "unsupported_format"),
+        ]:
+            path = inputs / "broken"
+            path.write_bytes(payload)
+            request = office_request(path)
+            assert client.post("/internal/v1/executions", json=request).status_code == 201
+            record = office_terminal(client, request)
+            assert record["state"] == "failed" and record["error"]["code"] == code
+            assert (
+                client.get(f"/internal/v1/executions/{request['execution_id']}/result").status_code
+                == 422
+            )
+
+
+def test_t48_real_http_cancel_deadline_restart_and_new_attempt(tmp_path):
+    import sys
+
+    from test_t47_http import wait_for
+
+    from knoted_intelligence.supervision import inspect
+
+    sentinel = subprocess.Popen([sys.executable, "-I", "-B", "-c", "import time;time.sleep(120)"])
+    try:
+        with office_http(tmp_path, hold_ms=60000) as client:
+            path = tmp_path / "staging/input/office"
+            doc = Document()
+            doc.add_paragraph("retry中文")
+            doc.save(path)
+            cancelled = office_request(path)
+            assert client.post("/internal/v1/executions", json=cancelled).status_code == 201
+            marker = tmp_path / "staging/output" / cancelled["execution_id"] / "child-status.json"
+            wait_for(marker.exists)
+            pid = json.loads(marker.read_text())["pid"]
+            response = client.post(f"/internal/v1/executions/{cancelled['execution_id']}/cancel")
+            assert response.status_code == 200
+            assert office_terminal(client, cancelled)["state"] == "cancelled"
+            assert not Path(f"/proc/{pid}").exists()
+            expired = office_request(path, seconds=1)
+            assert client.post("/internal/v1/executions", json=expired).status_code == 201
+            record = office_terminal(client, expired)
+            assert record["state"] == "failed" and record["error"]["code"] == "deadline_exceeded"
+            active = office_request(path)
+            assert client.post("/internal/v1/executions", json=active).status_code == 201
+            wait_for(
+                (tmp_path / "staging/output" / active["execution_id"] / "child-status.json").exists
+            )
+        assert inspect(tmp_path / "state")["clean"]
+        assert sentinel.poll() is None
+        with office_http(tmp_path) as client:
+            old = office_terminal(client, active)
+            assert old["state"] in {"cancelled", "interrupted"}
+            assert client.post("/internal/v1/executions", json=active).json()[
+                "compute_exit_confirmed"
+            ]
+            retry = office_request(path)
+            assert retry["execution_id"] != active["execution_id"]
+            assert client.post("/internal/v1/executions", json=retry).status_code == 201
+            assert office_terminal(client, retry)["state"] == "succeeded"
+    finally:
+        sentinel.terminate()
+        sentinel.wait(timeout=5)

@@ -1,7 +1,8 @@
-# T48 Office 解析阶段 A
+# T48 Office 解析实施证据
 
 Issue #133；基线 `5377c581cc7696cc416304b4ae1b758ee0c30f79`。
-仅纯解析库与安全测试，整卡 **未完成**。T47 未集成，执行注册、Python/Rust
+以下阶段 A 段落为当时的历史记录；当前 Phase B 记录在文末，整卡仍待主 Agent 集成验收。
+阶段 A 当时仅纯解析库与安全测试，T47 未集成，执行注册、Python/Rust
 双端执行状态/取消/摘要/过期结果和 dev 验收留在阶段 B；不以 parser 测试替代。
 
 - [x] 读取任务卡、ADR 0001/0003/0006、只读研究与独立阶段 A brief。
@@ -117,3 +118,89 @@ pgNum、contentPart 与未知正文表达明确 unsupported_format，保留普�
 `r1-format`：21 files already formatted / exit 0。原有 duplicate ZIP fixture 警告
 按 M1 deferred 保存，未消音。既有模型相关源/测试无改动，按主 Agent 指示不重跑
 完整模型 suite；早先 102 例运行与本轮 60 例是组合验证，不称为同一快照完整运行。
+
+## Phase B 执行清单（已恢复）
+
+上游主线 `6a53e980fb2c62fd308e3ab85555aca581a81b63`，本分支 merge 基线
+`d6618a6beec49bba2f1b574a6a9f48c388b92480`；ADR0007 已接受，T47 已交付。
+本阶段由同一实施者串行实现，父 Agent 独立审查、合并及 dev 验收。
+
+- [x] 真实 Python execution Office dispatch/manifest 的 RED→GREEN。
+- [x] Rust Office identity、共享有界 artifact 读取与定位校验的 RED→GREEN。
+- [x] enqueue/Worker/成功表选择 Office，保留既有退出/租约/来源/deadline 栅栏。
+- [x] Python HTTP 成功/错误/取消/短截止/重启、Rust echo/proof/摘要/过期与隔离 PG 管线。
+- [ ] 冻结代码后完整 Rust fmt/test/clippy、Python pytest/ruff，记录实际计数和 scope。
+- [ ] 提交、父审查与集成；本实施者不执行远程/dev/真实 SourceRoot 写入。
+
+### Phase B 身份与实际链路
+
+纯 parser policy 保持 `office-ooxml-body-v2-hidden-slides-included-cache-only`，
+options 精确值为：
+
+```text
+office-ooxml-body-v2-hidden-slides-included-cache-only:66f5d3305d4cda1ad981b12e95d75f4c4f4efcc31e5ca45a8985ead92f65da8a
+```
+
+持久 job/file_extractions 的 parser_revision 为该 policy 加 `:docx`、`:xlsx`
+或 `:pptx`；expected source format 由此选择，并同时由 Worker 与发布函数核验。
+这避免同 source/content 改扩展名时误复用另一格式的成功或耗尽失败预算；备注/
+标签不改变此身份。Python 只收到既有 options，不新增路径/格式公开 DTO。
+`parse_office(staged=True)` 把受控 object_id 当不透明名字，包身份仍受原准入校验；
+纯库默认模式仍拒绝扩展名与包类型不符。成功 artifact 的 parser 对象含原 policy、
+options 和完整 budgets，Rust 逐项匹配；PDF/text 身份与监督协议修订不变。
+
+共享 artifact.rs 从原 PDF 路径抽出同一有界读取：受控 output root/regular
+file/NOFOLLOW、完整长度和 SHA256、读取前后观察值、manifest metadata 都保留。
+Office 另验 source_format、页语义、bbox=null、ordinal、正文长度、truncated=false
+及结构位置语法；PPTX 不套 PDF 500 页上限（601 页 ordinal fixture 通过）。
+只有完整成功写既有 0015 file_extractions，execution_id 来自真实持久 attempt。
+取消/截止/重启继续复用 T47 guardian 与不可变 request、退出证明及最终 PG clock。
+
+真实私有管线：扫描→稳定采集→file.extract→loopback Python→guardian/compute→
+manifest→Rust验证→PG成功表。三个实际库生成的 Office 文档成功，损坏和假扩展名
+永久失败；再次扫描/只改 metadata 无重开。真实 rename 保持 inode/source_id/
+content_version：假 DOCX 命名的 XLSX 改回 .xlsx 可成功；成功 DOCX 改成 .xlsx
+创建新格式尝试并失败，不以旧成功跳过。Python HTTP 另覆盖空白/隐藏页 ordinal、
+错误预算码、取消后 PID 不存活、短 deadline、正常停机后重启持久终态/新 ID 重试，
+sentinel 保持存活。Rust HTTP 对真实 manifest 故意改 SHA/大小/metadata/产物字节
+均被拒绝；隔离 PG 的锁等待跨 deadline 回滚成功表与 outbox，旧观察拒绝。
+
+### Phase B 日志
+
+仍位于 `/data/knoted-dev/tasks/t48/logs/`，每条命令含 `.command/.log/.exit`。
+`b-dispatch-red` 3 failed；`b-dispatch-green` 3 passed；`b-opaque-red` 3 failed
+（明确 object_id 不能作为原扩展名），其后全部定向通过。
+`b-rust-red`/`b-rust-red2` 中 3 格式 decoder 为预期失败，另有测试误解既有
+ExecutionRecord 字段/verify_fresh 语义，按真实 API 修正 fixture，未改协议。
+`b-enqueue-red` 为实际采集后未创建 Office job；`b-rust-core-green` 5 passed。
+`b-format-binding-red` 实际错误命名也写成功（4 条而非 3 条）；format selector
+加入后不再发布。`b-rename` 实际完整管线与双向扩展改名 1 passed / 68.27 秒。
+`b-python-early` 5 passed；之前 `b-http` 1 failed/1 passed 的失败是测试把既有
+失败结果 HTTP422 误写成409，已修 fixture，未改 HTTP 状态。
+`b-t48-python` 为 uv run 任务卡入口 **65 passed / 无 warnings / exit 0**。
+恶意 duplicate ZIP fixture 用局部 pytest.warns 断言预期警告，未全局消音。
+最终完整门禁结果将在下段记录；API/pc/Web 无运行变更，不重复其独立工具链门禁。
+
+
+### Phase B 最终门禁与交接边界
+
+冻结 Office/Rust 产品代码后：`b-final-rust` **393 passed / 1 既有 ignored
+API doctest / exit 0**；`b-final-t48-rust` **10 passed / exit 0**；
+`b-final-fmt`、`b-final-clippy`、`b-final-ruff`、`b-final-format` 均 exit 0。
+全 Python 首轮 `b-final-python` 为 **156 passed / 1 failed / 9 warnings /
+exit 1 / 271.87 秒**。唯一失败是既有 T47 guardian fixture 只等待 marker.exists
+后读取 PID，命中创建到写入间窗口而读到空字符串（ValueError，line101）。
+这是旧 fixture 的发布竞态，不标作 Office 产品 RED，也没有盲目重跑消失后隐去。
+
+主 Agent 明确授权只修该 fixture：孙进程先写 `.tmp` 并关闭，再 os.replace
+原子发布；真实孙进程/owner EOF/回收/sentinel 断言保持不变，不改 guardian 或
+ledger 产品。修后 `b-guardian-fixture-green` **8 passed / exit 0**（两参数均
+覆盖）；`b-final-ruff2`、`b-final-format2` 均 exit 0。主 Agent 接手修正后完整
+Python 独立 gate，本实施者按明确指令不再重复模型全套；不得将组合结果宣称
+最终 HEAD 已全套 Python 157 passed。首轮 9 warnings 均既有 #156 依赖弃用。
+
+三个实际成功 manifest 在日志目录 `b-office-manifests.json`，均从私有测试
+SQLite 只读导出并重新校验 artifact SHA/size；`b-frozen-code-sha256.txt` 保留
+Office/Rust 冻结哈希，最终带 fixture 修正的文件清单由完整报告记录。
+本实施者未运行 main/dev/发布/真实 SourceRoot；待父独立 review、完整 Python
+复验、PR 合入、固定产物及 dev 验收，不宣称整卡生命周期完成。

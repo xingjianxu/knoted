@@ -20,10 +20,13 @@ pub async fn execute(
             message: "invalid extraction envelope".into(),
         };
     };
-    if job.payload.get("parser_revision").and_then(|v| v.as_str())
-        == Some(knoted_core::files::pdf::PARSER_REVISION)
+    if let Some((parser_revision, options_revision)) = job
+        .payload
+        .get("parser_revision")
+        .and_then(|v| v.as_str())
+        .and_then(extraction::python_identity)
     {
-        return execute_python(ctx, lease, &input).await;
+        return execute_python(ctx, lease, &input, parser_revision, options_revision).await;
     }
     let Ok(staged) = input.staged_object() else {
         return ExecutionOutcome::PermanentFailure {
@@ -66,9 +69,11 @@ async fn execute_python(
     ctx: &AppContext,
     lease: &Lease,
     input: &ExtractionInput,
+    parser_revision: &str,
+    options_revision: &str,
 ) -> ExecutionOutcome {
     use knoted_core::{
-        files::pdf,
+        files::{office, pdf},
         intelligence::{ExecutionKind, ExecutionRequest, ExecutionState, IntelligenceClient},
     };
     let client = match IntelligenceClient::new(&ctx.intelligence().base_url) {
@@ -94,7 +99,7 @@ async fn execute_python(
         input_sha256: staged.sha256,
         source_version: input.content_version,
         deadline: ctx.now() + std::time::Duration::from_secs(900),
-        options_revision: pdf::OPTIONS_REVISION.into(),
+        options_revision: options_revision.into(),
     };
     let attempt = match extraction::register_attempt(ctx.pool(), lease, request).await {
         Ok(attempt) => attempt,
@@ -132,11 +137,21 @@ async fn execute_python(
                 Ok(result) => result,
                 Err(_) => return temporary("result unavailable"),
             };
-            let document = match pdf::read_artifact(ctx, request, &result).await {
+            let parsed = if request.options_revision == office::OPTIONS_REVISION {
+                office::read_artifact(ctx, request, &result).await
+            } else {
+                pdf::read_artifact(ctx, request, &result).await
+            };
+            let document = match parsed {
                 Ok(document) => document,
                 Err(pdf::Error::Io(_)) => return temporary("artifact unavailable"),
                 Err(_) => return permanent("invalid parse artifact"),
             };
+            if office::format_for_parser(parser_revision)
+                .is_some_and(|expected| document.source_format != expected)
+            {
+                return permanent("unsupported_format");
+            }
             return match extraction::publish_python(ctx, lease, input, &document, &attempt).await {
                 Ok(()) => ExecutionOutcome::Succeeded,
                 Err(extraction::DomainError::Stale) => ExecutionOutcome::Cancelled,
@@ -162,6 +177,7 @@ fn execution_failure(code: &str) -> ExecutionOutcome {
             | "invalid_input"
             | "empty_input"
             | "input_too_large"
+            | "office_budget_exceeded"
             | "image_too_large"
             | "too_many_pages"
             | "artifact_too_large"
@@ -224,6 +240,17 @@ async fn cancel_registered(ctx: &AppContext, lease: &Lease) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn t48_office_safe_codes_preserve_permanent_and_finite_retry_classes() {
+        assert!(matches!(
+            execution_failure("office_budget_exceeded"),
+            ExecutionOutcome::PermanentFailure { .. }
+        ));
+        assert!(matches!(
+            execution_failure("office_io_error"),
+            ExecutionOutcome::TemporaryFailure { .. }
+        ));
+    }
     #[test]
     fn t47_machine_codes_preserve_permanent_input_limits_and_retryable_models() {
         for code in [

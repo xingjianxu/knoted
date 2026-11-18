@@ -80,8 +80,14 @@ invalid output with a stable error code instead of publishing a partial result.
 Parse and embed share `KNOTED_INTELLIGENCE_GPU_SLOTS` (default 1), so the two
 model families are serialised on the one Python card.
 
-Office parsing is available as the **pure library** `parsing.office.parse_office`
-(T48 stage A); execution dispatch and Rust/Worker integration await T47/stage B.
+Office parsing uses `parsing.office.parse_office` through the same persisted
+execution/guardian and Worker publication pipeline as PDF/images. The Worker
+selects DOCX/XLSX/PPTX from the source extension and persists that selection in
+format-specific parser revisions; the shared options identity binds the pure
+parser policy and budgets. Opaque staging names do not supply a source extension.
+Rust verifies the manifest/digest, parser metadata, format and structural locations
+before publishing with the existing source/lease/deadline fences. Same-content
+extension changes select a distinct success/failure identity; note/tag edits do not.
 It reads transitional DOCX/XLSX/PPTX OOXML with bounded ZIP/XML admission and
 never launches Office, calculates formulas, loads external resources, or extracts
 embedded objects. It reuses `ParsedDocument`/`ParsedBlock`; its options revision
@@ -108,7 +114,10 @@ Admission includes the existing 100 MiB input ceiling plus internal limits:
 large documents; refusals never return truncated results. `corrupt_input`,
 `unsupported_format`, `input_too_large`, `office_budget_exceeded` and
 `office_io_error` remain distinct safe parser codes. The execution supervisor,
-not the pure function, must enforce the existing 900-second deadline in stage B.
+not the pure function, enforces the existing 900-second deadline and confirms
+compute exit. Office budget failures are permanent; Office IO failures retain the
+existing finite retry policy. No guardian/ledger lifecycle or public DTO changes
+are required. Integration/deployment status is recorded in the task evidence.
 See [T48 evidence](../../docs/plans/knoted-v1/evidence/t48-office.md) for exact
 boundaries, budget rationale and verification status.
 

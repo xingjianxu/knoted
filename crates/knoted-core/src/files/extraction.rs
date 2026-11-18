@@ -55,6 +55,15 @@ impl ExtractionInput {
         })
     }
 }
+/// Fixed parser identities; neither metadata edits nor supervision revisions change them.
+pub fn python_identity(parser_revision: &str) -> Option<(&'static str, &'static str)> {
+    match parser_revision {
+        super::pdf::PARSER_REVISION => {
+            Some((super::pdf::PARSER_REVISION, super::pdf::OPTIONS_REVISION))
+        }
+        _ => super::office::identity(parser_revision),
+    }
+}
 fn options_hash(revision: &str) -> String {
     Sha256Hex::digest(revision.as_bytes()).to_string()
 }
@@ -76,6 +85,8 @@ pub async fn enqueue(
         (text::PARSER_REVISION, text::OPTIONS_REVISION)
     } else if super::pdf::supports(&path) {
         (super::pdf::PARSER_REVISION, super::pdf::OPTIONS_REVISION)
+    } else if let Some(identity) = super::office::identity_for_path(&path) {
+        identity
     } else {
         return Ok(());
     };
@@ -167,6 +178,16 @@ async fn publish_inner(
             .bind(lease.job_id)
             .fetch_one(&mut **tx)
             .await?;
+        let (parser_revision, options_revision) = payload["parser_revision"]
+            .as_str()
+            .and_then(python_identity)
+            .ok_or(DomainError::Stale)?;
+        if payload["options_hash"] != options_hash(options_revision)
+            || super::office::format_for_parser(parser_revision)
+                .is_some_and(|format| document.source_format != format)
+        {
+            return Err(DomainError::Stale);
+        }
         let entries = decode_attempts(&payload)?;
         if !entries
             .iter()
@@ -174,13 +195,13 @@ async fn publish_inner(
             || attempt.request.input_sha256.as_str() != input.input_sha256
             || attempt.request.input_object_id.as_str() != input.input_object_id
             || attempt.request.source_version != input.content_version
-            || attempt.request.options_revision != super::pdf::OPTIONS_REVISION
+            || attempt.request.options_revision != options_revision
         {
             return Err(DomainError::Stale);
         }
         (
-            super::pdf::PARSER_REVISION,
-            super::pdf::OPTIONS_REVISION,
+            parser_revision,
+            options_revision,
             Some(attempt.request.execution_id),
         )
     } else {

@@ -64,6 +64,15 @@ def options_revision(limits: OfficeLimits = DEFAULT_LIMITS) -> str:
     return POLICY_REVISION + ":" + hashlib.sha256(identity.encode()).hexdigest()
 
 
+def parser_summary() -> dict:
+    """Artifact identity consumed by Rust; independent of supervision revision."""
+    return {
+        "parser_revision": POLICY_REVISION,
+        "options_revision": options_revision(),
+        "limits": asdict(DEFAULT_LIMITS),
+    }
+
+
 def _fail(code: str = "corrupt_input") -> None:
     raise ParseError(code, "Office input refused by the read-only extraction policy") from None
 
@@ -543,15 +552,18 @@ def _pptx(package: _Package, out: _Output) -> int:
     return len(slides)
 
 
-def parse_office(path: Path | str, *, limits: OfficeLimits = DEFAULT_LIMITS) -> ParsedDocument:
+def parse_office(
+    path: Path | str, *, limits: OfficeLimits = DEFAULT_LIMITS, staged: bool = False
+) -> ParsedDocument:
     """Parse a staged OOXML file; never writes artifacts or returns truncated text.
 
+    Staged object names are opaque; the Worker checks the original source format.
     The options identity binds policy and admission budgets. IO errors remain
     distinct from corrupt data; MemoryError and programming failures propagate.
     No exception text from the input, XML parser or OS enters ParseError detail.
     """
     path = Path(path)
-    if path.suffix.lower() not in {".docx", ".xlsx", ".pptx", ""}:
+    if not staged and path.suffix.lower() not in {".docx", ".xlsx", ".pptx", ""}:
         _fail("unsupported_format")
     try:
         with path.open("rb") as source:
@@ -562,7 +574,7 @@ def parse_office(path: Path | str, *, limits: OfficeLimits = DEFAULT_LIMITS) -> 
         if data.startswith(bytes.fromhex("d0cf11e0a1b11ae1")):
             _fail("unsupported_format")
         package = _Package(io.BytesIO(data), limits)
-        if path.suffix and path.suffix.lower() != "." + package.format:
+        if not staged and path.suffix and path.suffix.lower() != "." + package.format:
             _fail("unsupported_format")
         out = _Output(limits)
         page_count = None
