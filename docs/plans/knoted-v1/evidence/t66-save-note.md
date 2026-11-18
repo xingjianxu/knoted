@@ -20,6 +20,6 @@
 
 部署 `f796437`，复用源码一致的已校验 Python 运行产物。发布包 38,343 个校验条目，`SHA256SUMS` 摘要为 `ac84a71d79fc84f5064d3b210d4c056175f3247ca89419b5468428af8366d7ff`。API 与 Worker 停写后对 dev 数据库及资产生成一致备份并验证校验清单，迁移 0025 随固定发版应用。共享 Caddy、PostgreSQL、OnlyOffice 和 Strata 进程保持运行。
 
-真实 Chromium 在 HTTPS 15601 下使用临时会话与受限合成资料范围。使用回环模型完成持久 SSE 生成，经聊天页面转存回答，验证正文及引用快照、搜索索引、普通笔记编辑。删除合成出处和会话后读取转存笔记，正文和引用保持一致。合成笔记及标签随后软删除，临时会话授权撤销，恢复常规 dev 配置。第一轮夹具沿用了 T65 的标题匹配条件，修正合成标题后重跑通过。
+真实 Chromium 在 HTTPS 15601 下使用临时会话与受限合成资料范围。使用回环模型完成持久 SSE 生成，经聊天页面转存回答，验证正文及引用快照、搜索索引、普通笔记编辑。删除合成出处和会话后读取转存笔记，正文和引用保持一致。合成笔记及标签随后软删除，临时会话授权撤销，移除临时模型覆盖，恢复原 dev 配置。第一轮夹具沿用了 T65 的标题匹配条件，修正合成标题后重跑通过。
 
-本地运行证据位于 `/data/knoted-dev/tasks/t66/evidence/`，包括 `rust-workspace.log`、`mainline-rust.log`、`web-suite.log`、`mainline-web.log`、`dev-release.log`、`dev-acceptance.log`。
+本地运行证据位于 `/data/knoted-dev/tasks/t66/evidence/`，包括 `rust-workspace.log`、`mainline-rust.log`、`web-suite.log`、`mainline-web.log`、`dev-release.log`、记录一致备份的 `dev-fixture-first.log`、`dev-acceptance.log`。
