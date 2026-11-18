@@ -76,7 +76,7 @@
 | [T47](tasks/T47.md) | PDF与图片解析 | T10, T44, T46 | done（PR [#157](https://github.com/xingjianxu/knoted/pull/157)，主线 `0f65529`，dev `0f65529`；[证据](evidence/t47-parse.md)） |
 | [T48](tasks/T48.md) | Office解析 | T47 | done（PR [#159](https://github.com/xingjianxu/knoted/pull/159)，主线 `c936e0a`，dev `c936e0a`；[证据](evidence/t48-office.md)） |
 | [T49](tasks/T49.md) | 文件浏览备注下载 | T45, T48, T32 | done（PR [#161](https://github.com/xingjianxu/knoted/pull/161)，主线 `8ffb240`，dev `8ffb240`；[证据](evidence/t49-files.md)） |
-| [T50](tasks/T50.md) | PDF图片文本预览 | T49 | in progress（[草稿 PR #162](https://github.com/xingjianxu/knoted/pull/162)；T49 已验收，阶段 B 页面对接与整卡验收中） |
+| [T50](tasks/T50.md) | PDF图片文本预览 | T49 | done（PR [#162](https://github.com/xingjianxu/knoted/pull/162)，主线 `2c89043`，dev `2c89043`；[证据](evidence/t50-preview.md)） |
 | [T51](tasks/T51.md) | OnlyOffice授权后端 | T49, T15 | pending |
 | [T52](tasks/T52.md) | OnlyOffice网页接入 | T51, T50 | pending |
 | [T53](tasks/T53.md) | 全文索引发布 | T07, T48, T36 | pending |
