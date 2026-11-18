@@ -734,6 +734,14 @@ impl MeiliClient {
     /// write is waited for, so "the index exists" always means "the index can
     /// answer with the fields T54 filters and sorts on".
     pub async fn ensure_index(&self, uid: &str) -> Result<(), DomainError> {
+        self.ensure_index_settings(uid, &engine_settings()).await
+    }
+
+    pub(crate) async fn ensure_index_settings(
+        &self,
+        uid: &str,
+        expected: &Value,
+    ) -> Result<(), DomainError> {
         let response = self
             .request(reqwest::Method::GET, &format!("indexes/{uid}"))
             .send()
@@ -785,11 +793,11 @@ impl MeiliClient {
         if !status.is_success() {
             return Err(DomainError::Unavailable);
         }
-        if !settings_match(&settings) {
+        if !settings_match(&settings, expected) {
             let body = self
                 .send(
                     self.request(reqwest::Method::PATCH, &format!("indexes/{uid}/settings"))
-                        .json(&engine_settings()),
+                        .json(expected),
                 )
                 .await?;
             self.require_task(task_uid(&body)?).await?;
@@ -809,10 +817,18 @@ impl MeiliClient {
 
     /// Upserts one document and returns the engine task id.
     pub async fn submit_document(&self, uid: &str, document: Value) -> Result<i64, DomainError> {
+        self.submit_documents(uid, &[document]).await
+    }
+
+    pub(crate) async fn submit_documents(
+        &self,
+        uid: &str,
+        documents: &[Value],
+    ) -> Result<i64, DomainError> {
         let body = self
             .send(
                 self.request(reqwest::Method::PUT, &format!("indexes/{uid}/documents"))
-                    .json(&[document]),
+                    .json(documents),
             )
             .await?;
         task_uid(&body)
@@ -958,17 +974,20 @@ fn engine_settings() -> Value {
 }
 
 /// Whether the engine already carries the fields this protocol depends on.
-fn settings_match(settings: &Value) -> bool {
-    let has_all = |field: &str, expected: &[&str]| {
-        settings[field]
-            .as_array()
-            .is_some_and(|values| expected.iter().all(|value| values.contains(&json!(value))))
-    };
-    has_all("searchableAttributes", SEARCHABLE_ATTRIBUTES)
-        && has_all("filterableAttributes", FILTERABLE_ATTRIBUTES)
-        && has_all("sortableAttributes", SORTABLE_ATTRIBUTES)
-        && settings["pagination"]["maxTotalHits"] == json!(MAX_SEARCH_HITS)
-        && settings["rankingRules"] == json!(RANKING_RULES)
+fn settings_match(settings: &Value, expected: &Value) -> bool {
+    expected.as_object().is_some_and(|fields| {
+        fields.iter().all(|(field, value)| {
+            if field == "rankingRules" {
+                return settings[field] == *value;
+            }
+            match value.as_array() {
+                Some(wanted) => settings[field]
+                    .as_array()
+                    .is_some_and(|actual| wanted.iter().all(|element| actual.contains(element))),
+                None => settings[field] == *value,
+            }
+        })
+    })
 }
 
 /// Runs one full-text job. Called by the worker dispatcher; tests call it
