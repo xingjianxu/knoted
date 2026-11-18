@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust 2024/Axum/Tokio/SQLx、OpenAPI + pnpm 客户端、React/Vite/Vitest、mtone 0.4.0、现有 OnlyOffice Docs、pcwrap 固定 dev 产物。
 
-**Spec:** [ADR 0008](../decisions/0008-office-preview-authorization.md)、[ADR 0009](../decisions/0009-office-source-jwt-header.md)（部分替代取源凭据）、[RFC](../rfcs/2026-11-18-t51-t52-office-preview.md)、[T51](knoted-v1/tasks/T51.md)、[T52](knoted-v1/tasks/T52.md)。
+**Spec:** [ADR 0008](../decisions/0008-office-preview-authorization.md)、[ADR 0009](../decisions/0009-office-source-jwt-header.md)（部分替代取源凭据）、[ADR 0010](../decisions/0010-office-preview-credentialless-host.md)（浏览器隔离）、[RFC](../rfcs/2026-11-18-t51-t52-office-preview.md)、[T51](knoted-v1/tasks/T51.md)、[T52](knoted-v1/tasks/T52.md)。
 
 ## Global Constraints
 
@@ -45,11 +45,11 @@
 
 ### Task 2: T52 — 网页查看与精确来源
 
-**Files:** `apps/web/src/features/files/preview/OfficePreview.tsx`；现有 `FileDetail.tsx`/`preview/inspect.ts`/`preview/FilePreview.tsx` 仅预览分流与资源所有权接线；`apps/web/vite.config.ts` 或单独 Vite 业务配置模块；`apps/web/tests/tasks/t52.test.tsx`，必要固定产物和真实验收脚本接线、任务证据文档。
+**Files:** `apps/web/src/features/files/preview/OfficePreview.tsx`、`apps/web/src/features/files/preview/office-preview-host.ts`、`apps/web/office-preview.html`；现有 `FileDetail.tsx`/`preview/inspect.ts`/`preview/FilePreview.tsx` 仅预览分流与资源所有权接线；`apps/web/vite.config.ts` 或单独 Vite 业务配置模块；`apps/web/tests/tasks/t52.test.tsx`，必要固定产物和真实验收脚本接线、任务证据文档。
 
-**Interfaces:** 消费上一任务生成 DTO；`OfficePreview({api, file})` 置于既有受控 Dialog 的 Office 分支。上传或编辑接口不引入。发布构建使用 `KNOTED_OFFICE_ORIGIN` 注入唯一已校验的 HTTPS origin 与可执行的 `script-src 'self' <origin>; frame-src 'self' blob: <origin>; object-src 'none'` 应用 HTML CSP；脚本使用同一配置检查签发结果。必须支持端口的精确匹配；默认禁用 Office，不放行任何额外 URL。一条精确兼容例外若确需，先用实际浏览器定位，不能加任意 inline/eval 或改变共享服务设置。
+**Interfaces:** `OfficePreview({api, file})` 置于既有 Dialog，父页向同源 `/office-preview.html` 的 `credentialless` 宿主页按打开实例建立验证来源/窗口的 MessageChannel，只在通道内传签名配置。Vite 额外静态入口打包宿主脚本。父页仅 `script-src 'self'; frame-src 'self' blob:; object-src 'none'`；宿主页以 `KNOTED_OFFICE_ORIGIN` 唯一规范 HTTPS DNS/IPv4 origin 建立 `script-src 'self' <origin>; frame-src <origin>; object-src 'none'`，默认无额外来源，无 IPv6/wildcard 或 inline/eval。宿主页不访问会话 API；不支持 credentialless 时不领取预览授权。预览启动 45 秒内未取得 ready / error 时关闭宿主、撤销、提示重试，不使迟到回执复活。
 
 - [ ] **先写失败测试**：`t52_1` 用假的 DocsAPI 核对 signed `cell` 配置与 viewer 事件，另用真 Chromium 验收工作表切换；`t52_2` 关掉/切换时销毁实例，晚到成功仅 DELETE 该 ID，不创建实例；`t52_3` 测精确协议/主机/端口、恶意或空的 origin、静态 CSP 无通配符并保留 PDF Blob；`t52_4` 脚本/Viewer 初始化失败可重试，循环无重复加载或串撤，401 关闭并沿用登录处理。
 - [ ] **观察 RED**：`pnpm --filter @knoted/web exec vitest run tests/tasks/t52.test.tsx`，记录预期失败（不以工具缺失为证）。
-- [ ] **实现**：同一生命周期最多拥有一个 SDK 实例和已取得预览 ID；关闭/切换必须同步禁止事件/新渲染、销毁实例、发出幂等撤销。不要仅靠取消 POST 假定服务端未创建；晚到回执仍辨认其所有者并撤销，丢失回执由服务端 TTL 保底。不加载服务端任意 URL，拼接受信 origin 的固定 `/web-apps/apps/api/documents/api.js`，不变更签名配置，仅追加 SDK 的事件/布局；忙/错误/重试复用 mtone。另行可用原件下载。
+- [ ] **实现**：同一生命周期最多拥有一个 SDK 实例和已取得预览 ID；关闭/切换必须同步禁止事件/新渲染、销毁实例、发出幂等撤销。不要仅靠取消 POST 假定服务端未创建；晚到回执仍辨认其所有者并撤销，丢失回执由服务端 TTL 保底。父页不加载远端脚本；只在按打开实例隔离的宿主页拼接受信 origin 的固定 `/web-apps/apps/api/documents/api.js`，不变更签名配置，仅追加 SDK 的事件/布局。使用 mtone 显示忙、错误、重试和浏览器降级，保留原件下载。测试发布父/宿主 HTML 中早于 module 的各自 CSP，另验真实 Cookie 不附带。
 - [ ] **验证和提交**：专项 T52、T50 回归及 Web 完整 lint/test/typecheck/build，实际启用和未启用构建分别检查 HTML 与 origin；独立审查。真实 Chrome 验收两工作表有可辨内容的 XLSX、DOCX/PPTX 只读、普通 PDF、缓存/撤销与 CSP；保留退出码和实际截图/断言（脱敏）。主线 merge 后部署固定 SHA，只更新 Knoted dev，核对运行 SHA、共享服务不变和自有样本清理，回填任务卡、证据、README 后清理各自 Worktree/已合并分支。
