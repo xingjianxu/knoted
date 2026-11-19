@@ -80,6 +80,17 @@ pub(crate) fn open_collection_root(
 /// Create one new private archive leaf without following links or writing into
 /// configured data directories, including their bind-mount aliases.
 pub fn create_backup_directory(path: &Path, protected: &[&Path]) -> io::Result<OwnedFd> {
+    let parent_fd = checked_output_parent(path, protected)?;
+    let name = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;
+    fs::mkdirat(&parent_fd, name, Mode::RWXU)?;
+    let directory = open_collection_directory(&parent_fd, Path::new(name))?;
+    fs::fsync(&parent_fd)?;
+    Ok(directory)
+}
+
+/// Open the parent of a prospective output, enforcing the same mount and
+/// overlap restrictions as a backup or restore target directory.
+pub fn checked_output_parent(path: &Path, protected: &[&Path]) -> io::Result<OwnedFd> {
     let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
     let name = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;
     let parent_fd = open_root(parent)?;
@@ -101,10 +112,7 @@ pub fn create_backup_directory(path: &Path, protected: &[&Path]) -> io::Result<O
             return Err(io::ErrorKind::PermissionDenied.into());
         }
     }
-    fs::mkdirat(&parent_fd, name, Mode::RWXU)?;
-    let directory = open_collection_directory(&parent_fd, Path::new(name))?;
-    fs::fsync(&parent_fd)?;
-    Ok(directory)
+    Ok(parent_fd)
 }
 
 // A configured asset or staging root may still be absent on an empty
@@ -236,7 +244,7 @@ fn mounted_paths_overlap(
 
 /// An explicitly configured parent can live on a mounted volume. A collection
 /// root and its children must be ordinary directories within that volume.
-pub(crate) fn open_collection_directory(dir: impl AsFd, name: &Path) -> std::io::Result<OwnedFd> {
+pub fn open_collection_directory(dir: impl AsFd, name: &Path) -> std::io::Result<OwnedFd> {
     Ok(fs::openat2(
         dir,
         name,

@@ -9,6 +9,7 @@
 //! retained. Error messages are fixed strings for the same reason.
 
 pub mod backup;
+pub mod restore;
 
 use std::io::{self, Write};
 use std::path::PathBuf;
