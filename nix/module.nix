@@ -7,6 +7,10 @@ let
   canonical = p: lib.all (c: c != "." && c != "..") (lib.splitString "/" p);
   external = p: canonical p && p != "/nix/store" && !(lib.hasPrefix "/nix/store/" p);
   root = cfg.instanceRoot;
+  proxySocket = "/run/knoted-intelligence/backend.sock";
+  portUnit = "knoted-intelligence-port.socket";
+  sandboxPaths = [ cfg.configFile "${root}/assets" ] ++ cfg.rustOnlyPaths
+    ++ lib.optional (cfg.sourceRoot != null) cfg.sourceRoot;
   dirs = [ "assets" "staging" "python" "cache" "tmp" ];
   common = {
     User = cfg.user;
@@ -21,7 +25,7 @@ let
   check = lib.escapeShellArgs [
     "${pkgs.python3}/bin/python3" "${./runtime.py}" cfg.configFile root
     (if cfg.sourceRoot == null then "" else cfg.sourceRoot)
-    (toString cfg.apiPort) (toString cfg.intelligencePort)
+    (toString cfg.apiPort) (toString cfg.intelligencePort) (builtins.toJSON cfg.rustOnlyPaths)
   ];
   rust = name: {
     wantedBy = [ "multi-user.target" ];
@@ -49,6 +53,11 @@ in {
     };
     configFile = mkOption { type = absolute; description = "External runtime TOML with database and service credentials."; };
     instanceRoot = mkOption { type = absolute; description = "Dedicated application state directory."; };
+    rustOnlyPaths = mkOption {
+      type = types.listOf absolute;
+      default = [];
+      description = "External credential files or directories accessible only to the Rust services.";
+    };
     sourceRoot = mkOption { type = types.nullOr absolute; default = null; };
     apiPort = mkOption { type = types.port; };
     intelligencePort = mkOption { type = types.port; };
@@ -61,6 +70,8 @@ in {
   };
   config = lib.mkIf cfg.enable {
     assertions = [
+      { assertion = lib.all external cfg.rustOnlyPaths;
+        message = "Knoted credential paths must be canonical external paths."; }
       { assertion = cfg.apiPort != cfg.intelligencePort; message = "Knoted ports must differ."; }
       { assertion = lib.all external [ root cfg.configFile ]; message = "Knoted runtime configuration and state require canonical external paths."; }
       { assertion = cfg.user != "root" && cfg.group != "root"; message = "Knoted requires a dedicated unprivileged account."; }
@@ -71,9 +82,22 @@ in {
     users.groups.${cfg.group} = {};
     users.users.${cfg.user} = { isSystemUser = true; inherit (cfg) group; };
     systemd.tmpfiles.rules = map (p: "d ${p} 0700 ${cfg.user} ${cfg.group} -") ([ root ] ++ map (d: "${root}/${d}") dirs);
+    systemd.sockets.knoted-intelligence-port = {
+      wantedBy = [ "sockets.target" ];
+      socketConfig.ListenStream = "127.0.0.1:${toString cfg.intelligencePort}";
+    };
     systemd.services = {
+      knoted-intelligence-port = {
+        # Keep ownership of the worker endpoint when inference is unavailable.
+        bindsTo = [ portUnit ];
+        after = [ portUnit ];
+        serviceConfig = common // {
+          ExecStart = "${config.systemd.package}/lib/systemd/systemd-socket-proxyd ${proxySocket}";
+        };
+      };
       knoted-migrate = {
-        after = [ "network.target" "postgresql.service" "postgresql.target" ];
+        requires = [ portUnit ];
+        after = [ portUnit "network.target" "postgresql.service" "postgresql.target" ];
         serviceConfig = common // {
           Type = "oneshot";
           RemainAfterExit = true;
@@ -82,11 +106,14 @@ in {
       };
       knoted-api = rust "api";
       knoted-worker = lib.recursiveUpdate (rust "worker") {
-        after = [ "knoted-migrate.service" "knoted-intelligence.service" ];
+        bindsTo = [ portUnit ];
+        after = [ portUnit "knoted-migrate.service" "knoted-intelligence.service" ];
         environment.KNOTED_INTELLIGENCE_BGE_M3_DIR = cfg.bgeM3Dir;
         serviceConfig.TimeoutStopSec = 75;
       };
       knoted-intelligence = {
+        requires = [ "knoted-migrate.service" ];
+        after = [ "knoted-migrate.service" ];
         wantedBy = [ "multi-user.target" ];
         path = [ pkgs.bash pkgs.coreutils ];
         environment = {
@@ -100,6 +127,10 @@ in {
           KNOTED_INTELLIGENCE_GPU_SLOTS = "1";
           CUDA_VISIBLE_DEVICES = if cfg.gpuUuid == null then "" else cfg.gpuUuid;
           KNOTED_EMBED_GPU_UUID = if cfg.gpuUuid == null then "" else cfg.gpuUuid;
+          PYTHONDONTWRITEBYTECODE = "1";
+          HF_HOME = "${root}/cache/huggingface";
+          TORCH_HOME = "${root}/cache/torch";
+          MPLCONFIGDIR = "${root}/cache/matplotlib";
           HOME = "${root}/python";
           TMPDIR = "${root}/tmp";
           XDG_CACHE_HOME = "${root}/cache";
@@ -111,15 +142,30 @@ in {
           inherit (config.environment.sessionVariables) NIX_LD NIX_LD_LIBRARY_PATH;
         };
         serviceConfig = common // {
-          Type = "exec";
+          Type = "notify";
+          PrivatePIDs = true;
+          PrivateNetwork = true;
+          RestrictNamespaces = true;
+          SystemCallArchitectures = "native";
+          SystemCallFilter = "~connect io_uring_setup";
+          SystemCallErrorNumber = "EPERM";
+          RuntimeDirectory = "knoted-intelligence";
+          RuntimeDirectoryMode = "0700";
           ExitType = "cgroup";
+          # The interpreter is a child of the namespace init. Drain it and
+          # its guardians before systemd applies its mixed-mode final kill.
+          ExecStop = "${pkgs.python3}/bin/python3 ${./intelligence-stop.py} $MAINPID";
           KillMode = "mixed";
           TimeoutStopSec = 45;
-          Restart = "on-failure";
+          Restart = "always";
           RestartSec = 3;
-          ExecStart = "${pkgs.bash}/bin/bash ${cfg.package}/bin/knoted-intelligence";
+          ExecStart = lib.escapeShellArgs [
+            "${pkgs.python3}/bin/python3" "${./intelligence-init.py}"
+            "${cfg.package}/share/knoted/intelligence/python/bin/python3.12"
+            "-I" "-B" "${./intelligence-server.py}" proxySocket
+          ];
           ReadWritePaths = map (d: "${root}/${d}") [ "python" "staging" "cache" "tmp" ];
-          InaccessiblePaths = [ cfg.configFile "${root}/assets" ] ++ lib.optional (cfg.sourceRoot != null) "-${cfg.sourceRoot}";
+          InaccessiblePaths = sandboxPaths;
         };
       };
     };

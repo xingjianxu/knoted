@@ -3,6 +3,7 @@ import argparse
 from datetime import UTC, datetime, timedelta
 import hashlib
 import json
+from http.client import RemoteDisconnected
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -19,7 +20,7 @@ def wait_for(probe, seconds=60):
             result = probe()
             if result:
                 return result
-        except (FileNotFoundError, URLError, TimeoutError):
+        except (FileNotFoundError, URLError, TimeoutError, ConnectionResetError, RemoteDisconnected):
             pass
         time.sleep(0.1)
     raise TimeoutError(f"timed out waiting for {probe}")
@@ -57,7 +58,18 @@ def main():
             guardian = db.execute(
                 "SELECT guardian_pid FROM supervision WHERE execution_id=?", (execution,)
             ).fetchone()[0]
-        assert guardian and Path(f"/proc/{guardian}").exists()
+        # Ledger PIDs are in the private service namespace. Map them within
+        # this cgroup before asserting kernel disappearance from the VM host.
+        cgroup = Path("/sys/fs/cgroup/system.slice") / unit / "cgroup.procs"
+        pids = {}
+        for pid in cgroup.read_text().split():
+            status_file = Path(f"/proc/{pid}/status")
+            labels = dict(line.split(":", 1) for line in status_file.read_text().splitlines() if ":" in line)
+            pids[int(labels["NSpid"].split()[-1])] = pid
+        child, guardian = pids[child], pids[guardian]
+        main_pid = subprocess.check_output(["systemctl", "show", "-p", "MainPID", "--value", unit], text=True).strip()
+        assert Path(f"/proc/{main_pid}/exe").resolve().name == "python3.12"
+        assert pids[1] != main_pid
         if action == "stop":
             subprocess.run(["systemctl", "stop", unit], check=True)
             subprocess.run(["systemctl", "start", unit], check=True)
