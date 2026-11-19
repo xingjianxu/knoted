@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -139,6 +140,7 @@ describe("t20 auth routes", () => {
     expect(router.state.location.search).toEqual({
       redirect: "/settings/security",
     });
+    expect(screen.queryByRole("navigation", { name: "主导航" })).not.toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "凭据与会话" }),
     ).not.toBeInTheDocument();
@@ -205,6 +207,15 @@ describe("t20 auth routes", () => {
     expect(safeReturnTo("/settings/security")).toBe("/settings/security");
     expect(safeReturnTo("/search?q=%E7%AC%94%E8%AE%B0&type=note")).toBe("/search?q=%E7%AC%94%E8%AE%B0&type=note");
     expect(safeReturnTo("/search//evil.example")).toBe("/");
+  });
+  it("provides shared navigation, a header action and a single main landmark", async () => {
+    loggedIn = true;
+    await mount("/");
+    const nav = await screen.findByRole("navigation", { name: "主导航" });
+    expect(within(nav).getByRole("button", { name: "概览" })).toHaveAttribute("aria-current", "page");
+    expect(within(screen.getByRole("banner")).getByRole("button", { name: "退出登录" })).toBeEnabled();
+    const main = screen.getByRole("main");
+    expect(await within(main).findByRole("heading", { name: "工作概览" })).toBeVisible();
   });
   it("enables implemented navigation entries", async () => {
     loggedIn = true;

@@ -6,14 +6,18 @@ import {
   useRouter,
 } from "@tanstack/react-router";
 import { useRef, useState } from "react";
+import { AdminLayout, Alert, Button, NavGroup, NavItem } from "@bixlab/mtone";
 import {
-  Alert,
-  Button,
-  Layout,
-  NavGroup,
-  NavItem,
-  Sidebar,
-} from "@bixlab/mtone";
+  BookOpen,
+  FolderKanban,
+  House,
+  LibraryBig,
+  ListTodo,
+  MessageSquare,
+  Search,
+  ShieldCheck,
+  Trash2,
+} from "lucide-react";
 import { NotesNavigationBlocked } from "../features/notes/navigation";
 import { AuthGate, authError } from "../features/auth/auth";
 
@@ -61,43 +65,49 @@ function Shell() {
     }
   }
   return (
-    <Layout fullHeight hasSider>
-      <Sidebar
-        header={<h1 className="p-4 text-xl font-semibold">Knoted</h1>}
-        footer={
-          <Button disabled={busy} onClick={() => void logout()}>
-            退出登录
-          </Button>
-        }
+    <AdminLayout fullHeight>
+      <AdminLayout.Sider
+        logo={<strong>Knoted</strong>}
+        collapsedLogo={<strong><span aria-hidden="true">K</span><span className="sr-only">Knoted</span></strong>}
+        collapsible
+        breakpoint={768}
       >
-        <NavGroup label="工作空间">
-          <NavItem active={pathname === "/"} onClick={() => void navigate({ to: "/" })}>概览</NavItem>
-          <NavItem active={/^\/notes(?:\/|$)/.test(pathname)} onClick={() => void navigate({ to: "/notes" })}>笔记</NavItem>
-          <NavItem active={/^\/projects(?:\/|$)/.test(pathname)} onClick={() => void navigate({ to: "/projects" })}>项目</NavItem>
-          <NavItem active={/^\/tasks(?:\/|$)/.test(pathname)} onClick={() => void navigate({ to: "/tasks" })}>事项</NavItem>
-          <NavItem active={pathname === "/trash"} onClick={() => void navigate({ to: "/trash" })}>回收站</NavItem>
-          <NavItem active={/^\/files(?:\/|$)/.test(pathname)} onClick={() => void navigate({ to: "/files" })}>文件</NavItem>
-          <NavItem active={pathname === "/search"} onClick={() => void navigate({ to: "/search", search: { q: "" } })}>搜索</NavItem>
-          <NavItem active={/^\/chat(?:\/|$)/.test(pathname)} onClick={() => void navigate({ to: "/chat" })}>问答</NavItem>
-        </NavGroup>
-        <NavGroup label="账号">
-          <NavItem
-            active={pathname === "/settings/security"}
-            onClick={() => void navigate({ to: "/settings/security" })}
-          >
-            凭据与会话
-          </NavItem>
-        </NavGroup>
-      </Sidebar>
-      <Layout className="min-w-0 flex-1">
-        <Layout.Header>个人工作空间</Layout.Header>
-        <Layout.Content className="p-6">
+        <nav aria-label="主导航">
+          <NavGroup label="工作空间">
+            <NavItem icon={<House size={16} aria-hidden="true" />} active={pathname === "/"}
+              onClick={() => void navigate({ to: "/" })}>概览</NavItem>
+            <NavItem icon={<BookOpen size={16} aria-hidden="true" />} active={/^\/notes(?:\/|$)/.test(pathname)}
+              onClick={() => void navigate({ to: "/notes" })}>笔记</NavItem>
+            <NavItem icon={<FolderKanban size={16} aria-hidden="true" />} active={/^\/projects(?:\/|$)/.test(pathname)}
+              onClick={() => void navigate({ to: "/projects" })}>项目</NavItem>
+            <NavItem icon={<ListTodo size={16} aria-hidden="true" />} active={/^\/tasks(?:\/|$)/.test(pathname)}
+              onClick={() => void navigate({ to: "/tasks" })}>事项</NavItem>
+            <NavItem icon={<Trash2 size={16} aria-hidden="true" />} active={pathname === "/trash"}
+              onClick={() => void navigate({ to: "/trash" })}>回收站</NavItem>
+            <NavItem icon={<LibraryBig size={16} aria-hidden="true" />} active={/^\/files(?:\/|$)/.test(pathname)}
+              onClick={() => void navigate({ to: "/files" })}>文件</NavItem>
+            <NavItem icon={<Search size={16} aria-hidden="true" />} active={pathname === "/search"}
+              onClick={() => void navigate({ to: "/search", search: { q: "" } })}>搜索</NavItem>
+            <NavItem icon={<MessageSquare size={16} aria-hidden="true" />} active={/^\/chat(?:\/|$)/.test(pathname)}
+              onClick={() => void navigate({ to: "/chat" })}>问答</NavItem>
+          </NavGroup>
+          <NavGroup label="账号">
+            <NavItem icon={<ShieldCheck size={16} aria-hidden="true" />} active={pathname === "/settings/security"}
+              onClick={() => void navigate({ to: "/settings/security" })}>凭据与会话</NavItem>
+          </NavGroup>
+        </nav>
+      </AdminLayout.Sider>
+      <AdminLayout className="min-w-0 flex-1">
+        <AdminLayout.Header extra={
+          <Button disabled={busy} onClick={() => void logout()}>退出登录</Button>
+        } />
+        <AdminLayout.Content data-workspace-content className="p-3 sm:p-6">
           {error && <Alert tone="error">{error}</Alert>}
           <NotesNavigationBlocked.Provider value={() => blockedLogout.current?.()}>
             <Outlet />
           </NotesNavigationBlocked.Provider>
-        </Layout.Content>
-      </Layout>
-    </Layout>
+        </AdminLayout.Content>
+      </AdminLayout>
+    </AdminLayout>
   );
 }

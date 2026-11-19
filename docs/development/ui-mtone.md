@@ -13,7 +13,7 @@
 
 ## 现状与目标
 
-当前精确依赖为 **`@bixlab/mtone@0.5.0`**（`apps/web/package.json` / `pnpm-lock.yaml`）。下文保留 T17—T19 的原始接入与各版本升级记录。
+当前精确依赖为 **`@bixlab/mtone@0.6.0`**（`apps/web/package.json` / `pnpm-lock.yaml`）。下文保留 T17—T19 的原始接入与各版本升级记录。
 
 T17 已精确接入 npm `@bixlab/mtone@0.2.0`，迁移 App 静态类并移除 `packages/ui`；**PR #42 已普通 merge 至主线 `e3e1db2`，独立审查/主线验证/任务清理完成**。生产入口使用应用层 `UiProvider` 配置公开 `MtoneProvider` 的 locale/density/tokens，不转发控件 API；CSS 从应用样式入口导入。基础表单组合仅在测试夹具中，不建立生产演示路由或通用包装库。证据见 [T17](../plans/knoted-v1/evidence/t17.md)。
 
@@ -51,7 +51,13 @@ T17 实测：旧 `cn('p-2', 'p-4')` 返回 `p-4`，mtone 的 `cn` 返回 `p-2 p-
 
 只使用 npm 已发布版本作为正式依赖；不以浮动 latest、Git、file/link、未发布 tarball 交付。不修改 API 或业务语义来迁就组件。
 
-## 0.5.0 升级与当前消费约定
+## 0.6.0 升级与工作区布局
+
+`_authenticated` 直接组合发布包的 `AdminLayout.Sider/Header/Content`。路由激活态、退出与笔记保存保护仍由应用负责；未登录的登录和初始化页不使用工作区外壳。侧栏在 768px 以下自动收为带可访问名称的图标导航，主区独立滚动；TanStack Router 在切页时重置主区滚动位置。
+
+保留公开包根入口、CSS 与 React peers。`lucide-react@1.73.0` 原为 mtone 的传递依赖，现同时作为 Web 的精确直接依赖，用于工作区导航图标，未引入新的解析版本。发布等待期只替换 mtone 的精确例外。 [npm 元数据](https://registry.npmjs.org/@bixlab%2fmtone/0.6.0) · [发布包组件参考](https://unpkg.com/@bixlab/mtone@0.6.0/llms.txt) · [实施计划](../plans/2026-11-19-mtone-admin-layout-plan.md)
+
+## 0.5.0 升级与兼容约定
 
 正式 npm 发布包的根入口、CSS 导出路径、直接依赖和 React peers 与 0.4.0 相同。锁文件仅升级 mtone，并把该包的精确 release-age 例外同步到 0.5.0。 [npm 元数据](https://registry.npmjs.org/@bixlab%2fmtone/0.5.0) · [发布说明](https://github.com/xingjianxu/mtone/releases/tag/v0.5.0)
 

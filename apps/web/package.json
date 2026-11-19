@@ -11,13 +11,14 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@bixlab/mtone": "0.5.0",
+    "@bixlab/mtone": "0.6.0",
     "@blocknote/core": "0.57.0",
     "@blocknote/react": "0.57.0",
     "@hookform/resolvers": "7.0.6",
     "@knoted/api-client": "workspace:*",
     "@tanstack/react-query": "5.107.1",
     "@tanstack/react-router": "1.170.46",
+    "lucide-react": "1.73.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "react-hook-form": "7.92.0",
