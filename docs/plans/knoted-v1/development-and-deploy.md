@@ -4,7 +4,7 @@
 
 测试实例的**应用**由本仓库的 `@bixlab/pcwrap` + process-compose 管理（[ADR 0003](../../decisions/0003-test-instance-process-management.md)）：配置渲染、迁移、API 和 Worker 都在 `process-compose.yaml` 里；HTTPS 由宿主共享 Caddy 管理（ADR 0005），控制端口 `127.0.0.1:15600`。**外部依赖**（Strata、机器级模型共享根、ACME 证书、防火墙、运行期工具）由 `/etc/nixos` 管理；**数据库由宿主用户 `xingjian` 直接创建与管理**（[ADR 0004](../../decisions/0004-database-owned-by-host-user.md)），没有 NixOS 侧的 provisioning 单元。**生产实例**将来才由 NixOS 运行，本次不部署。
 
-日常入口：`pnpm pc up -D`、`process list`、`process restart <name>`、`process logs <name>`、`down`。应用改动不需要再改 `/etc/nixos` 的 pin；只有外部依赖或生产启用才产生 host 任务。真实切换已随 PR #64 完成（运行 `4a546b2`），结果与回退入口记在 [证据](evidence/pcwrap-dev-service.md)。
+日常入口：`pnpm pc up -D`、`process list`、`process restart <name>`、`process logs <name>`、`down`；发版用 `pnpm deploy:dev`（见下）。应用改动不需要再改 `/etc/nixos` 的 pin；只有外部依赖或生产启用才产生 host 任务。真实切换已随 PR #64 完成（运行 `4a546b2`），结果与回退入口记在 [证据](evidence/pcwrap-dev-service.md)。
 
 远程GitHub写默认授权；生产变更、仓库级设置与非 Knoted 服务重启仍按根 AGENTS.md 的确认边界。没有性能测试。所有代码编辑在主仓库 `.worktrees/<task>`。
 
@@ -48,6 +48,30 @@ schema 由编排里的 `migrate` 进程管理（`sqlx migrate run`）；库不�
 证书来源参考receiptd；不是复用其Next/Bun启动器。缺证书/过期/名称不符拒绝HTTPS入口启动；ACME续期reload测试入口。API readiness只检查阶段所需依赖；模型不可用时基本笔记业务仍可用并显示能力不可用。
 
 专用服务用户knoted，源目录仅读取权限，assets/state/staging仅其可写。Python只见staging及模型，不给源目录和PG凭据。OnlyOffice使用当前服务地址作受信任依赖，JWT通过运行凭据引用，不输出内容。保持其已有外链限制和其他应用配置。
+
+## 一键部署
+
+`pnpm deploy:dev [<full-sha>]`（实现：`tools/dev/deploy-dev.sh`）把 dev 测试实例推进到最新主线：不传参数时 `git fetch origin` 后取 `origin/master`，传参则只接受完整 40 位提交 SHA。脚本只编排既有能力（`build-artifact.sh` 构建、`service.sh` 探针、pcwrap 进程），不重复实现。
+
+| 步骤 | 行为 |
+| --- | --- |
+| 前置 | 拒绝在 `.worktrees/` 路径上的实例/运行根/构建根/主检出；`flock` 防并发；缺 `git`/`pnpm`/`curl`/`sha256sum`/`flock`/`realpath` 在改动任何状态前失败。从任务 worktree 调用时，构建用被调用的那份脚本，但 `pnpm pc` 一律在主检出执行（daemon 的 cwd 决定后续 prepare/restart 用哪份 `service.sh`） |
+| 定版 | 校验提交存在于本地仓库；`/data/knoted-dev/runtime/<sha>` 已存在且 `SHA256SUMS` 通过就复用；已存在但校验失败（构建中断、磁盘损坏）则移到 `<sha>.incomplete.<UTC 时间>.<pid>` 后重建 |
+| 运行变量 | 调用者环境 > `<instance_root>/deploy.env`（0600）> 从活动 api/worker/intelligence 的 `/proc/<pid>/environ` 取并集；最终结果回写文件，所以下次无 shell 环境也能复现 |
+| 构建 | 在运行变量就绪之后执行——Vite 用 `KNOTED_OFFICE_ORIGIN` 决定是否编入 Office，变量必须在构建前确定 |
+| 判迁移 | 比对旧 `current` 与新产物 `share/knoted/migrations/*.sql` 文件名集合 |
+| 切换 | `current` 用 `ln` + `mv -Tf` 原子替换；共享 Caddy 静态根随即指向新产物 |
+| 重启 | 集合有变：先 `pnpm pc down`（停止失败则指针不切、实例仍旧版本）再 `up -D`（重跑 prepare/migrate）；无变：依次 `process restart` api / worker / intelligence（intelligence 也来自产物目录，不能漏），单个 restart 失败则退回到 `down` + `up -D` |
+| 验证 | `REVISION` 匹配、完整 `SHA256SUMS` 校验、API `/health/ready`、intelligence health、三个进程 `/proc/<pid>/exe` 落在新目录、`https://$domain:$HTTPS_PORT/` 200。readiness 与进程映像在同一个收敛等待里重试（worker 要等 process-compose 自己观察到 intelligence 健康后才被拉起，探针一过就扫 `/proc` 会误报） |
+| 失败 | 切换前失败：不改指针、不重启（运行变量文件可能已写入，不影响业务）。切换后失败且**迁移集合未变**：复位 `current` 并重启回旧版本。切换后失败且**包含迁移**：保留新产物（只回退指针会与已应用的 schema 冲突）、打印 `process logs` 入口、退出非 0 |
+
+运行变量白名单（只存路径与开关，不存密钥）：`KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR`、`KNOTED_INTELLIGENCE_BGE_M3_DIR`（这两个缺失时脚本在切换前拒绝）、`KNOTED_SEARCH_ENABLED`、`KNOTED_SEARCH_CREDENTIAL_FILE`、`KNOTED_VECTORS_ENABLED`、`KNOTED_OFFICE_ORIGIN`、`KNOTED_OFFICE_JWT_SECRET_FILE`、`KNOTED_CHAT_LOCAL_BASE_URL`、`KNOTED_CHAT_LOCAL_MODEL`、`KNOTED_CHAT_LOCAL_CREDENTIAL_FILE`。
+
+其它可覆盖项（默认值即本机 dev）：`KNOTED_INSTANCE_ROOT`、`KNOTED_DEPLOY_RUNTIME_PARENT`、`KNOTED_DEPLOY_PROC_ROOT`、`KNOTED_DEPLOY_BUILD_CMD`、`KNOTED_DEPLOY_READY_TIMEOUT`（默认 180s）、`KNOTED_BUILD_ROOT`、`CARGO_BUILD_JOBS`、`KNOTED_API_PORT`、`KNOTED_INTELLIGENCE_PORT`、`KNOTED_HTTPS_PORT`、`KNOTED_HTTPS_DOMAIN`。
+
+不做：数据库/assets 备份、历史产物回收（`runtime/` 下目录只增不减，需人工清理）、独立的 `--rollback`、生产实例。跨迁移发布前需要一致备份时按 [ADR 0011](../../decisions/0011-consistent-backup-and-isolated-restore.md) 单独执行。
+
+显式传一个比当前更旧、且迁移集合也不同的提交不属于支持场景：`sqlx migrate run` 会拒绝“源里缺少已应用迁移”，部署会在 readiness 预算（默认 180s）内空等后报失败并保留旧指针，需要人工恢复。
 
 ## /etc/nixos 交接
 

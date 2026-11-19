@@ -9,6 +9,7 @@
 #
 # 常用命令：
 #   pnpm pc doctor                      # 自检配置/端口/依赖
+#   pnpm deploy:dev                     # 取最新主线：构建固定产物 → 切换 current → 重启 → 验证
 #   pnpm pc up -D                       # 后台启动（prepare → migrate → api/worker）
 #   pnpm pc process list                # 进程状态
 #   pnpm pc process restart knoted-api  # 只重启 API（不重跑迁移）
