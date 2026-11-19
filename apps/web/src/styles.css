@@ -19,6 +19,13 @@
   --mt-focus: var(--color-accent-soft);
 }
 
+/* The published solid variant uses --mt-fg for its fill. Scope the accent
+   to workspace actions and explicit page primaries, not body/portal text. */
+.workspace-content .mt-btn-solid,
+.page-primary {
+  --mt-fg: var(--color-accent);
+}
+
 @theme {
   --font-sans:
     system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
@@ -35,6 +42,64 @@
   --color-accent-soft: #e3f0ee;
 
   --radius-panel: 0.75rem;
+}
+
+/* Application page composition. The mtone Content remains the scroll owner. */
+@layer components {
+  .workspace-content {
+    container: workspace / inline-size;
+  }
+
+  .workspace-frame {
+    min-width: 0;
+    max-width: 70rem;
+    margin-inline: auto;
+    padding: 0.75rem;
+  }
+
+  .workspace-frame--wide {
+    max-width: none;
+  }
+
+  @container workspace (min-width: 48rem) {
+    .workspace-frame {
+      padding: 1.5rem;
+    }
+  }
+
+  .reading-measure {
+    max-width: 68ch;
+  }
+
+  .page-title,
+  .workspace-content h1 {
+    font-size: clamp(1.5rem, 1.375rem + 0.5vw, 1.75rem);
+    font-weight: 600;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+  }
+
+  .section-title {
+    font-size: 1.125rem;
+    font-weight: 600;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+
+  .page-link {
+    color: var(--color-accent);
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+  }
+
+  .page-link:focus-visible,
+  .workspace-content:focus-visible {
+    outline: 2px solid var(--color-accent);
+  }
+
+  .workspace-content:focus-visible {
+    outline-offset: -2px;
+  }
 }
 
 @layer base {

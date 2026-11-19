@@ -40,6 +40,7 @@ export function createAppRouter(
     context: bundle,
     history: options.history,
     defaultPendingMs: 0,
+    scrollRestoration: true,
     scrollToTopSelectors: ["[data-workspace-content]"],
   });
   return router;

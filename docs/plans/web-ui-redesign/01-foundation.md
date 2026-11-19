@@ -2,6 +2,8 @@
 
 **领取条件** 首卡，由一名 Web Agent 负责共享样式与路由壳。输入为总方案、既有 [AdminLayout 设计](../2026-11-19-mtone-admin-layout-design.md)、[UI 指南](../../development/ui-mtone.md) 与 [ADR 0002](../../decisions/0002-mtone-ui-ownership.md)。产物是后续各卡可直接消费的应用布局及对照样例。
 
+**实施记录** [#249](https://github.com/xingjianxu/knoted/issues/249) · [浏览器对照和验证](evidence/01-foundation.md)。
+
 ## 现状与拟定布局
 
 `apps/web/src/routes/_authenticated.tsx` 已使用 fullHeight、可折叠 Sider、Header 和独立滚动的 Content。顶栏只有退出按钮；页内标题从裸 h1 到 text-2xl 不等。庞大的详情表单与简短的入口页目前共享相同的内容边距。根错误与 404 均有独立 main。

@@ -1,13 +1,16 @@
 import {
   createFileRoute,
+  Link,
   Outlet,
+  useElementScrollRestoration,
   useNavigate,
   useRouterState,
   useRouter,
 } from "@tanstack/react-router";
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { AdminLayout, Alert, Button, NavGroup, NavItem } from "@bixlab/mtone";
 import {
+  ArrowLeft,
   BookOpen,
   FolderKanban,
   House,
@@ -30,8 +33,18 @@ function Shell() {
   const navigate = useNavigate();
   const router = useRouter();
   const pathname = useRouterState({
-    select: (state) => state.location.pathname,
+    select: (state) => state.location.pathname.replace(/\/$/, "") || "/",
   });
+  const collection = useRouterState({
+    select: ({ matches }) => {
+      if (matches.some(({ routeId }) => routeId === "/_authenticated/projects/$projectId")) return "/projects";
+      if (matches.some(({ routeId }) => routeId === "/_authenticated/tasks/$taskId")) return "/tasks";
+      return null;
+    },
+  });
+  // The existing tasks route hosts both the list and the board.
+  const wide = /^\/(notes|tasks|chat)(?:\/|$)/.test(pathname);
+  const frame = useWorkspaceScrollFrame();
   const [busy, setBusy] = useState(false);
   const blockedLogout = useRef<(() => void) | null>(null);
   const [error, setError] = useState("");
@@ -66,6 +79,13 @@ function Shell() {
   }
   return (
     <AdminLayout fullHeight>
+      <a href="#workspace-content" className="page-link sr-only z-50 bg-surface p-3 focus:not-sr-only focus:fixed focus:top-2 focus:left-2"
+        onClick={(event) => {
+          const content = document.getElementById("workspace-content");
+          if (!content) return;
+          event.preventDefault();
+          content.focus({ preventScroll: true });
+        }}>跳到主要内容</a>
       <AdminLayout.Sider
         logo={<strong>Knoted</strong>}
         collapsedLogo={<strong><span aria-hidden="true">K</span><span className="sr-only">Knoted</span></strong>}
@@ -98,16 +118,70 @@ function Shell() {
         </nav>
       </AdminLayout.Sider>
       <AdminLayout className="min-w-0 flex-1">
-        <AdminLayout.Header extra={
-          <Button disabled={busy} onClick={() => void logout()}>退出登录</Button>
-        } />
-        <AdminLayout.Content data-workspace-content className="p-3 sm:p-6">
-          {error && <Alert tone="error">{error}</Alert>}
-          <NotesNavigationBlocked.Provider value={() => blockedLogout.current?.()}>
-            <Outlet />
-          </NotesNavigationBlocked.Provider>
+        <AdminLayout.Header className="px-3 sm:px-6">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            {collection && (
+              <Link className="page-link inline-flex items-center gap-1" to={collection} activeOptions={{ exact: true }}>
+                <ArrowLeft aria-hidden="true" size={16} />
+                {collection === "/projects" ? "返回项目" : "返回事项"}
+              </Link>
+            )}
+            <Button className="ms-auto" loading={busy} onClick={() => void logout()}>退出登录</Button>
+          </div>
+        </AdminLayout.Header>
+        <AdminLayout.Content id="workspace-content" tabIndex={-1} data-workspace-content
+          data-scroll-restoration-id="workspace" className="workspace-content bg-canvas p-0">
+          <div ref={frame} className={wide ? "workspace-frame workspace-frame--wide" : "workspace-frame"}>
+            {error && <div className="mb-4"><Alert tone="error">{error}</Alert></div>}
+            <NotesNavigationBlocked.Provider value={() => blockedLogout.current?.()}>
+              <Outlet />
+            </NotesNavigationBlocked.Provider>
+          </div>
         </AdminLayout.Content>
       </AdminLayout>
     </AdminLayout>
   );
+}
+
+function useWorkspaceScrollFrame() {
+  const frame = useRef<HTMLDivElement>(null);
+  const entry = useRouterState({
+    select: ({ location, resolvedLocation }) =>
+      location.state.__TSR_key === resolvedLocation?.state.__TSR_key ? location.state.__TSR_key : undefined,
+  });
+  const hasTarget = useRouterState({
+    select: ({ location }) => Boolean(location.hash ||
+      (location.pathname.startsWith("/chat/") && typeof location.search.message === "string")),
+  });
+  const savedTop = useElementScrollRestoration({ id: "workspace" })?.scrollY ?? 0;
+
+  useLayoutEffect(() => {
+    const body = frame.current;
+    const viewport = body?.parentElement;
+    if (!entry || !body || !viewport || !savedTop || hasTarget || typeof ResizeObserver === "undefined") return;
+    const fits = () => viewport.scrollHeight - viewport.clientHeight >= savedTop;
+    if (fits()) return;
+
+    // The router may restore while this entry is still showing a short
+    // loading state. Retry once it fits, unless the user takes over first.
+    const listeners = new AbortController();
+    const observer = new ResizeObserver(() => {
+      if (!fits()) return;
+      cancel();
+      viewport.scrollTop = savedTop;
+    });
+    function cancel() {
+      observer.disconnect();
+      listeners.abort();
+    }
+    observer.observe(body);
+    observer.observe(viewport);
+    const options = { capture: true, passive: true, signal: listeners.signal };
+    for (const event of ["wheel", "pointerdown", "touchstart", "keydown"]) {
+      window.addEventListener(event, cancel, options);
+    }
+    return cancel;
+  }, [entry, hasTarget, savedTop]);
+
+  return frame;
 }

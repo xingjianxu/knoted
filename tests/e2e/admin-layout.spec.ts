@@ -42,7 +42,11 @@ async function mockWorkspace(page: Page, authenticated = true) {
         } });
       case "/api/v1/tags":
       case "/api/v1/projects":
+      case "/api/v1/tasks":
         return route.fulfill({ json: { items: [], next_cursor: null } });
+      case `/api/v1/projects/${fixtureId(201)}`:
+      case `/api/v1/tasks/${fixtureId(201)}`:
+        return route.fulfill({ status: 404, json: { code: "not_found", message: "不存在" } });
       case "/api/v1/chat/sessions":
         return route.fulfill({ json: { items: [chat], next_cursor: null } });
       case `/api/v1/chat/sessions/${chat.id}`:
@@ -89,6 +93,22 @@ test("窄屏图标导航可通过键盘打开页面，并可在桌面折叠或�
   await expect(collapse).toHaveAttribute("aria-expanded", "true");
 });
 
+test("短视口可逐个 Tab 到所有收起的导航项", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 280 });
+  await mockWorkspace(page);
+  await page.goto("/");
+  const nav = page.getByRole("navigation", { name: "主导航" });
+  await expect(nav.getByRole("button", { name: "概览" })).toHaveAttribute("aria-current", "page");
+  await page.getByRole("link", { name: "跳到主要内容" }).focus();
+  for (const name of ["概览", "笔记", "项目", "事项", "回收站", "文件", "搜索", "问答", "凭据与会话"]) {
+    await page.keyboard.press("Tab");
+    const item = nav.getByRole("button", { name });
+    await expect(item).toBeFocused();
+    await expect(item).toBeInViewport();
+    await expect(item).toHaveCSS("outline-style", "solid");
+  }
+});
+
 test("主区独立滚动并在切换到另一个长页面时归顶", async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 480 });
   await mockWorkspace(page);
@@ -110,7 +130,61 @@ test("主区独立滚动并在切换到另一个长页面时归顶", async ({ pa
   await expect(page.getByRole("heading", { name: "回收事项 20", exact: true })).toBeAttached();
   await expect.poll(() => main.evaluate((el) => el.scrollTop)).toBe(0);
   await expect(page.getByRole("heading", { name: "回收站", exact: true })).toBeInViewport();
+
+  // Trash retains its cached rows while the dashboard deliberately hides
+  // stale results during refetch. Restore the entry whose rows stay mounted.
+  await main.evaluate((el) => { el.scrollTop = 240; });
+  await expect.poll(() => main.evaluate((el) => el.scrollTop)).toBe(240);
+  await nav.getByRole("button", { name: "概览" }).click();
+  await expect(main.getByRole("button", { name: "打开笔记 最近笔记 10" })).toBeAttached();
+  await page.goBack();
+  // Trash keeps its rows but briefly inserts a refresh spinner above them;
+  // scroll anchoring may adjust the restored offset when that line disappears.
+  await expect.poll(() => main.evaluate((el) => Math.abs(el.scrollTop - 240))).toBeLessThan(40);
+  await page.goForward();
+  await expect.poll(() => main.evaluate((el) => el.scrollTop)).toBe(0);
 });
+
+for (const resize of [false, true]) {
+  test(`概览${resize ? "视口缩短" : "重新取数"}后恢复历史滚动位置`, async ({ page }) => {
+    const viewport = { width: 1024, height: 480 };
+    await page.setViewportSize(viewport);
+    await mockWorkspace(page);
+    let releaseDashboard: () => void = () => {};
+    let holdDashboard = false;
+    const pending = new Promise<void>((resolve) => { releaseDashboard = resolve; });
+    await page.route("**/api/v1/dashboard", async (route) => {
+      if (holdDashboard) await pending;
+      await route.fallback();
+    });
+    await page.goto("/");
+    const main = page.getByRole("main");
+    const overview = main.getByRole("heading", { name: "工作概览" });
+    await expect(overview).toBeVisible();
+    const maxScroll = await main.evaluate((el) => el.scrollHeight - el.clientHeight);
+    await main.evaluate((el) => new Promise<void>((resolve) => {
+      el.addEventListener("scroll", () => resolve(), { once: true });
+      el.scrollTop = 320;
+    }));
+    await expect.poll(() => main.evaluate((el) => el.scrollTop)).toBe(320);
+    await page.getByRole("button", { name: "回收站" }).click();
+    await expect(main.getByRole("heading", { name: "回收事项 20", exact: true })).toBeAttached();
+    if (resize) await page.setViewportSize({ ...viewport, height: viewport.height + maxScroll - 160 });
+    holdDashboard = true;
+    try {
+      await page.goBack();
+      await expect(overview).toHaveCount(0);
+    } finally {
+      releaseDashboard();
+    }
+    await expect(overview).toBeVisible();
+    if (resize) {
+      expect(await main.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeLessThan(320);
+      await page.setViewportSize(viewport);
+    }
+    await expect.poll(() => main.evaluate((el) => el.scrollTop)).toBe(320);
+  });
+}
 
 test("搜索跳转到已缓存的问答消息时目标留在视口内", async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 640 });
@@ -122,7 +196,9 @@ test("搜索跳转到已缓存的问答消息时目标留在视口内", async ({
 
   await page.getByRole("navigation", { name: "主导航" }).getByRole("button", { name: "搜索" }).click();
   await page.getByRole("searchbox", { name: "搜索词" }).fill("验收消息");
-  await page.getByRole("search", { name: "搜索资料" }).getByRole("button", { name: "搜索" }).click();
+  const searchButton = page.getByRole("search", { name: "搜索资料" }).getByRole("button", { name: "搜索" });
+  await expect(searchButton).toHaveCSS("background-color", "rgb(47, 111, 106)");
+  await searchButton.click();
   await page.getByRole("link", { name: "目标问答消息" }).click();
   await expect(page).toHaveURL((url) => url.pathname === `/chat/${chat.id}` && url.searchParams.get("message") === targetMessageId);
   await expect(message).toBeFocused();
@@ -136,4 +212,73 @@ test("未认证用户只看到独立登录页", async ({ page }) => {
   await expect(page).toHaveURL(/\/login\?/);
   await expect(page.getByRole("navigation", { name: "主导航" })).toHaveCount(0);
   await expect(page.getByRole("main")).toHaveCount(1);
+});
+
+for (const [path, label] of [["projects", "项目"], ["tasks", "事项"]]) {
+  test(`${label}详情在 320px 可通过顶栏返回清单`, async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 640 });
+    await mockWorkspace(page);
+    await page.goto(`/${path}/${fixtureId(201)}`);
+    const banner = page.getByRole("banner");
+    const back = banner.getByRole("link", { name: `返回${label}` });
+    await expect(back).toBeInViewport();
+    await expect(back).not.toHaveAttribute("aria-current");
+    await expect(banner.getByRole("button", { name: "退出登录" })).toBeInViewport();
+    await expect(page.getByRole("navigation", { name: "主导航" }).getByRole("button", { name: label }))
+      .toHaveAttribute("aria-current", "page");
+    await back.focus();
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(new RegExp(`/${path}$`));
+    await expect(back).toHaveCount(0);
+  });
+}
+
+test("跳过导航后焦点进入工作区主体", async ({ page }) => {
+  await mockWorkspace(page);
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "工作概览" })).toBeVisible();
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("link", { name: "跳到主要内容" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("main")).toBeFocused();
+  await expect(page).toHaveURL(/\/$/);
+});
+
+test("根加载失败可重试，等待与再次失败时不丢键盘焦点", async ({ page }) => {
+  await mockWorkspace(page);
+  let attempts = 0;
+  let finishFailure: () => void = () => {};
+  const pending = new Promise<void>((resolve) => { finishFailure = resolve; });
+  await page.route("**/api/v1/auth/session", async (route) => {
+    attempts++;
+    if (attempts === 2) await pending;
+    if (attempts < 3) return route.fulfill({ status: 503, json: { code: "unavailable", message: "不可用" } });
+    return route.fallback();
+  });
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "无法加载页面" })).toBeVisible();
+  const retry = page.getByRole("button", { name: "重试", exact: true });
+  await retry.focus();
+  await page.keyboard.press("Enter");
+  try {
+    await expect(page.getByRole("status")).toHaveText("正在重试…");
+    await expect(retry).toBeFocused();
+    await expect(retry).toBeDisabled();
+  } finally {
+    finishFailure();
+  }
+  await expect(retry).toBeEnabled();
+  await expect(retry).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("heading", { name: "工作概览" })).toBeVisible();
+});
+
+test("404 用真实的首页链接退出错误页", async ({ page }) => {
+  await mockWorkspace(page);
+  await page.goto("/not-a-route");
+  await expect(page.getByRole("main").getByRole("heading", { name: "页面不存在" })).toBeVisible();
+  const home = page.getByRole("link", { name: "返回首页" });
+  await expect(home).toHaveAttribute("href", "/");
+  await home.click();
+  await expect(page.getByRole("heading", { name: "工作概览" })).toBeVisible();
 });
