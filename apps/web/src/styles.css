@@ -14,6 +14,11 @@
   font-family: var(--font-sans);
 }
 
+/* mtone draws the focus outline inside the solid button's dark fill. */
+.mt-btn-solid {
+  --mt-focus: var(--color-accent-soft);
+}
+
 @theme {
   --font-sans:
     system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,

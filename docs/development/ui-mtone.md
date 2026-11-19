@@ -13,7 +13,7 @@
 
 ## 现状与目标
 
-当前精确依赖为 **`@bixlab/mtone@0.4.0`**（`apps/web/package.json` / `pnpm-lock.yaml`），升级适配与消费复验见 [0.4.0 证据](../plans/knoted-v1/evidence/mtone-0.4.0.md)。以下 T17—T19 的 0.2.0 版本、0.3.0 升级说明和集成 SHA 是历史记录，不代表当前锁版。
+当前精确依赖为 **`@bixlab/mtone@0.5.0`**（`apps/web/package.json` / `pnpm-lock.yaml`）。下文保留 T17—T19 的原始接入与各版本升级记录。
 
 T17 已精确接入 npm `@bixlab/mtone@0.2.0`，迁移 App 静态类并移除 `packages/ui`；**PR #42 已普通 merge 至主线 `e3e1db2`，独立审查/主线验证/任务清理完成**。生产入口使用应用层 `UiProvider` 配置公开 `MtoneProvider` 的 locale/density/tokens，不转发控件 API；CSS 从应用样式入口导入。基础表单组合仅在测试夹具中，不建立生产演示路由或通用包装库。证据见 [T17](../plans/knoted-v1/evidence/t17.md)。
 
@@ -51,7 +51,19 @@ T17 实测：旧 `cn('p-2', 'p-4')` 返回 `p-4`，mtone 的 `cn` 返回 `p-2 p-
 
 只使用 npm 已发布版本作为正式依赖；不以浮动 latest、Git、file/link、未发布 tarball 交付。不修改 API 或业务语义来迁就组件。
 
-## 0.4.0 升级与当前消费约定
+## 0.5.0 升级与当前消费约定
+
+正式 npm 发布包的根入口、CSS 导出路径、直接依赖和 React peers 与 0.4.0 相同。锁文件仅升级 mtone，并把该包的精确 release-age 例外同步到 0.5.0。 [npm 元数据](https://registry.npmjs.org/@bixlab%2fmtone/0.5.0) · [发布说明](https://github.com/xingjianxu/mtone/releases/tag/v0.5.0)
+
+- Input/Textarea 的原生事件、ref 与标签关联通过消费测试。现有应用样式没有依赖新版调整的 DOM 结构。现有 List 使用子节点模式，编辑器 DropdownMenu 的操作项仍受支持。 [迁移指南](https://github.com/xingjianxu/mtone/blob/v0.5.0/docs/MIGRATION.md)
+- 更新 Chromium 断言以检查新版可见焦点轮廓，以及包含当前可见弹层的容器。键盘提交、弹层关闭后的焦点恢复、禁用菜单项、树与游标行为均通过原有消费测试。实际构建页面用合成 API 数据对照 390、768、1440 像素宽度，搜索、事项详情和问答均无横向溢出。搜索框保留放大镜、清空入口和提交按钮位置，清空草稿与 Enter 提交通过浏览器对照。
+- 新版把实心按钮的焦点轮廓移到深色填充内侧，原主题色与填充仅有 2.53:1 的对比度。通过 `--mt-focus` 给实心按钮使用浅色主题值，Chromium 核验键盘焦点在常态和悬停时均达到 3:1。 [WCAG 非文本对比度说明](https://www.w3.org/WAI/WCAG22/Understanding/non-text-contrast.html#relationship-with-focus-visible)
+- 若后续优化窄屏体验，优先考虑折叠常驻导航与低频搜索筛选项。390 像素下侧栏在两个版本均占 119 像素，搜索结果排在整组筛选字段之后，首条结果链接在样例中位于页面约 844 像素处。
+- 较深的笔记目录可评估使用新版 TreeSelect 展示父笔记层级，帮助区分同名笔记。迁移时仍由应用校验根目录、当前笔记及其后代的可选规则，后端继续执行完整性校验。 [发布包组件参考](https://unpkg.com/@bixlab/mtone@0.5.0/llms.txt)
+
+升级与回归记录见 [Issue #240](https://github.com/xingjianxu/knoted/issues/240)。
+
+## 0.4.0 升级记录
 
 已亲查正式 npm 发布包及其 README、llms.txt、公开声明与 CSS；exports、直接依赖与 React/ReactDOM peers 相对 0.3.0 不变，应用继续使用 React 19.3.1、公开根导出与 `@bixlab/mtone/styles.css`。lock 只替换 mtone 版本与 integrity，不升级其他依赖。
 
