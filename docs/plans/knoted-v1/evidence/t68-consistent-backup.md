@@ -7,7 +7,7 @@
 | 实际执行 | 结果 |
 | --- | --- |
 | `cargo fmt --check` | 任务分支与主线均退出 0 |
-| `cargo test --locked --workspace` | 任务分支与主线均为 537 项通过，0 失败，1 项既有忽略 |
+| `cargo test --locked --workspace` | 任务分支与主线均为 529 项通过，0 失败，1 项既有忽略 |
 | `cargo clippy --locked --workspace --all-targets -- -D warnings` | 任务分支与主线均退出 0 |
 | `ruff check services/intelligence` 和 `ruff format --check services/intelligence` | 退出 0，30 份文件符合格式 |
 | `python -m pytest -q services/intelligence/tests` | 177 项通过，保留 9 项第三方弃用提示 |
