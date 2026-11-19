@@ -302,8 +302,8 @@ bind = '127.0.0.1:17685'
 [assets]
 root = {:?}
 [auth]
-origin = 'https://localhost:15881'
-rp_id = 'localhost'
+origin = 'https://source.knoted.test:15881'
+rp_id = 'knoted.test'
 ",
             pg.url("archive_source"),
             image_root
@@ -329,11 +329,20 @@ rp_id = 'localhost'
     .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let engine_pending = pending.clone();
     let engine = tokio::spawn(async move {
         let app = axum::Router::new().route(
             "/indexes",
             axum::routing::get(|| async {
                 axum::Json(serde_json::json!({"results":[],"total":0}))
+            }),
+        );
+        let app = app.route(
+            "/tasks",
+            axum::routing::get(move || {
+                let count = u8::from(engine_pending.load(std::sync::atomic::Ordering::SeqCst));
+                async move { axum::Json(serde_json::json!({"results":[], "total": count})) }
             }),
         );
         axum::serve(listener, app).await.unwrap();
@@ -355,8 +364,8 @@ root={:?}
 [files]
 staging_root={:?}
 [auth]
-origin='https://localhost:15882'
-rp_id='localhost'
+origin='https://restore.knoted.test:15882'
+rp_id='knoted.test'
 [search]
 enabled=true
 base_url='http://{addr}'
@@ -397,12 +406,16 @@ base_url='http://{python}'
     .unwrap();
     assert!(!exists);
     fs::write(&archive_image, payload).unwrap();
+    assert!(!restore().status.success());
+    assert!(!target_root.exists());
+    pending.store(false, std::sync::atomic::Ordering::SeqCst);
     for invalid_config in [
         config.replace(&pg.url("isolated-test"), &pg.url("archive_source")),
         config.replace(&python.to_string(), "127.0.0.1:15603"),
         config.replace(&addr.to_string(), "127.0.0.2:15605"),
         config.replace("restored_documents", "knoted_documents"),
-        config.replace("localhost:15882", "localhost:15881"),
+        config.replace("restore.knoted.test:15882", "source.knoted.test:15881"),
+        config.replace("restore.knoted.test:15882", "evilknoted.test:15882"),
     ] {
         fs::write(&target_config, invalid_config).unwrap();
         assert!(!restore().status.success());

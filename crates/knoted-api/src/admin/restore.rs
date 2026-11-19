@@ -187,7 +187,7 @@ fn isolated_config(
     let old_origin = Url::parse(&source.origin).map_err(|_| "invalid backup origin")?;
     if origin == old_origin
         || origin.scheme() != "https"
-        || origin.host_str() != Some(source.rp_id.as_str())
+        || knoted_core::auth::webauthn::build_webauthn(&config.auth).is_err()
         || config.auth.rp_id != source.rp_id
     {
         return Err("restore requires a separate HTTPS origin under the original RP ID");
@@ -255,22 +255,28 @@ async fn empty_engine(config: &AppConfig) -> Result<(), &'static str> {
         .timeout(Duration::from_secs(5))
         .build()
         .map_err(|_| refused)?;
-    let body = client
-        .get(format!(
-            "{}/indexes?limit=1",
-            config.search.base_url.trim_end_matches('/')
-        ))
-        .bearer_auth(config.search_api_key().ok_or(refused)?)
-        .send()
-        .await
-        .map_err(|_| refused)?
-        .error_for_status()
-        .map_err(|_| refused)?
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|_| refused)?;
-    if body["total"].as_u64() != Some(0) {
-        return Err(refused);
+    let origin = config.search.base_url.trim_end_matches('/');
+    let key = config.search_api_key().ok_or(refused)?;
+    for page in [
+        "indexes?limit=1",
+        "tasks?statuses=enqueued,processing&limit=1",
+    ] {
+        let body = client
+            .get(format!("{origin}/{page}"))
+            .bearer_auth(&key)
+            .send()
+            .await
+            .map_err(|_| refused)?
+            .error_for_status()
+            .map_err(|_| refused)?
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|_| refused)?;
+        if body["total"].as_u64() != Some(0)
+            || !body["results"].as_array().is_some_and(Vec::is_empty)
+        {
+            return Err(refused);
+        }
     }
     Ok(())
 }
