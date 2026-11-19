@@ -211,6 +211,14 @@ impl Default for SearchConfig {
     }
 }
 impl SearchConfig {
+    pub(crate) fn valid_index_uid(uid: &str) -> bool {
+        !uid.is_empty()
+            && uid.len() <= 400
+            && uid
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    }
+
     fn validate(&self) -> Result<(), ConfigError> {
         let invalid = |message: &'static str| ConfigError::Invalid {
             field: "search",
@@ -238,12 +246,7 @@ impl SearchConfig {
         }
         // Both generation UIDs become URL path segments.
         for uid in [&self.index_uid, &self.rag_chunk_index_uid] {
-            if uid.is_empty()
-                || uid.len() > 400
-                || !uid
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-            {
+            if !Self::valid_index_uid(uid) {
                 return Err(invalid(
                     "index_uid and rag_chunk_index_uid require 1-400 alphanumeric, `-` or `_` characters",
                 ));

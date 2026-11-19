@@ -685,6 +685,10 @@ impl MeiliClient {
         if !config.enabled {
             return Err(DomainError::Disabled);
         }
+        Self::connect(config, api_key)
+    }
+
+    fn connect(config: &SearchConfig, api_key: Option<&str>) -> Result<Self, DomainError> {
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(HTTP_TIMEOUT)
@@ -795,8 +799,51 @@ impl MeiliClient {
         result
     }
 
-    /// The maintenance lock excludes new local submissions during this read.
-    pub async fn queue_is_empty(&self, uid: &str) -> Result<bool, DomainError> {
+    /// Probe historical targets even if new business writes are disabled.
+    /// The caller holds the exclusive maintenance guard throughout these GETs.
+    pub(crate) async fn queues_are_empty(
+        ctx: &AppContext,
+        indexes: std::collections::BTreeSet<String>,
+    ) -> Result<bool, DomainError> {
+        if ctx.search().api_key_credential.is_some() && ctx.search_api_key().is_none() {
+            return Err(DomainError::Unavailable);
+        }
+        let client = Self::connect(ctx.search(), ctx.search_api_key())?;
+        for uid in indexes {
+            if !client.queue_is_empty(&uid).await? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    async fn queue_is_empty(&self, uid: &str) -> Result<bool, DomainError> {
+        if !SearchConfig::valid_index_uid(uid) {
+            return Err(DomainError::Unavailable);
+        }
+        // Meili filters /tasks results *and total* by the credential's index
+        // scope. GET /indexes/{uid} checks that scope before looking up the UID.
+        let index = self
+            .request(reqwest::Method::GET, &format!("indexes/{uid}"))
+            .send()
+            .await
+            .map_err(|_| DomainError::Unavailable)?;
+        let status = index.status();
+        let body: Value = index.json().await.map_err(|_| DomainError::Unavailable)?;
+        let authorized = match status {
+            reqwest::StatusCode::OK => body["uid"].as_str() == Some(uid),
+            reqwest::StatusCode::NOT_FOUND => {
+                body["code"] == "index_not_found"
+                    && body["type"] == "invalid_request"
+                    && body["message"] == format!("Index `{uid}` not found.")
+                    && body["link"] == "https://docs.meilisearch.com/errors#index_not_found"
+            }
+            _ => false,
+        };
+        if !authorized {
+            return Err(DomainError::Unavailable);
+        }
+        // An authorized absent index may still have a queued creation task.
         let response = self
             .send(self.request(reqwest::Method::GET, "tasks").query(&[
                 ("indexUids", uid),
