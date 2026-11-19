@@ -280,6 +280,26 @@ async fn t69_1_t69_2_t69_3_restore_real_dump_and_assets() {
         .execute(&source)
         .await
         .unwrap();
+    // The archived database once published to A, moved to B, and is now
+    // being restored into a new engine whose destination names are A again.
+    let key = knoted_core::search::meili::document_key(
+        knoted_core::search::meili::SourceType::Project,
+        project,
+        1,
+    );
+    let old_publication: Uuid = sqlx::query_scalar(
+        "INSERT INTO jobs(kind,state,idempotency_key) VALUES('fulltext.publish','failed',$1) RETURNING id",
+    ).bind(format!("{key}:restored_documents:0")).fetch_one(&source).await.unwrap();
+    let other_derived = [
+        "rag_chunks.build",
+        "rag_chunks.publish",
+        "rag_vectors.embed",
+        "fulltext.cleanup",
+    ];
+    for kind in other_derived {
+        sqlx::query("INSERT INTO jobs(kind,state,idempotency_key) VALUES ($1,'succeeded','previous-destination')")
+            .bind(kind).execute(&source).await.unwrap();
+    }
     let session = sessions::create_session(
         &mut source.acquire().await.unwrap(),
         owner,
@@ -329,24 +349,6 @@ rp_id = 'knoted.test'
     .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let engine_pending = pending.clone();
-    let engine = tokio::spawn(async move {
-        let app = axum::Router::new().route(
-            "/indexes",
-            axum::routing::get(|| async {
-                axum::Json(serde_json::json!({"results":[],"total":0}))
-            }),
-        );
-        let app = app.route(
-            "/tasks",
-            axum::routing::get(move || {
-                let count = u8::from(engine_pending.load(std::sync::atomic::Ordering::SeqCst));
-                async move { axum::Json(serde_json::json!({"results":[], "total": count})) }
-            }),
-        );
-        axum::serve(listener, app).await.unwrap();
-    });
     let target_config = home.join("destination.toml");
     let target = home.join("descriptor.toml");
     let available_api = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -408,7 +410,15 @@ base_url='http://{python}'
     fs::write(&archive_image, payload).unwrap();
     assert!(!restore().status.success());
     assert!(!target_root.exists());
-    pending.store(false, std::sync::atomic::Ordering::SeqCst);
+    // An occupied port may forward to a shared engine. Refuse it before
+    // opening a connection that could carry the target credential.
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(10), listener.accept())
+            .await
+            .is_err()
+    );
+    drop(listener);
+
     for invalid_config in [
         config.replace(&pg.url("isolated-test"), &pg.url("archive_source")),
         config.replace(&python.to_string(), "127.0.0.1:15603"),
@@ -505,6 +515,21 @@ base_url='http://{python}'
         .await
         .unwrap()
     );
+    assert!(
+        sqlx::query_scalar::<_, bool>("SELECT idempotency_key IS NULL FROM jobs WHERE id=$1",)
+            .bind(old_publication)
+            .fetch_one(&restored)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT FROM jobs WHERE idempotency_key='previous-destination')",
+        )
+        .fetch_one(&restored)
+        .await
+        .unwrap()
+    );
     let auth_state = |pool: sqlx::PgPool| async move {
         sqlx::query_as::<_, (i64, i64)>(
             "SELECT (SELECT count(*) FROM credential_tokens WHERE consumed_at IS NULL),
@@ -519,5 +544,5 @@ base_url='http://{python}'
     assert!(sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT FROM fulltext_publications p JOIN source_documents s ON s.id=p.document_id
                JOIN jobs j ON j.id=p.job_id WHERE s.source_id=$1 AND p.index_uid='restored_documents' AND j.state='queued')")
         .bind(project).fetch_one(&restored).await.unwrap());
-    engine.abort();
+    assert_eq!(fs::read_dir(target_root.join("meili")).unwrap().count(), 0);
 }

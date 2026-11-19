@@ -26,7 +26,9 @@ app_config = "/srv/knoted-rehearsal/config/run-01.toml"
 
 在目标应用配置中设置新数据库名，使用与原实例相同的 RP ID，并使用该 RP ID 域名或其子域名下的独立 HTTPS origin。目标 API 使用空闲的 loopback 监听地址。`assets.root`、`files.staging_root` 分别使用实例根下的 `assets`、`staging`。实例根的父目录须存在，实例根须为新路径。文件源仅可指向获授权的只读目录。目标 PostgreSQL 须支持 pgvector，操作者使用本机账号连接并具有建库权限。
 
-为演练单独配置 Python 服务和空的 Meilisearch 实例，分配独立的 loopback 端口、两个新的索引 UID 和独立生成的搜索凭据。旧归档不保存源凭据，密钥独立性由供应过程保证。恢复程序读取目标 Meilisearch 的索引清单和排队中、处理中的任务，均须为空。恢复期间目标 API 和 Python 端口须空闲，命令保留这两个监听地址直至结束。启动 Python 服务时将 `KNOTED_INTELLIGENCE_STATE_DIR` 设为新实例根下的 `python`，`KNOTED_INTELLIGENCE_STAGING_DIR` 设为新实例根下的 `staging`。模型共享只读。
+为演练分配三个独立、空闲的 loopback 地址给 API、Python 和 Meilisearch。命令在恢复期间占用这三个监听地址，直至数据库启用。为 Meilisearch 配置两个新的索引 UID，通过凭据文件提供独立生成的认证密钥。归档不含源凭据，密钥独立性由供应过程保证。
+
+恢复成功后，先单独启动目标 Meilisearch，将其 HTTP 地址设置为目标 `search.base_url` 对应的主机和端口，`MEILI_DB_PATH` 指向新实例根下的空 `meili` 目录，并从独立的安全凭据源设置 `MEILI_MASTER_KEY`。启动目标 Python 时将 `KNOTED_INTELLIGENCE_STATE_DIR` 设为新实例根下的 `python`，`KNOTED_INTELLIGENCE_STAGING_DIR` 设为新实例根下的 `staging`。确认两个服务就绪后再启动目标 API 和 Worker。模型共享只读。
 
 ```sh
 knoted-api admin restore --input /srv/backups/complete-01 --target /srv/knoted-rehearsal/config/target.toml
