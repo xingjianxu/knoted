@@ -31,6 +31,7 @@ export function T17Form() {
         </FormField>
         <Button
           type="submit"
+          variant="solid"
           disabled={mode === "disabled"}
           loading={mode === "loading"}
         >

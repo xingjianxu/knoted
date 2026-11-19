@@ -17,7 +17,29 @@ test("t17_1 label, Tab order, keyboard submit and real control styles", async ({
   await page.keyboard.press("Tab");
   await expect(save).toBeFocused();
   await expect(save).toHaveCSS("outline-style", "solid");
-  await expect(save).toHaveCSS("outline-width", "2px");
+  await expect(save).toHaveCSS("outline-width", "1px");
+  await expect(save).toHaveCSS("outline-offset", "-1px");
+  // mtone renders the ring inside the solid button, against its fill.
+  const focusContrast = () => save.evaluate((button) => {
+    const { backgroundColor, outlineColor } = getComputedStyle(button);
+    const luminance = (color: string) => {
+      const [red, green, blue] = color
+        .slice(4, -1)
+        .split(",")
+        .map((channel) => Number(channel) / 255)
+        .map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+      return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+    };
+    const background = luminance(backgroundColor);
+    const outline = luminance(outlineColor);
+    return (Math.max(background, outline) + 0.05) / (Math.min(background, outline) + 0.05);
+  });
+  await expect.poll(focusContrast).toBeGreaterThanOrEqual(3);
+  await save.hover();
+  await save.evaluate(async (button) => {
+    await Promise.all(button.getAnimations().map((animation) => animation.finished));
+  });
+  await expect.poll(focusContrast).toBeGreaterThanOrEqual(3);
   // Grid items blockify inline-flex to flex in computed styles.
   await expect(save).toHaveCSS("display", "flex");
   await expect(save).toHaveCSS("height", "28px");
@@ -80,7 +102,7 @@ test("t17_4 application system fonts and theme reach body-level scopes without r
   const scope = page.getByRole("note", { name: "body-level scope" });
   await expect(scope).toHaveCSS("font-family", /system-ui/);
   await expect(scope).toHaveCSS("color", "rgb(31, 41, 51)");
-  await expect(save).toHaveCSS("color", "rgb(31, 41, 51)");
+  await expect(save).toHaveCSS("background-color", "rgb(31, 41, 51)");
   expect(external).toEqual([]);
   expect(errors).toEqual([]);
 });

@@ -88,7 +88,7 @@ test("t18_2 Popover controlled close/Esc restore focus; outside click focuses it
   const trigger = page.getByRole("button", { name: "查看信息" });
   const popup = page.getByRole("dialog", { name: "笔记信息" });
   await trigger.click();
-  await expectPortal(popup, page.locator(".mt-positioner"), "1250");
+  await expectPortal(popup, page.locator(".mt-positioner").filter({ has: popup }), "1250");
   await expect(page.getByLabel("受控状态")).toContainText("Popover：true");
   await popup.getByRole("button", { name: "收起信息" }).click();
   await expect(popup).not.toBeVisible();
@@ -116,7 +116,7 @@ for (const source of ["dropdown", "context"] as const) {
       await page.keyboard.press("ArrowDown");
     }
     const menu = page.getByRole("menu");
-    await expectPortal(menu, page.locator(".mt-positioner"), "1250");
+    await expectPortal(menu, page.locator(".mt-positioner").filter({ has: menu }), "1250");
     const first = menu.getByRole("menuitem", { name: "打开笔记" });
     const disabled = menu.getByRole("menuitem", { name: "删除笔记" });
     const last = menu.getByRole("menuitem", { name: "归档笔记" });
