@@ -143,11 +143,11 @@ verify_runtime() {
 }
 
 render_template() {
-  # render_template <template> <output> <placeholder> <value> [<placeholder> <value> …]
-  local template=$1 output=$2
-  shift 2
+  # render_template <template> <placeholder> <value> [<placeholder> <value> …]
+  local template=$1
+  shift
   local content
-  content=$(cat "$template")
+  content=$(cat "$template") || return 1
   while [ $# -ge 2 ]; do
     content=${content//"$1"/$2}
     shift 2
@@ -155,6 +155,11 @@ render_template() {
   if [[ $content =~ @[A-Z_]+@ ]]; then
     die "模板渲染后仍有未替换占位符：$template"
   fi
+  printf '%s\n' "$content"
+}
+
+publish_config() {
+  local output=$1 content=$2
   (
     umask 077
     local tmp
@@ -270,23 +275,36 @@ chat_config_digest() {
 command_check_chat_config() {
   local desired active office search chat_local vectors=''
   resolve_config_blocks || return 1
+  render_config >/dev/null || return 1
   desired=${chat_local#$'\n'}
   active=$(active_chat_config) || return 1
   chat_config_digest "$desired" || return 1
   [[ $active == "$desired" ]] || return 3
 }
 
-# 仅从本脚本生成的固定格式读取上一个配置，供无迁移的部署失败时复原。
-command_active_chat_env() {
-  local block
-  block=$(active_chat_config) || return 1
-  [[ -n $block ]] || return 0
+# 只逆向读取本脚本生成的配置项，避免把待部署的 deploy.env 当作已应用值。
+command_active_runtime_env() {
+  [[ -e $config_file ]] || return 0
   awk '
-    /^base_url = ".*"$/ { print "KNOTED_CHAT_LOCAL_BASE_URL=" substr($0, 13, length($0)-13); count++ }
-    /^model = ".*"$/ { print "KNOTED_CHAT_LOCAL_MODEL=" substr($0, 10, length($0)-10); count++ }
-    /^credential_file = ".*"$/ { print "KNOTED_CHAT_LOCAL_CREDENTIAL_FILE=" substr($0, 20, length($0)-20); count++ }
-    END { if (count != 3) exit 1 }
-  ' <<< "$block"
+    function setting(key, value) {
+      sub(/^[^"]*"/, "", value); sub(/"$/, "", value)
+      print key "=" value
+    }
+    /^\[/ { section = $0 }
+    section == "[office]" && /^document_server_origin = ".*"$/ { setting("KNOTED_OFFICE_ORIGIN", $0) }
+    section == "[office]" && /^jwt_secret_file = ".*"$/ { setting("KNOTED_OFFICE_JWT_SECRET_FILE", $0) }
+    section == "[credentials]" && /^credential_file = ".*"$/ { search_path = $0 }
+    section == "[search]" && /^enabled = true$/ { search = 1 }
+    section == "[vectors]" && /^enabled = true$/ { vectors = 1 }
+    section == "[chat.local]" && /^base_url = ".*"$/ { setting("KNOTED_CHAT_LOCAL_BASE_URL", $0) }
+    section == "[chat.local]" && /^model = ".*"$/ { setting("KNOTED_CHAT_LOCAL_MODEL", $0) }
+    section == "[chat.local]" && /^credential_file = ".*"$/ { setting("KNOTED_CHAT_LOCAL_CREDENTIAL_FILE", $0) }
+    END {
+      print "KNOTED_SEARCH_ENABLED=" (search + 0)
+      if (search && search_path) setting("KNOTED_SEARCH_CREDENTIAL_FILE", search_path)
+      print "KNOTED_VECTORS_ENABLED=" (vectors + 0)
+    }
+  ' "$config_file"
 }
 
 # 准备和发布前检查用同一套验证；通过调用方的局部变量返回 TOML 片段。
@@ -301,26 +319,8 @@ resolve_config_blocks() {
   esac
 }
 
-command_prepare() {
-  # 顺序：守卫 → 验产物 → 验依赖 → 建目录 → 渲染，失败时不留半个实例。
-  guard_worktree
-  local revision
-  revision=$(verify_runtime)
-  log "固定产物 revision=$revision"
-  require_tools
-  local office search chat_local vectors=''
-  resolve_config_blocks
-  prepare_instance_root
-  install -d -m 0700 "$config_dir" "$state_dir" \
-    "$logs_dir" "$assets_dir" "$staging_dir" "$backups_dir" \
-    "$state_dir/intelligence" "$instance_root/cache/intelligence" "$instance_root/tmp/intelligence"
-
-  if [ -L "$config_file" ]; then
-    log "替换旧的 Nix store 配置链接：$config_file"
-  fi
-
-  check_ports
-  render_template "$script_dir/knoted.toml.tmpl" "$config_file" \
+render_config() {
+  render_template "$script_dir/knoted.toml.tmpl" \
     @API_PORT@ "$api_port" \
     @INTELLIGENCE_PORT@ "$intelligence_port" \
     @DATABASE_URL@ "$database_url" \
@@ -333,7 +333,25 @@ command_prepare() {
     @SEARCH_CONFIG@ "$search" \
     @VECTORS_CONFIG@ "$vectors" \
     @CHAT_LOCAL_CONFIG@ "$chat_local"
+}
 
+command_prepare() {
+  guard_worktree
+  local revision rendered office search chat_local vectors=''
+  revision=$(verify_runtime)
+  log "固定产物 revision=$revision"
+  require_tools
+  resolve_config_blocks
+  rendered=$(render_config)
+  check_ports
+  prepare_instance_root
+  install -d -m 0700 "$config_dir" "$state_dir" \
+    "$logs_dir" "$assets_dir" "$staging_dir" "$backups_dir" \
+    "$state_dir/intelligence" "$instance_root/cache/intelligence" "$instance_root/tmp/intelligence"
+  if [ -L "$config_file" ]; then
+    log "替换旧的 Nix store 配置链接：$config_file"
+  fi
+  publish_config "$config_file" "$rendered"
   log "prepare 完成：配置 $config_file；HTTPS 由宿主 Caddy 管理"
 }
 
@@ -411,7 +429,7 @@ esac
 case "$command" in
 prepare) command_prepare ;;
 check-chat-config) command_check_chat_config ;;
-active-chat-env) command_active_chat_env ;;
+active-runtime-env) command_active_runtime_env ;;
 migrate) command_migrate ;;
 api) start_rust_service knoted-api ;;
 worker) start_rust_service knoted-worker ;;
@@ -420,7 +438,7 @@ probe-intelligence) command_probe_intelligence ;;
 probe-api) command_probe_api ;;
 paths) command_paths ;;
 *)
-  echo "usage: service.sh {prepare|check-chat-config|active-chat-env|migrate|api|worker|intelligence|probe-api|probe-intelligence|paths}" >&2
+  echo "usage: service.sh {prepare|check-chat-config|active-runtime-env|migrate|api|worker|intelligence|probe-api|probe-intelligence|paths}" >&2
   exit 2
   ;;
 esac

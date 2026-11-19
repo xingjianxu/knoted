@@ -498,6 +498,17 @@ describe("deploy-dev.sh", () => {
     assert.match(readFileSync(join(context.instanceRoot, "deploy.env"), "utf8"), /^KNOTED_SEARCH_ENABLED=1$/m);
   });
 
+  it("模板渲染会拒绝的设置在停止实例前失败", () => {
+    const context = fixture();
+    useCurrentRevision(context);
+    writeDeployEnv(context.instanceRoot, { ...runtimeVariables, ...modelVariables(context) });
+    context.env.KNOTED_CHAT_LOCAL_MODEL = "fixture@MODEL@";
+    const result = deploy(context);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /未替换占位符/);
+    assert.deepEqual(pcArgs(context.logFile), []);
+  });
+
   it("无法发布配置文件时不停止现有实例", () => {
     const context = fixture();
     useCurrentRevision(context);
@@ -543,8 +554,9 @@ describe("deploy-dev.sh", () => {
         assert.equal(prepared.status, 0, prepared.stderr);
       }
       writeFileSync(context.logFile, "");
-      context.env.KNOTED_CHAT_LOCAL_MODEL = "candidate-model";
-      context.env.KNOTED_VECTORS_ENABLED = "0";
+      writeDeployEnv(context.instanceRoot, {
+        ...runtimeVariables, ...vars, KNOTED_CHAT_LOCAL_MODEL: "candidate-model", KNOTED_VECTORS_ENABLED: "0",
+      });
       context.env.STUB_HTTPS_FAIL = "1";
       const result = deploy(context);
       assert.notEqual(result.status, 0);

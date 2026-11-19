@@ -466,18 +466,21 @@ fail_after_switch() {
 }
 
 snapshot_previous_runtime() (
-  local key value
+  local key value applied
   local -A resolved=()
+  applied=$(bash "$service_script" active-runtime-env) || return 1
   for key in "${runtime_variable_keys[@]}"; do unset "$key"; done
   load_deploy_env "$deploy_env_file" || return 1
   capture_running_variables || true
   for key in "${runtime_variable_keys[@]}"; do
     [[ $key != KNOTED_CHAT_LOCAL_* ]] || continue
+    # 有渲染配置时以它为准；模型目录来自 intelligence 的实际进程环境。
+    if [[ -n $applied && $key != KNOTED_INTELLIGENCE_* ]]; then continue; fi
     value=${resolved[$key]:-${!key:-}}
     [[ $value != *$'\n'* && $value != *$'\r'* ]] || return 1
     if [[ -n $value ]]; then printf '%s=%s\n' "$key" "$value"; fi
   done
-  bash "$service_script" active-chat-env
+  if [[ -n $applied ]]; then printf '%s\n' "$applied"; fi
 )
 
 restore_previous_runtime() {
