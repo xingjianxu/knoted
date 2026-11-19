@@ -253,3 +253,151 @@ async fn t68_2_real_dump_contains_work_admitted_before_backup() {
     assert!(restored_rows.status.success());
     assert!(String::from_utf8_lossy(&restored_rows.stdout).contains(&image.to_string()));
 }
+
+#[tokio::test]
+async fn t68_3_unknown_remote_submission_refuses_archive_and_reopens_admission() {
+    let fixture = Fixture::create().await;
+    sqlx::query(
+        "INSERT INTO maintenance_external_submissions(id,service,index_uid) VALUES ($1,'meili','fixture')",
+    )
+    .bind(Uuid::new_v4())
+    .execute(fixture.context.pool())
+    .await
+    .unwrap();
+    let output = fixture.directory.path().join("uncertain");
+    let result = fixture.backup(&output).output().await.unwrap();
+    let incomplete = !output.join(MANIFEST).exists();
+    let writer = fixture.context.try_write().await.unwrap();
+    let reopened = writer.is_some();
+    if let Some(guard) = writer {
+        guard.finish().await.unwrap();
+    }
+    fixture.close().await;
+    assert!(!result.status.success());
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("external submission receipt unconfirmed")
+    );
+    assert!(incomplete && reopened);
+}
+
+#[tokio::test]
+async fn t68_1_refuses_non_ready_references_and_equal_size_asset_corruption() {
+    let fixture = Fixture::create().await;
+    let image = Uuid::new_v4();
+    fixture.register_asset(image, IMAGE).await;
+    let note = Uuid::new_v4();
+    let pool = fixture.context.pool();
+    sqlx::query("INSERT INTO entity_registry(id,entity_type) VALUES ($1,'note')")
+        .bind(note)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO notes(id,title,document,position,created_at,updated_at)
+         VALUES ($1,'fixture','{\"blocks\":[]}',0,now(),now())",
+    )
+    .bind(note)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO asset_refs(asset_id,ref_kind,ref_id,note_id) VALUES ($1,'trash',$2,$2)",
+    )
+    .bind(image)
+    .bind(note)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE assets SET state='deleted' WHERE id=$1")
+        .bind(image)
+        .execute(pool)
+        .await
+        .unwrap();
+    let reference_path = fixture.directory.path().join("dangling");
+    let reference = fixture.backup(&reference_path).output().await.unwrap();
+    let reference_incomplete = !reference_path.join(MANIFEST).exists();
+
+    sqlx::query("UPDATE assets SET state='ready' WHERE id=$1")
+        .bind(image)
+        .execute(pool)
+        .await
+        .unwrap();
+    let mut corrupt = IMAGE.to_vec();
+    corrupt[0] ^= 1;
+    fs::write(fixture.asset_root.join(image.to_string()), corrupt).unwrap();
+    let corrupt_path = fixture.directory.path().join("corrupt");
+    let corrupt = fixture.backup(&corrupt_path).output().await.unwrap();
+    let corrupt_incomplete = !corrupt_path.join(MANIFEST).exists();
+    fixture.close().await;
+
+    assert!(!reference.status.success() && reference_incomplete);
+    assert!(
+        String::from_utf8_lossy(&reference.stderr)
+            .contains("current, historical or trash image reference is unavailable")
+    );
+    assert!(!corrupt.status.success() && corrupt_incomplete);
+    assert!(
+        String::from_utf8_lossy(&corrupt.stderr)
+            .contains("could not read and verify registered image")
+    );
+}
+
+#[tokio::test]
+async fn t68_3_lost_coordinator_discards_completion_after_starting_dump() {
+    let fixture = Fixture::create().await;
+    let wrapper_dir = fixture.directory.path().join("instrumented-dump");
+    fs::create_dir(&wrapper_dir).unwrap();
+    let intercepted = wrapper_dir.join("pg_dump");
+    fs::write(
+        &intercepted,
+        r#"#!/bin/sh
+touch "$T68_DUMP_PAUSE/started"
+while ! test -e "$T68_DUMP_PAUSE/release"; do sleep 0.05; done
+export PATH="$T68_ORIGINAL_PATH"
+exec pg_dump "$@"
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&intercepted, fs::Permissions::from_mode(0o700)).unwrap();
+    let original_path = std::env::var_os("PATH").unwrap();
+    let search_paths = std::env::join_paths(
+        std::iter::once(wrapper_dir.clone()).chain(std::env::split_paths(&original_path)),
+    )
+    .unwrap();
+    let output = fixture.directory.path().join("coordinator-lost");
+    let mut command = fixture.backup(&output);
+    command
+        .env("PATH", search_paths)
+        .env("T68_ORIGINAL_PATH", original_path)
+        .env("T68_DUMP_PAUSE", &wrapper_dir);
+    let task = tokio::spawn(async move { command.output().await });
+    let intercepted = tokio::time::timeout(Duration::from_secs(10), async {
+        while !wrapper_dir.join("started").exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .is_ok();
+    let terminated: Option<bool> = sqlx::query_scalar(
+        "SELECT pg_terminate_backend(pid) FROM pg_locks
+         WHERE locktype='advisory' AND granted AND mode='ExclusiveLock'
+         AND classid=1263423300
+         AND database=(SELECT oid FROM pg_database WHERE datname=current_database())",
+    )
+    .fetch_optional(fixture.context.pool())
+    .await
+    .unwrap();
+    fs::write(wrapper_dir.join("release"), b"").unwrap();
+    let result = task.await.unwrap().unwrap();
+    let incomplete = !output.join(MANIFEST).exists();
+    let admission = fixture.context.try_write().await.unwrap();
+    let reopened = admission.is_some();
+    if let Some(guard) = admission {
+        guard.finish().await.unwrap();
+    }
+    fixture.close().await;
+
+    assert!(intercepted && terminated == Some(true));
+    assert!(!result.status.success() && incomplete && reopened);
+    assert!(String::from_utf8_lossy(&result.stderr).contains("maintenance admission unavailable"));
+}

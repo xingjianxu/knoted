@@ -24,6 +24,8 @@ pub const MANIFEST: &str = "manifest.json";
 pub const DATABASE_DUMP: &str = "database.dump";
 pub const ASSETS: &str = "assets";
 const WAIT_FOR_WRITES: Duration = Duration::from_secs(90);
+const SNAPSHOT_DEADLINE: Duration = Duration::from_secs(60);
+const LOCK_CHECK_DEADLINE: Duration = Duration::from_secs(10);
 const DUMP_DEADLINE: Duration = Duration::from_secs(900);
 
 pub struct BackupCommand {
@@ -66,7 +68,11 @@ pub enum BackupError {
     #[error("exclusive maintenance admission unavailable or prior writes unresolved")]
     Maintenance,
     #[error(transparent)]
+    Quiescence(#[from] maintenance::QuiescenceError),
+    #[error(transparent)]
     Snapshot(#[from] db::backup::SnapshotError),
+    #[error("backup snapshot did not respond before the deadline")]
+    SnapshotTimeout,
     #[error("could not create or synchronize private backup files: {0}")]
     Archive(#[from] io::Error),
     #[error("could not read and verify registered image {0}")]
@@ -77,6 +83,8 @@ pub enum BackupError {
     Revision,
     #[error("could not encode the backup manifest")]
     Manifest,
+    #[error("archive publication is uncertain; isolate this output and retry: {0}")]
+    PublicationUncertain(io::Error),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -159,7 +167,11 @@ pub async fn run(
     let mut guard = maintenance::exclusive(ctx.admission_pool(), WAIT_FOR_WRITES)
         .await
         .map_err(|_| BackupError::Maintenance)?;
-    let snapshot = Snapshot::open(ctx.pool()).await?;
+    maintenance::verify_quiescence(&ctx).await?;
+    check_maintenance(&mut guard).await?;
+    let snapshot = tokio::time::timeout(SNAPSHOT_DEADLINE, Snapshot::open(ctx.pool()))
+        .await
+        .map_err(|_| BackupError::SnapshotTimeout)??;
     let environment = db::backup::dump_environment(
         &database.url,
         &ctx.pool().connect_options(),
@@ -191,7 +203,9 @@ pub async fn run(
             checksum: checksum.clone(),
         })
         .collect();
-    snapshot.finish().await?;
+    tokio::time::timeout(SNAPSHOT_DEADLINE, snapshot.finish())
+        .await
+        .map_err(|_| BackupError::SnapshotTimeout)??;
     let manifest = BackupManifest {
         format_version: FORMAT_VERSION,
         completed_at: ctx.now(),
@@ -204,6 +218,13 @@ pub async fn run(
     };
     publish_manifest(&root, &manifest, &mut guard).await?;
     Ok(manifest)
+}
+
+async fn check_maintenance(guard: &mut ExclusiveGuard) -> Result<(), BackupError> {
+    tokio::time::timeout(LOCK_CHECK_DEADLINE, guard.check())
+        .await
+        .map_err(|_| BackupError::Maintenance)?
+        .map_err(|_| BackupError::Maintenance)
 }
 
 async fn export_database(
@@ -232,7 +253,7 @@ async fn export_database(
             tokio::select! {
                 report = child.wait() => break report.map_err(|_| BackupError::Dump),
                 () = tokio::time::sleep(Duration::from_secs(3)) => {
-                    guard.check().await.map_err(|_| BackupError::Maintenance)?;
+                    check_maintenance(guard).await?;
                 }
             }
         }
@@ -345,12 +366,18 @@ async fn publish_manifest(
     file.write_all(b"\n")?;
     file.sync_all()?;
     fs::fsync(root).map_err(io::Error::from)?;
-    guard.check().await.map_err(|_| BackupError::Maintenance)?;
+    check_maintenance(guard).await?;
     fs::renameat_with(root, INCOMPLETE, root, MANIFEST, RenameFlags::NOREPLACE)
         .map_err(io::Error::from)?;
     if let Err(error) = fs::fsync(root) {
-        fs::unlinkat(root, MANIFEST, fs::AtFlags::empty()).map_err(io::Error::from)?;
-        return Err(io::Error::from(error).into());
+        let removed =
+            fs::unlinkat(root, MANIFEST, fs::AtFlags::empty()).and_then(|()| fs::fsync(root));
+        let original = io::Error::from(error);
+        return Err(if removed.is_ok() {
+            BackupError::Archive(original)
+        } else {
+            BackupError::PublicationUncertain(original)
+        });
     }
     Ok(())
 }
