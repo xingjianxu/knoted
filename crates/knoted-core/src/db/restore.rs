@@ -22,7 +22,9 @@ pub async fn retire_source_runtime(pool: &PgPool) -> Result<(), sqlx::Error> {
          UPDATE jobs SET state='cancelled', lease_token=NULL, lease_expires_at=NULL,
              locked_by=NULL, updated_at=now()
            WHERE state IN ('queued','running','retry_wait','cancel_requested');
-         UPDATE jobs SET idempotency_key=NULL WHERE kind='rag_vectors.embed' AND idempotency_key IS NOT NULL;
+         UPDATE jobs SET idempotency_key=NULL WHERE kind IN (
+             'fulltext.publish','fulltext.cleanup','rag_chunks.build','rag_chunks.publish','rag_vectors.embed'
+         ) AND idempotency_key IS NOT NULL;
          INSERT INTO outbox(job_id,topic,published_at)
              SELECT id,'restore.retired_job',now() FROM jobs j
              WHERE state IN ('failed','cancelled') AND NOT EXISTS (

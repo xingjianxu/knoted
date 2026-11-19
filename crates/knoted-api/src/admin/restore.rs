@@ -8,14 +8,15 @@ use knoted_core::files::{safe_fs, staging::Sha256Hex};
 use rustix::fs;
 use std::collections::BTreeSet;
 use std::ffi::OsString;
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::fs::File;
+use std::io::{self, Read, Seek, Write};
 use std::net::TcpListener;
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Duration;
 use url::Url;
+use uuid::Uuid;
 
 pub const USAGE: &str = "usage: knoted-api admin restore --input <archive> --target <descriptor>";
 
@@ -102,17 +103,60 @@ impl VerifiedArchive {
         )
     }
 
-    fn copy_assets(&self, directory: &OwnedFd) -> io::Result<()> {
+    fn pin(self, target: &Path, protected: &[&Path]) -> io::Result<PinnedArchive> {
+        let mut dump = scratch_file(target, protected)?;
+        self.copy_dump(&mut dump)?;
+        dump.rewind()?;
+        let mut images = scratch_file(target, protected)?;
         for asset in &self.manifest.assets {
-            let name = asset.id.to_string();
-            let mut destination = backup::private_file(directory, &name)?;
             verified_copy(
                 &self.assets,
-                &name,
+                &asset.id.to_string(),
                 asset.size,
                 &asset.sha256,
+                &mut images,
+            )?;
+        }
+        images.rewind()?;
+        Ok(PinnedArchive {
+            manifest: self.manifest,
+            dump,
+            images,
+        })
+    }
+}
+
+/// Create a private sibling and immediately unlink it. This keeps descriptor
+/// usage bounded even for archives with many images and releases scratch bytes
+/// automatically on every return or process exit.
+fn scratch_file(target: &Path, protected: &[&Path]) -> io::Result<File> {
+    let name = format!(".knoted-restore-{}", Uuid::new_v4());
+    let location = target.with_file_name(&name);
+    let mut exclusions = protected.to_vec();
+    exclusions.push(target);
+    let parent = safe_fs::checked_output_parent(&location, &exclusions)?;
+    let file = backup::private_file(&parent, &name)?;
+    fs::unlinkat(&parent, name.as_str(), fs::AtFlags::empty())?;
+    Ok(file)
+}
+
+struct PinnedArchive {
+    manifest: BackupManifest,
+    dump: File,
+    images: File,
+}
+
+impl PinnedArchive {
+    fn install_images(&mut self, directory: &OwnedFd) -> io::Result<()> {
+        for asset in &self.manifest.assets {
+            let mut destination = backup::private_file(directory, &asset.id.to_string())?;
+            let copied = io::copy(
+                &mut Read::by_ref(&mut self.images).take(asset.size),
                 &mut destination,
             )?;
+            if copied != asset.size {
+                return Err(invalid());
+            }
             destination.sync_all()?;
         }
         fs::fsync(directory)?;
@@ -181,18 +225,19 @@ fn isolated_config(
     manifest: &BackupManifest,
     target: &Target,
     config: &AppConfig,
-) -> Result<(TcpListener, TcpListener), &'static str> {
+) -> Result<[TcpListener; 3], &'static str> {
     let source = &manifest.source;
     let origin = Url::parse(&config.auth.origin).map_err(|_| "invalid restore origin")?;
     let old_origin = Url::parse(&source.origin).map_err(|_| "invalid backup origin")?;
     if origin == old_origin
         || origin.scheme() != "https"
-        || origin.host_str() != Some(source.rp_id.as_str())
+        || knoted_core::auth::webauthn::build_webauthn(&config.auth).is_err()
         || config.auth.rp_id != source.rp_id
     {
         return Err("restore requires a separate HTTPS origin under the original RP ID");
     }
-    if !target.instance_root.is_absolute()
+    if target.instance_root.file_name().is_none()
+        || !target.instance_root.is_absolute()
         || !target.app_config.is_absolute()
         || target.app_config.starts_with(&target.instance_root)
         || config.assets.root != target.instance_root.join("assets")
@@ -235,44 +280,21 @@ fn isolated_config(
         return Err("invalid target listener");
     }
     let api = TcpListener::bind(bind).map_err(|_| "target listener is occupied")?;
-    let python_url =
-        Url::parse(&config.intelligence.base_url).map_err(|_| "invalid target Python endpoint")?;
-    let python_address = python_url
-        .socket_addrs(|| None)
-        .ok()
-        .and_then(|items| items.into_iter().next())
-        .ok_or("invalid target Python endpoint")?;
-    let python =
-        TcpListener::bind(python_address).map_err(|_| "target Python endpoint is occupied")?;
-    Ok((api, python))
+    let python = reserve_endpoint(&config.intelligence.base_url)?;
+    let meili = reserve_endpoint(&config.search.base_url)?;
+    Ok([api, python, meili])
 }
 
-async fn empty_engine(config: &AppConfig) -> Result<(), &'static str> {
-    let refused = "target search engine must be independently provisioned and empty";
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(5))
-        .build()
-        .map_err(|_| refused)?;
-    let body = client
-        .get(format!(
-            "{}/indexes?limit=1",
-            config.search.base_url.trim_end_matches('/')
-        ))
-        .bearer_auth(config.search_api_key().ok_or(refused)?)
-        .send()
-        .await
-        .map_err(|_| refused)?
-        .error_for_status()
-        .map_err(|_| refused)?
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|_| refused)?;
-    if body["total"].as_u64() != Some(0) {
-        return Err(refused);
+fn reserve_endpoint(origin: &str) -> Result<TcpListener, &'static str> {
+    let address = Url::parse(origin)
+        .ok()
+        .and_then(|u| u.socket_addrs(|| None).ok())
+        .and_then(|items| items.into_iter().next())
+        .ok_or("invalid target service endpoint")?;
+    if !address.ip().is_loopback() || address.port() == 0 {
+        return Err("invalid target service endpoint");
     }
-    Ok(())
+    TcpListener::bind(address).map_err(|_| "target service endpoint is occupied")
 }
 
 pub async fn run(command: &RestoreCommand) -> Result<(), &'static str> {
@@ -291,8 +313,7 @@ pub async fn run(command: &RestoreCommand) -> Result<(), &'static str> {
         &source.database,
     )
     .await?;
-    empty_engine(&config).await?;
-    let mut protected = vec![input.as_path(), source.asset_root.as_path()];
+    let mut protected = vec![input.clone(), source.asset_root.clone()];
     protected.extend(
         [
             source.file_root.as_deref(),
@@ -300,28 +321,24 @@ pub async fn run(command: &RestoreCommand) -> Result<(), &'static str> {
             config.files.root.as_deref(),
         ]
         .into_iter()
-        .flatten(),
+        .flatten()
+        .map(Path::to_path_buf),
     );
+    let protected: Vec<_> = protected.iter().map(PathBuf::as_path).collect();
+    let mut archive = archive
+        .pin(&target.instance_root, &protected)
+        .map_err(|_| "archive changed or private verification scratch unavailable")?;
     let root = safe_fs::create_backup_directory(&target.instance_root, &protected)
         .map_err(|_| "target instance root is occupied or overlaps protected data")?;
-    for name in ["assets", "staging", "python"] {
+    for name in ["assets", "staging", "python", "meili"] {
         fs::mkdirat(&root, name, fs::Mode::RWXU)
             .map_err(|_| "private directory creation failed")?;
     }
     let assets = safe_fs::open_collection_directory(&root, Path::new("assets"))
         .map_err(|_| "private asset directory unavailable")?;
     archive
-        .copy_assets(&assets)
+        .install_images(&assets)
         .map_err(|_| "verified image copy failed")?;
-    let mut dump = backup::private_file(&root, "install.dump")
-        .map_err(|_| "private database copy unavailable")?;
-    fs::unlinkat(&root, "install.dump", fs::AtFlags::empty())
-        .map_err(|_| "private database copy unavailable")?;
-    archive
-        .copy_dump(&mut dump)
-        .map_err(|_| "verified database copy failed")?;
-    dump.seek(SeekFrom::Start(0))
-        .map_err(|_| "private database copy unavailable")?;
     database
         .create()
         .await
@@ -339,7 +356,7 @@ pub async fn run(command: &RestoreCommand) -> Result<(), &'static str> {
             "--dbname",
             database.staging_name(),
         ])
-        .stdin(dump)
+        .stdin(archive.dump)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true)
@@ -403,4 +420,61 @@ pub async fn run(command: &RestoreCommand) -> Result<(), &'static str> {
         .publish()
         .await
         .map_err(|_| "database activation failed")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn t69_1_changed_archive_never_installs_unverified_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let archive = directory.path().join("archive");
+        let target = directory.path().join("target");
+        let id = Uuid::new_v4();
+        let images = archive.join(backup::ASSETS);
+        std::fs::create_dir_all(&images).unwrap();
+        let dump = archive.join(backup::DATABASE_DUMP);
+        let image = images.join(id.to_string());
+        let dump_bytes = b"PGDMP-original";
+        let image_bytes = b"original image";
+        std::fs::write(&dump, dump_bytes).unwrap();
+        std::fs::write(&image, image_bytes).unwrap();
+        let manifest = serde_json::json!({
+            "format_version":1,"completed_at":"2026-01-01T00:00:00Z","app_version":"fixture",
+            "artifact_revision":null,"migrations":[],
+            "database_dump":{"size":dump_bytes.len(),"sha256":Sha256Hex::digest(dump_bytes)},
+            "assets":[{"id":id,"size":image_bytes.len(),"sha256":Sha256Hex::digest(image_bytes)}],
+            "source":{"database":"source","rp_id":"localhost","origin":"https://localhost",
+                "asset_root":"/original/assets","staging_root":null,"file_root":null,
+                "intelligence_origin":"http://127.0.0.1:1","search":{"enabled":false,
+                "origin":"http://127.0.0.1:2","document_index":"docs","chunk_index":"chunks"}}
+        });
+        std::fs::write(
+            archive.join(backup::MANIFEST),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        let initial = verify_archive(&archive).unwrap();
+        std::fs::write(&image, b"modified image").unwrap();
+        assert!(initial.pin(&target, &[&archive]).is_err());
+        assert!(!target.exists());
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+        std::fs::write(&image, image_bytes).unwrap();
+        let mut pinned = verify_archive(&archive)
+            .unwrap()
+            .pin(&target, &[&archive])
+            .unwrap();
+        std::fs::write(&image, b"modified image").unwrap();
+        std::fs::write(&dump, b"PGDMP-modified").unwrap();
+        let installed = safe_fs::create_backup_directory(&target, &[&archive]).unwrap();
+        pinned.install_images(&installed).unwrap();
+        let mut restored = Vec::new();
+        pinned.dump.read_to_end(&mut restored).unwrap();
+        assert_eq!(restored, dump_bytes);
+        assert_eq!(
+            std::fs::read(target.join(id.to_string())).unwrap(),
+            image_bytes
+        );
+    }
 }
