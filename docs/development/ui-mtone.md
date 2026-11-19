@@ -13,7 +13,7 @@
 
 ## 现状与目标
 
-当前精确依赖为 **`@bixlab/mtone@0.6.0`**（`apps/web/package.json` / `pnpm-lock.yaml`）。下文保留 T17—T19 的原始接入与各版本升级记录。
+当前精确依赖为 **`@bixlab/mtone@0.7.0`**（`apps/web/package.json` / `pnpm-lock.yaml`）。下文保留 T17—T19 的原始接入与各版本升级记录。
 
 T17 已精确接入 npm `@bixlab/mtone@0.2.0`，迁移 App 静态类并移除 `packages/ui`；**PR #42 已普通 merge 至主线 `e3e1db2`，独立审查/主线验证/任务清理完成**。生产入口使用应用层 `UiProvider` 配置公开 `MtoneProvider` 的 locale/density/tokens，不转发控件 API；CSS 从应用样式入口导入。基础表单组合仅在测试夹具中，不建立生产演示路由或通用包装库。证据见 [T17](../plans/knoted-v1/evidence/t17.md)。
 
@@ -50,6 +50,10 @@ T17 实测：旧 `cn('p-2', 'p-4')` 返回 `p-4`，mtone 的 `cn` 返回 `p-2 p-
 0.2.0 在实施时距发布不足 pnpm 默认最小等待时间；`pnpm-workspace.yaml` 仅为已明确选择、检查过的精确版本添加 minimumReleaseAgeExclude，其他依赖策略保持不变。不改 workspace 通配范围。
 
 只使用 npm 已发布版本作为正式依赖；不以浮动 latest、Git、file/link、未发布 tarball 交付。不修改 API 或业务语义来迁就组件。
+
+## 0.7.0 升级记录
+
+npm 发布包保留公开根入口、`styles.css`、React peers 和直接依赖，仅更新 mtone 锁定版本、完整性摘要与该版本的发布等待期例外。新版的深色/跟随系统主题、TagSelect 和列表排序手柄不在本次启用范围，应用沿用默认浅色主题。虚拟列表吸顶分组的包装层有变，应用未使用该模式，也不依赖相关 CSS 选择器。 [npm 元数据](https://registry.npmjs.org/@bixlab%2fmtone/0.7.0) · [发布说明](https://github.com/xingjianxu/mtone/releases/tag/v0.7.0) · [迁移指南](https://github.com/xingjianxu/mtone/blob/v0.7.0/docs/MIGRATION.md)
 
 ## 0.6.0 升级与工作区布局
 
