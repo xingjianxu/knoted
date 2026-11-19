@@ -15,10 +15,14 @@
 #   3. 目标提交已是 current → 不构建不重启，只做验证
 #   4. 切换后任一验证失败 → 指针复位到上一个产物并按同样方式重启，退出非 0
 #
-# 运行变量：dev 实例需要 6 个只存在于"启动它的 shell"里的变量（两个模型根、
-# search/vectors 开关、Office origin 与凭据路径）。脚本把它们持久化到
-# <KNOTED_INSTANCE_ROOT>/deploy.env（0600）：首次从活动 knoted-intelligence 进程的
-# /proc/<pid>/environ 抓取，之后读文件；调用者环境变量优先。
+# 运行变量：dev 实例需要一组只存在于「启动它的 shell」里的变量（两个模型根、search/vectors
+# 开关、Office origin 与凭据路径、可选的本机聊天模型）。脚本把它们持久化到
+# <KNOTED_INSTANCE_ROOT>/deploy.env（0600）：首次从活动进程的 /proc/<pid>/environ
+# 并集抓取，之后读文件；调用者环境变量优先，并把最终结果回写到文件。
+#
+# 稳定实例锚定在主检出：pcwrap 的 daemon cwd 决定后续 prepare/restart 用哪份
+# tools/dev/pc/service.sh，所以即使从任务 worktree 调用，进程编排也在主检出执行
+# （AGENTS.md 规则 4/11）。
 #
 # 环境覆盖（默认值即本机 dev 实例，测试据此指向临时根）：
 #   KNOTED_INSTANCE_ROOT          /data/knoted-dev/service
@@ -39,12 +43,14 @@ shopt -u patsub_replacement 2>/dev/null || true
 
 script_dir=$(cd "${BASH_SOURCE[0]%/*}" && pwd)
 repository=$(git -C "$script_dir" rev-parse --show-toplevel)
+# 主检出（在 worktree 里调用时与 $repository 不同）；pcwrap daemon 的 cwd 取它。
+instance_repository=$(dirname -- "$(git -C "$repository" rev-parse --path-format=absolute --git-common-dir)")
 build_script=$script_dir/build-artifact.sh
 service_script=$script_dir/pc/service.sh
 
 instance_root=${KNOTED_INSTANCE_ROOT:-/data/knoted-dev/service}
-runtime_parent=${KNOTED_DEPLOY_RUNTIME_PARENT:-/data/knoted-dev/runtime}
-proc_root=${KNOTED_DEPLOY_PROC_ROOT:-/proc}
+runtime_parent=$(realpath -m -- "${KNOTED_DEPLOY_RUNTIME_PARENT:-/data/knoted-dev/runtime}")
+proc_root=$(realpath -m -- "${KNOTED_DEPLOY_PROC_ROOT:-/proc}")
 build_cmd=${KNOTED_DEPLOY_BUILD_CMD:-$build_script}
 build_root=${KNOTED_BUILD_ROOT:-/data/knoted-dev/tasks/deploy}
 ready_timeout=${KNOTED_DEPLOY_READY_TIMEOUT:-180}
@@ -105,16 +111,19 @@ forbidden_path() {
 
 guard_worktree() {
   local path
-  for path in "$instance_root" "$runtime_parent" "$build_root"; do
+  for path in "$instance_root" "$runtime_parent" "$build_root" "$instance_repository"; do
     if forbidden_path "$path"; then
-      fail "实例根/运行根/构建根位于 .worktrees 任务工作区：$path（稳定实例必须用主检出 + /data 运行根）" 2
+      fail "实例根/运行根/构建根/主检出位于 .worktrees 任务工作区：$path（稳定实例必须用主检出 + /data 运行根）" 2
     fi
   done
+  if [ "$repository" != "$instance_repository" ]; then
+    log "从任务 worktree 调用；进程编排仍在主检出 $instance_repository 执行"
+  fi
 }
 
 require_tools() {
   local name missing=""
-  for name in git pnpm curl sha256sum flock readlink find sort; do
+  for name in git pnpm curl sha256sum flock readlink realpath find sort; do
     command -v "$name" >/dev/null 2>&1 || missing="$missing $name"
   done
   if [ -n "$missing" ]; then
@@ -122,6 +131,8 @@ require_tools() {
   fi
   test -x "$build_cmd" || fail "构建命令不可执行：$build_cmd" 2
   test -r "$service_script" || fail "缺少编排入口：$service_script" 2
+  test -f "$instance_repository/process-compose.yaml" ||
+    fail "主检出缺少 process-compose.yaml：$instance_repository" 2
 }
 
 resolve_revision() {
@@ -144,13 +155,13 @@ resolve_revision() {
   fi
 }
 
-# deploy.env 只接受 KEY=VALUE 行，不 source（避免执行文件内容）。
+# deploy.env 只接受 KEY=VALUE 行，不 source（避免执行文件内容）。调用者环境优先。
 read_deploy_env() {
   local key value
   while IFS='=' read -r key value || [ -n "$key" ]; do
     [ -n "$key" ] || continue
     case " ${runtime_variable_keys[*]} " in
-    *" $key "*) [ -n "$value" ] && resolved[$key]=$value ;;
+    *" $key "*) [ -n "$value" ] && [ -z "${resolved[$key]:-}" ] && resolved[$key]=$value ;;
     esac
   done <"$deploy_env_file"
 }
@@ -202,29 +213,31 @@ write_deploy_env() {
   mv -f "$tmp" "$deploy_env_file"
 }
 
-# 解析顺序：调用者环境 > deploy.env > 活动进程抓取。抓取到新值就回写文件。
+# 解析顺序：调用者环境 > deploy.env > 活动进程抓取；最终结果回写文件，
+# 下一次没有 shell 环境时仍然拿到同一套变量。
 resolve_runtime_variables() {
-  local key captured=0 missing=""
+  local key captured=0 missing="" file_before=""
   declare -gA resolved=()
   for key in "${runtime_variable_keys[@]}"; do
     if [ -n "${!key:-}" ]; then resolved[$key]=${!key}; fi
   done
-  if [ -f "$deploy_env_file" ]; then read_deploy_env; fi
+  if [ -f "$deploy_env_file" ]; then
+    file_before=$(grep -E '^[A-Z_]+=' "$deploy_env_file" 2>/dev/null || true)
+    read_deploy_env
+  fi
   for key in "${runtime_variable_keys[@]}"; do
     [ -n "${resolved[$key]:-}" ] || missing="$missing $key"
   done
-  if [ -n "$missing" ]; then
-    if capture_running_variables; then
-      captured=1
-      missing=""
-      for key in "${runtime_variable_keys[@]}"; do
-        [ -n "${resolved[$key]:-}" ] || missing="$missing $key"
-      done
-    fi
+  if [ -n "$missing" ] && capture_running_variables; then
+    captured=1
+    missing=""
+    for key in "${runtime_variable_keys[@]}"; do
+      [ -n "${resolved[$key]:-}" ] || missing="$missing $key"
+    done
   fi
   for key in "${required_variable_keys[@]}"; do
     if [ -z "${resolved[$key]:-}" ]; then
-      fail "缺少运行变量 $key：既没有 $deploy_env_file，也无法从活动 knoted-intelligence 进程读取。先 export 后重跑（见 docs/plans/knoted-v1/development-and-deploy.md）" 2
+      fail "缺少运行变量 $key：既没有 $deploy_env_file，也无法从活动进程读取。先 export 后重跑（见 docs/plans/knoted-v1/development-and-deploy.md）" 2
     fi
   done
   if [ -n "$missing" ]; then
@@ -233,37 +246,77 @@ resolve_runtime_variables() {
   for key in "${runtime_variable_keys[@]}"; do
     if [ -n "${resolved[$key]:-}" ]; then export "$key=${resolved[$key]}"; fi
   done
-  if [ "$captured" = 1 ]; then
+  if [ "$captured" = 1 ] || deploy_env_outdated "$file_before"; then
     write_deploy_env
     log "运行变量写入 $deploy_env_file（0600）"
   fi
 }
 
-verify_artifact() {
+# 文件内容与本次解析结果不一致（缺失键、调用者覆盖、或首次）就需要回写。
+deploy_env_outdated() {
+  local key value expected=""
+  for key in "${runtime_variable_keys[@]}"; do
+    [ -n "${resolved[$key]:-}" ] || continue
+    expected+="$key=${resolved[$key]}"$'\n'
+  done
+  test "$expected" != "${1:+$1$'\n'}"
+}
+
+# 产物可用性检查：不直接退出，让调用方决定“重建还是报错”。
+artifact_problem=""
+artifact_ok() {
   local revision_file=$target/share/knoted/REVISION actual
-  test -x "$target/bin/knoted-api" || fail "产物缺少 bin/knoted-api：$target"
-  test -x "$target/bin/knoted-worker" || fail "产物缺少 bin/knoted-worker：$target"
-  test -s "$revision_file" || fail "产物缺少 share/knoted/REVISION：$target"
+  artifact_problem=""
+  test -x "$target/bin/knoted-api" || {
+    artifact_problem="缺少 bin/knoted-api"
+    return 1
+  }
+  test -x "$target/bin/knoted-worker" || {
+    artifact_problem="缺少 bin/knoted-worker"
+    return 1
+  }
+  test -s "$revision_file" || {
+    artifact_problem="缺少 share/knoted/REVISION"
+    return 1
+  }
   actual=$(cat "$revision_file")
-  test "$actual" = "$revision" || fail "产物 REVISION=$actual 与目标提交 $revision 不一致"
-  test -s "$target/SHA256SUMS" || fail "产物缺少 SHA256SUMS：$target"
-  (cd "$target" && sha256sum --check --quiet SHA256SUMS) || fail "产物摘要校验失败：$target"
+  test "$actual" = "$revision" || {
+    artifact_problem="REVISION=$actual 与目标提交 $revision 不一致"
+    return 1
+  }
+  test -s "$target/SHA256SUMS" || {
+    artifact_problem="缺少 SHA256SUMS"
+    return 1
+  }
+  (cd "$target" && sha256sum --check --quiet SHA256SUMS) || {
+    artifact_problem="SHA256SUMS 校验失败"
+    return 1
+  }
+  return 0
+}
+
+verify_artifact() {
+  artifact_ok || fail "产物不可用（$artifact_problem）：$target（确认后 rm -rf 该目录重试）"
 }
 
 list_migrations() {
-  find "$1/share/knoted/migrations" -maxdepth 1 -name '*.sql' -type f -printf '%f\n' 2>/dev/null | sort || true
+  find "$1/share/knoted/migrations" -maxdepth 1 -name '*.sql' -type f -printf '%f\n' 2>/dev/null | sort
 }
 
 # 迁移集合变化（新增、删除或改名）就必须重跑 prepare+migrate；restart 不会跑迁移。
+# find 失败也算变化：宁可多跑一次幂等的 migrate，也不能在 schema 落后时只重启。
 migrations_changed=1
 compare_migrations() {
+  local before after added
   if [ -z "$previous" ] || [ ! -d "$previous/share/knoted/migrations" ]; then
     migrations_changed=1
     return 0
   fi
-  local before after added
-  before=$(list_migrations "$previous")
-  after=$(list_migrations "$target")
+  if ! before=$(list_migrations "$previous") || ! after=$(list_migrations "$target"); then
+    log "无法枚举迁移目录，按“已变化”处理"
+    migrations_changed=1
+    return 0
+  fi
   if [ "$before" = "$after" ]; then
     migrations_changed=0
     return 0
@@ -279,24 +332,35 @@ switch_current() {
   mv -Tf "$link" "$runtime_parent/current"
 }
 
-restart_processes() {
+# 所有 pcwrap 调用都在主检出执行：daemon 的 cwd 决定后续 prepare/restart 用哪份
+# tools/dev/pc/service.sh，不能让它指向可丢弃的任务 worktree。
+pc() {
+  (cd "$instance_repository" && pnpm pc "$@")
+}
+
+instance_running() {
+  pc process list >/dev/null 2>&1
+}
+
+# 停止失败既可能是实例本来就停着，也可能是停不下来；后者不能继续 up。
+stop_instance() {
+  if ! instance_running; then
+    log "实例当前未运行，跳过 down"
+    return 0
+  fi
+  pc down
+}
+
+restart_running() {
   local name
-  (
-    cd "$repository"
-    if [ "$migrations_changed" = 1 ]; then
-      pnpm pc down || log "pnpm pc down 返回非零（此前可能未运行），继续启动"
-      pnpm pc up -D || return 1
-      exit 0
-    fi
-    for name in knoted-api knoted-worker knoted-intelligence; do
-      pnpm pc process restart "$name" && continue
-      # 实例当时可能整个停着，restart 无处可用：退回到完整启动（此分支无新迁移）。
-      log "process restart $name 失败，改用 pnpm pc up -D 完整启动"
-      pnpm pc down || true
-      pnpm pc up -D || return 1
-      exit 0
-    done
-  )
+  for name in knoted-api knoted-worker knoted-intelligence; do
+    pc process restart "$name" && continue
+    # 实例可能在过程中退出：退回到完整启动（本分支没有新迁移，migrate 是幂等的）。
+    log "process restart $name 失败，改用 down + up -D 完整启动"
+    pc down || log "pnpm pc down 返回非零，继续启动"
+    pc up -D || return 1
+    return 0
+  done
 }
 
 probe_api() {
@@ -309,24 +373,35 @@ probe_intelligence() {
     bash "$service_script" probe-intelligence >/dev/null 2>&1
 }
 
-wait_ready() {
-  local timeout=$1 start=$SECONDS deadline=$((SECONDS + $1))
+# 收敛等待：readiness 只是必要条件，还要等到三个进程的映像都已来自新产物。
+wait_for_convergence() {
+  local timeout=$1 start=$SECONDS deadline=$((SECONDS + $1)) ready=0
   while [ "$SECONDS" -lt "$deadline" ]; do
     if probe_api && probe_intelligence; then
-      log "readiness 通过（$((SECONDS - start))s）"
-      return 0
+      ready=1
+      if check_processes; then
+        log "readiness 与进程映像就位（$((SECONDS - start))s）"
+        return 0
+      fi
     fi
     sleep 1
   done
-  log "readiness 超时（${timeout}s）：API 或 intelligence 未就绪"
+  if [ "$ready" = 1 ]; then
+    log "等待超时（${timeout}s）：${process_problem}"
+  else
+    log "等待超时（${timeout}s）：API 或 intelligence 未就绪（${process_problem:-进程未就绪}）"
+  fi
   return 1
 }
 
 # 进程映像必须已经来自新产物：/proc/<pid>/exe 会解析到具体 revision 目录。
 # knoted-intelligence 的入口是 bash 包装器，它 exec 固定解释器，所以真正看到的
 # exe 是 <产物>/share/knoted/intelligence/python/bin/python3.12。
+# 失败原因写进 process_problem，由调用方决定何时报告（收敛等待里不该每秒刷屏）。
+process_problem=""
 check_processes() {
   local exe_link exe name dir seen_api=0 seen_worker=0 seen_intelligence=0
+  process_problem=""
   for exe_link in "$proc_root"/[0-9]*/exe; do
     exe=$(readlink -- "$exe_link" 2>/dev/null) || continue
     exe=${exe% (deleted)}
@@ -349,28 +424,29 @@ check_processes() {
     *) continue ;;
     esac
     if [ "$dir" != "$target" ]; then
-      log "$name 仍运行在 $dir（期望 $target）"
+      process_problem="$name 仍运行在 $dir（期望 $target）"
       return 1
     fi
   done
   test "$seen_api" = 1 || {
-    log "没有找到运行中的 knoted-api"
+    process_problem="没有找到运行中的 knoted-api"
     return 1
   }
   test "$seen_worker" = 1 || {
-    log "没有找到运行中的 knoted-worker"
+    process_problem="没有找到运行中的 knoted-worker"
     return 1
   }
   test "$seen_intelligence" = 1 || {
-    log "没有找到运行中的 knoted-intelligence"
+    process_problem="没有找到运行中的 knoted-intelligence"
     return 1
   }
   return 0
 }
 
+https_problem=""
 check_https() {
   curl -fsS -o /dev/null --max-time 8 "https://$domain:$https_port/" || {
-    log "HTTPS 入口不可用：https://$domain:$https_port/"
+    https_problem="HTTPS 入口不可用：https://$domain:$https_port/"
     return 1
   }
 }
@@ -392,13 +468,15 @@ fail_after_switch() {
   fi
   log "$reason；复位 current → $previous 并重启回旧版本"
   switch_current "$previous"
-  restart_processes || log "复位后的重启返回非零，请手工检查（pnpm pc process list）"
+  restart_running || log "复位后的重启返回非零，请手工检查（pnpm pc process list）"
   exit 1
 }
 
 verify_deployed() {
-  check_processes
-  check_https
+  check_https || {
+    log "$https_problem"
+    return 1
+  }
   log "验证通过：$revision"
 }
 
@@ -422,6 +500,7 @@ main() {
   if [ "$previous" = "$target" ]; then
     log "已是最新：current 已指向 $revision，只做验证"
     verify_artifact
+    wait_for_convergence "$ready_timeout" || fail "实例未收敛：${process_problem:-readiness 未通过}（pnpm pc process list / pnpm pc process logs knoted-api）"
     verify_deployed
     return 0
   fi
@@ -429,25 +508,45 @@ main() {
   # 构建前就要有运行变量：Vite 用 KNOTED_OFFICE_ORIGIN 决定是否编入 Office。
   resolve_runtime_variables
 
-  if [ -d "$target" ]; then
-    log "复用已构建产物：$target"
-    verify_artifact
-  else
-    log "构建固定产物 $revision（CARGO_BUILD_JOBS=$cargo_jobs，KNOTED_BUILD_ROOT=$build_root）"
-    mkdir -p "$build_root"
-    CARGO_BUILD_JOBS=$cargo_jobs KNOTED_BUILD_ROOT=$build_root \
-      "$build_cmd" "$revision" "$target" || fail "构建失败：$revision（日志见 $build_root）"
-    verify_artifact
-  fi
-
+  build_or_reuse_artifact
   compare_migrations
+
+  # 迁移路径先停实例再切指针：停止失败时什么都没改，实例仍旧版本。
+  if [ "$migrations_changed" = 1 ]; then
+    stop_instance || fail "停止实例失败：指针未切换，实例仍在旧版本（pnpm pc process list）"
+  fi
   switch_current "$target"
   log "current → $target"
-  restart_processes || fail_after_switch "重启失败（prepare/migrate/readiness）"
 
-  wait_ready "$ready_timeout" || fail_after_switch "readiness 未通过"
+  if [ "$migrations_changed" = 1 ]; then
+    pc up -D || fail_after_switch "pnpm pc up -D 失败"
+  else
+    restart_running || fail_after_switch "重启失败"
+  fi
+
+  # worker 由 process-compose 在它自己观察到 intelligence 健康后才拉起，所以 readiness
+  # 与“三个进程映像已在目标目录”必须放进同一个收敛等待，不能探针一过就扫 /proc。
+  wait_for_convergence "$ready_timeout" || fail_after_switch "${process_problem:-readiness 超时}"
   verify_deployed || fail_after_switch "验证未通过"
   log "完成：$revision 已上线（https://$domain:$https_port/）"
+}
+
+# 已存在的产物不可用（构建中断、磁盘损坏）时要能重试：移到旁路后重建。
+build_or_reuse_artifact() {
+  if [ -d "$target" ] && artifact_ok; then
+    log "复用已构建产物：$target"
+    return 0
+  fi
+  if [ -d "$target" ]; then
+    local aside=$target.incomplete.$(date -u +%Y%m%dT%H%M%SZ).$$
+    log "已有产物不可用（$artifact_problem），移到 $aside 后重建"
+    mv -- "$target" "$aside"
+  fi
+  log "构建固定产物 $revision（CARGO_BUILD_JOBS=$cargo_jobs，KNOTED_BUILD_ROOT=$build_root）"
+  mkdir -p "$build_root"
+  CARGO_BUILD_JOBS=$cargo_jobs KNOTED_BUILD_ROOT=$build_root \
+    "$build_cmd" "$revision" "$target" || fail "构建失败：$revision（日志见 $build_root）"
+  verify_artifact
 }
 
 main "$@"
