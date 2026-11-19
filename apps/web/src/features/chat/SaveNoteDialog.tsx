@@ -59,13 +59,13 @@ export function SaveNoteDialog({ bundle, messageId }: { bundle: QueryClientBundl
     }
   }
 
-  if (savedNote) return <Link className="text-accent underline" to="/notes/$noteId" params={{ noteId: savedNote }}>打开笔记</Link>;
+  if (savedNote) return <Link className="page-link" to="/notes/$noteId" params={{ noteId: savedNote }}>打开笔记</Link>;
   return (
     <Dialog
       open={open}
       onOpenChange={(next) => { if (!submitting.current) setOpen(next); }}
       title="存为笔记"
-      trigger={<Button type="button">存为笔记</Button>}
+      trigger={<Button type="button" variant="ghost">存为笔记</Button>}
     >
       <Form className="space-y-3" onSubmit={(event) => {
         event.preventDefault();

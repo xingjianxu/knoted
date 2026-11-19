@@ -1,6 +1,6 @@
-import { Alert, Button, Empty, Form, FormField, Input, List, MultiSelect, SearchInput, Select, Spinner } from "@bixlab/mtone";
+import { Alert, Button, Empty, FilterBar, Form, FormField, Input, List, MultiSelect, SearchInput, Select, Spinner } from "@bixlab/mtone";
 import { useQuery } from "@tanstack/react-query";
-import { useReducer, useState } from "react";
+import { useEffect, useId, useReducer, useRef, useState } from "react";
 import { createCursorState, cursorReducer } from "../../lib/cursor-state";
 import type { QueryClientBundle } from "../../lib/query";
 import { projectChoicesQuery } from "../tasks/queries";
@@ -15,6 +15,8 @@ const archiveOptions = [
   { value: "true", label: "已归档" },
 ];
 
+const timeFormat = new Intl.DateTimeFormat("zh-CN", { dateStyle: "short", timeStyle: "short" });
+
 function toLocalTime(value: string | undefined) {
   if (!value) return "";
   const date = new Date(value);
@@ -26,15 +28,29 @@ function fromLocalTime(value: string) {
   return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
 }
 
-function SearchForm({ bundle, filters, onSearch }: {
+function SearchForm({ bundle, filters, filterKey, onSearch }: {
   bundle: QueryClientBundle;
   filters: SearchFilters;
+  filterKey: string;
   onSearch: (value: SearchFilters) => void;
 }) {
-  const [draft, setDraft] = useState(filters);
-  const [error, setError] = useState("");
+  const [inputs, setInputs] = useState({ filterKey, draft: filters });
+  const [expanded, setExpanded] = useState(false);
+  const [error, setError] = useState<"query" | "range">();
+  const filtersId = useId();
+  const dirtyId = useId();
+  const keyword = useRef<HTMLInputElement>(null);
+  const rangeEnd = useRef<HTMLInputElement>(null);
   const tags = useQuery(searchTagChoicesQuery(bundle));
   const projects = useQuery(projectChoicesQuery(bundle));
+
+  if (inputs.filterKey !== filterKey) {
+    setInputs({ filterKey, draft: filters });
+    setError(undefined);
+  }
+  const { draft } = inputs;
+  const setDraft = (value: SearchFilters) => setInputs({ filterKey, draft: value });
+
   const tagOptions = new Map((tags.data ?? []).map((tag) => [tag.id, tag.name]));
   for (const id of draft.tags ?? []) {
     if (!tagOptions.has(id)) tagOptions.set(id, id);
@@ -42,105 +58,163 @@ function SearchForm({ bundle, filters, onSearch }: {
   const projectOptions = new Map((projects.data ?? []).map((project) => [project.id, project.title]));
   if (draft.project && !projectOptions.has(draft.project)) projectOptions.set(draft.project, draft.project);
 
+  const normalized = validateSearch(draft);
+  const submitted = [
+    filters.q && normalized.q !== filters.q && `搜索词 ${filters.q}`,
+    filters.type && searchTypes[filters.type],
+    filters.project && `项目 ${projectOptions.get(filters.project) ?? filters.project}`,
+    filters.tags?.length && `标签 ${filters.tags.map((id) => tagOptions.get(id) ?? id).join("、")}`,
+    filters.archived !== undefined && (filters.archived ? "已归档" : "未归档"),
+    filters.updated_from && `更新时间起 ${timeFormat.format(new Date(filters.updated_from))}`,
+    filters.updated_to && `更新时间止 ${timeFormat.format(new Date(filters.updated_to))}`,
+    filters.path && `路径 ${filters.path}`,
+    filters.format && `格式 ${filters.format}`,
+    filters.sort && filters.sort !== "relevance" && searchSorts[filters.sort],
+  ].filter(Boolean);
+  const changed = JSON.stringify(normalized) !== filterKey;
+  useEffect(() => {
+    if (expanded && error === "range") rangeEnd.current?.focus();
+  }, [expanded, error]);
+
   return (
-    <Form role="search" aria-label="搜索资料" className="space-y-4" onSubmit={(event) => {
+    <Form role="search" aria-label="搜索资料" className="space-y-3" onSubmit={(event) => {
       event.preventDefault();
       if (!draft.q.trim()) {
-        setError("请输入搜索词。");
+        setError("query");
+        keyword.current?.focus();
         return;
       }
       if (draft.updated_from && draft.updated_to && Date.parse(draft.updated_from) > Date.parse(draft.updated_to)) {
-        setError("更新时间起点须早于或等于终点。");
+        setError("range");
+        if (expanded) rangeEnd.current?.focus();
+        setExpanded(true);
         return;
       }
-      setError("");
-      onSearch(validateSearch(draft));
+      setError(undefined);
+      if (expanded) {
+        setExpanded(false);
+        keyword.current?.focus();
+      }
+      onSearch(normalized);
     }}>
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="min-w-0 flex-1 basis-48">
-          <FormField label="搜索词">
+      <div className="flex flex-wrap items-start gap-2">
+        <div className="min-w-0 flex-1 basis-44">
+          <FormField label={<span className="sr-only">搜索词</span>} error={error === "query" ? "请输入搜索词。" : undefined}>
             <SearchInput
+              ref={keyword}
               type="search"
+              placeholder="输入搜索词"
               maxLength={500}
+              allowClear
               value={draft.q}
-              onChange={(event) => setDraft({ ...draft, q: event.target.value })}
+              onChange={(event) => {
+                setDraft({ ...draft, q: event.target.value });
+                if (error === "query") setError(undefined);
+              }}
             />
           </FormField>
         </div>
-        <Button type="submit" variant="solid">搜索</Button>
+        <Button type="submit" variant="solid" aria-describedby={changed ? dirtyId : undefined}>搜索</Button>
       </div>
-
-      <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <FormField label="类型">
-          <Select
-            options={typeOptions}
-            value={draft.type ?? ""}
-            onValueChange={(value) => setDraft({ ...draft, type: validateSearch({ type: value }).type })}
-          />
-        </FormField>
-        <FormField label="标签">
-          <MultiSelect
-            options={Array.from(tagOptions, ([value, label]) => ({ value, label }))}
-            value={draft.tags ?? []}
-            onValueChange={(value) => setDraft({ ...draft, tags: value })}
-          />
-        </FormField>
-        <FormField label="项目">
-          <Select
-            options={[{ value: "", label: "全部项目" }, ...Array.from(projectOptions, ([value, label]) => ({ value, label }))]}
-            value={draft.project ?? ""}
-            onValueChange={(value) => setDraft({ ...draft, project: value || undefined })}
-          />
-        </FormField>
-        <FormField label="归档">
-          <Select
-            options={archiveOptions}
-            value={String(draft.archived ?? "")}
-            onValueChange={(value) => setDraft({ ...draft, archived: value ? value === "true" : undefined })}
-          />
-        </FormField>
-        <FormField label="更新时间起">
-          <Input
-            type="datetime-local"
-            step="any"
-            value={toLocalTime(draft.updated_from)}
-            onChange={(event) => setDraft({ ...draft, updated_from: fromLocalTime(event.target.value) })}
-          />
-        </FormField>
-        <FormField label="更新时间止">
-          <Input
-            type="datetime-local"
-            step="any"
-            value={toLocalTime(draft.updated_to)}
-            onChange={(event) => setDraft({ ...draft, updated_to: fromLocalTime(event.target.value) })}
-          />
-        </FormField>
-        <FormField label="路径">
-          <Input value={draft.path ?? ""} onChange={(event) => setDraft({ ...draft, path: event.target.value })} />
-        </FormField>
-        <FormField label="格式">
-          <Input value={draft.format ?? ""} onChange={(event) => setDraft({ ...draft, format: event.target.value })} />
-        </FormField>
-        <FormField label="排序">
-          <Select
-            options={sortOptions}
-            value={draft.sort ?? "relevance"}
-            onValueChange={(value) => setDraft({ ...draft, sort: validateSearch({ sort: value }).sort })}
-          />
-        </FormField>
-      </div>
-      {(tags.isError || projects.isError) && (
-        <Alert tone="error">
-          <div className="flex flex-wrap items-center gap-2">
-            <span>无法读取标签或项目选项。</span>
-            <Button type="button" onClick={() => {
-              if (tags.isError) void tags.refetch();
-              if (projects.isError) void projects.refetch();
-            }}>重试</Button>
+      <FilterBar className="flex flex-wrap items-end gap-2">
+        <Button type="button" aria-expanded={expanded} aria-controls={filtersId} onClick={() => setExpanded(!expanded)}>
+          筛选条件
+        </Button>
+        <div className="min-w-0">
+          <FormField label={<span className="sr-only">排序</span>}>
+            <Select
+              options={sortOptions}
+              value={draft.sort ?? "relevance"}
+              onValueChange={(value) => setDraft({ ...draft, sort: validateSearch({ sort: value }).sort })}
+            />
+          </FormField>
+        </div>
+        {changed && <span id={dirtyId} className="text-sm text-muted">有待提交的修改</span>}
+      </FilterBar>
+      {submitted.length > 0 && <p className="text-sm wrap-anywhere text-muted">已应用：{submitted.join(" · ")}</p>}
+      <div id={filtersId} hidden={!expanded}>
+        {expanded && <div className="grid gap-4 rounded-panel border border-line p-3 @min-[42rem]/workspace:grid-cols-2">
+          <fieldset className="min-w-0 space-y-2">
+            <legend className="mb-2 text-sm font-medium">对象</legend>
+            <FormField label="类型">
+              <Select
+                options={typeOptions}
+                placeholder="全部类型"
+                value={draft.type ?? null}
+                onValueChange={(value) => setDraft({ ...draft, type: validateSearch({ type: value }).type })}
+              />
+            </FormField>
+            <FormField label="项目">
+              <Select
+                options={[{ value: "", label: "全部项目" }, ...Array.from(projectOptions, ([value, label]) => ({ value, label }))]}
+                placeholder="全部项目"
+                value={draft.project ?? null}
+                onValueChange={(value) => setDraft({ ...draft, project: value || undefined })}
+              />
+            </FormField>
+            {projects.isError && <Alert tone="error">
+              无法读取项目选项。{" "}
+              <Button type="button" onClick={() => void projects.refetch()}>重试读取项目</Button>
+            </Alert>}
+            <FormField label="标签">
+              <MultiSelect
+                options={Array.from(tagOptions, ([value, label]) => ({ value, label }))}
+                value={draft.tags ?? []}
+                onValueChange={(value) => setDraft({ ...draft, tags: value })}
+              />
+            </FormField>
+            {tags.isError && <Alert tone="error">
+              无法读取标签选项。{" "}
+              <Button type="button" onClick={() => void tags.refetch()}>重试读取标签</Button>
+            </Alert>}
+            <FormField label="归档">
+              <Select
+                options={archiveOptions}
+                placeholder="全部归档状态"
+                value={draft.archived === undefined ? null : String(draft.archived)}
+                onValueChange={(value) => setDraft({ ...draft, archived: value ? value === "true" : undefined })}
+              />
+            </FormField>
+          </fieldset>
+          <div className="min-w-0 space-y-4">
+            <fieldset className="min-w-0 space-y-2">
+              <legend className="mb-2 text-sm font-medium">更新时间</legend>
+              <FormField label="更新时间起">
+                <Input
+                  type="datetime-local"
+                  step="any"
+                  value={toLocalTime(draft.updated_from)}
+                  onChange={(event) => {
+                    setDraft({ ...draft, updated_from: fromLocalTime(event.target.value) });
+                    if (error === "range") setError(undefined);
+                  }}
+                />
+              </FormField>
+              <FormField label="更新时间止" error={error === "range" ? "更新时间起点须早于或等于终点。" : undefined}>
+                <Input
+                  ref={rangeEnd}
+                  type="datetime-local"
+                  step="any"
+                  value={toLocalTime(draft.updated_to)}
+                  onChange={(event) => {
+                    setDraft({ ...draft, updated_to: fromLocalTime(event.target.value) });
+                    if (error === "range") setError(undefined);
+                  }}
+                />
+              </FormField>
+            </fieldset>
+            <fieldset className="min-w-0 space-y-2">
+              <legend className="mb-2 text-sm font-medium">文件位置</legend>
+              <FormField label="路径">
+                <Input value={draft.path ?? ""} onChange={(event) => setDraft({ ...draft, path: event.target.value })} />
+              </FormField>
+              <FormField label="格式">
+                <Input value={draft.format ?? ""} onChange={(event) => setDraft({ ...draft, format: event.target.value })} />
+              </FormField>
+            </fieldset>
           </div>
-        </Alert>
-      )}
-      {error && <Alert tone="error">{error}</Alert>}
+        </div>}
+      </div>
     </Form>
   );
 }
@@ -149,6 +223,7 @@ function SearchResults({ bundle, filters }: { bundle: QueryClientBundle; filters
   const [page, dispatch] = useReducer(cursorReducer, undefined, () => createCursorState());
   const result = useQuery(searchQuery(bundle, filters, page.cursor));
   const next = result.data?.next_cursor ?? null;
+  const canGoNext = !!next && next !== page.cursor && !page.previous.includes(next);
   return (
     <section aria-label="搜索结果" aria-busy={result.isFetching} className="space-y-3">
       {result.isFetching && <Spinner label="正在搜索" />}
@@ -170,7 +245,7 @@ function SearchResults({ bundle, filters }: { bundle: QueryClientBundle; filters
       {(result.data || page.previous.length > 0) && (
         <nav aria-label="搜索翻页" className="flex gap-2">
           <Button disabled={result.isFetching || page.previous.length === 0} onClick={() => dispatch({ type: "previous" })}>上一页</Button>
-          <Button disabled={result.isFetching || result.isError || !next || next === page.cursor} onClick={() => dispatch({ type: "next", nextCursor: next })}>下一页</Button>
+          <Button disabled={result.isFetching || result.isError || !canGoNext} onClick={() => dispatch({ type: "next", nextCursor: next })}>下一页</Button>
         </nav>
       )}
     </section>
@@ -186,12 +261,12 @@ export function SearchPage({ bundle, filters, onSearch }: {
   const [submission, setSubmission] = useState(0);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
-      <h2 className="text-2xl font-semibold">搜索</h2>
+    <div className="min-w-0 space-y-4">
+      <h1 className="page-title">搜索</h1>
       <SearchForm
-        key={`form:${filterKey}`}
         bundle={bundle}
         filters={filters}
+        filterKey={filterKey}
         onSearch={(next) => {
           if (JSON.stringify(next) === filterKey) setSubmission((current) => current + 1);
           else onSearch(next);

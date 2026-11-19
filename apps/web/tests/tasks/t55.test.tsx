@@ -13,6 +13,7 @@ type SearchResponse = components["schemas"]["SearchResponse"];
 
 const id = "00000000-0000-4000-8000-000000000001";
 const tag = "00000000-0000-4000-8000-000000000002";
+const otherTag = "00000000-0000-4000-8000-000000000003";
 const timestamp = "2026-11-18T02:30:00.000Z";
 const hit: SearchHit = {
   id,
@@ -28,7 +29,11 @@ function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-async function openSearch(url: string, search: (params: URLSearchParams) => Response | Promise<Response>) {
+async function openSearch(
+  url: string,
+  search: (params: URLSearchParams) => Response | Promise<Response>,
+  choices?: (path: string) => Response,
+) {
   const requests: URLSearchParams[] = [];
   const fetcher: typeof globalThis.fetch = async (input) => {
     const { pathname, searchParams } = new URL((input as Request).url);
@@ -40,7 +45,7 @@ async function openSearch(url: string, search: (params: URLSearchParams) => Resp
       return search(searchParams);
     }
     if (pathname.endsWith("/projects") || pathname.endsWith("/tags")) {
-      return json({ items: [], next_cursor: null });
+      return choices?.(pathname) ?? json({ items: [], next_cursor: null });
     }
     return json({}, 404);
   };
@@ -67,7 +72,7 @@ it("t55_2 restores every submitted filter when the URL is reopened", async () =>
   const params = new URLSearchParams({
     q: "纪要",
     type: "file",
-    tags: tag,
+    tags: JSON.stringify([tag, otherTag]),
     project: id,
     updated_from: timestamp,
     updated_to: "2026-11-19T03:00:00.000Z",
@@ -78,6 +83,7 @@ it("t55_2 restores every submitted filter when the URL is reopened", async () =>
   });
   const original = await openSearch(`/search?${params}`, () => page([hit]));
   expect(await screen.findByRole("link", { name: "会议纪要" })).toHaveAttribute("href", `/files/${id}`);
+  fireEvent.click(screen.getByRole("button", { name: "筛选条件" }));
   fireEvent.change(screen.getByLabelText("路径"), { target: { value: "项目/文件" } });
   fireEvent.click(within(screen.getByRole("search")).getByRole("button", { name: "搜索" }));
   await waitFor(() => expect(original.requests.at(-1)?.get("path")).toBe("项目/文件"));
@@ -85,10 +91,14 @@ it("t55_2 restores every submitted filter when the URL is reopened", async () =>
   original.unmount();
   const reopened = await openSearch(url, () => page([hit]));
   expect(await screen.findByRole("link", { name: "会议纪要" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "筛选条件" }));
   expect(screen.getByLabelText("路径")).toHaveValue("项目/文件");
   expect(screen.getByLabelText("格式")).toHaveValue("txt");
   params.set("path", "项目/文件");
-  for (const [key, value] of params) expect(reopened.requests.at(-1)?.get(key)).toBe(value);
+  for (const [key, value] of params) {
+    if (key === "tags") expect(reopened.requests.at(-1)?.getAll(key)).toEqual([tag, otherTag]);
+    else expect(reopened.requests.at(-1)?.get(key)).toBe(value);
+  }
   expect(reopened.requests.at(-1)?.has("cursor")).toBe(false);
 });
 
@@ -152,4 +162,73 @@ it("submitting the same search refreshes the first page", async () => {
   fireEvent.click(within(screen.getByRole("search")).getByRole("button", { name: "搜索" }));
   expect(await screen.findByRole("link", { name: "更新后的会议纪要" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "上一页" })).toBeDisabled();
+});
+
+
+it("keeps unapplied filters while collapsed and searches with them only on submission", async () => {
+  const view = await openSearch("/search?q=纪要&path=工作", () => page([hit]));
+  await screen.findByRole("link", { name: "会议纪要" });
+  const toggle = screen.getByRole("button", { name: "筛选条件" });
+  expect(toggle).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByRole("textbox", { name: "路径" })).not.toBeInTheDocument();
+  expect(screen.getByText("已应用：路径 工作")).toBeVisible();
+  fireEvent.click(toggle);
+  fireEvent.change(screen.getByRole("textbox", { name: "路径" }), { target: { value: "草稿目录" } });
+  fireEvent.click(toggle);
+  expect(toggle).toHaveAttribute("aria-expanded", "false");
+  expect(screen.getByText("已应用：路径 工作")).toBeVisible();
+  expect(screen.getByText("有待提交的修改")).toBeVisible();
+  expect(view.requests).toHaveLength(1);
+  fireEvent.click(toggle);
+  expect(screen.getByRole("textbox", { name: "路径" })).toHaveValue("草稿目录");
+  fireEvent.click(toggle);
+  fireEvent.click(within(screen.getByRole("search")).getByRole("button", { name: "搜索" }));
+  await waitFor(() => expect(view.requests.at(-1)?.get("path")).toBe("草稿目录"));
+  expect(await screen.findByText("已应用：路径 草稿目录")).toBeVisible();
+  expect(screen.queryByText("有待提交的修改")).not.toBeInTheDocument();
+});
+
+it("opens the time filters and focuses the end field when a collapsed range is invalid", async () => {
+  const view = await openSearch("/search?q=纪要", () => page([hit]));
+  await screen.findByRole("link", { name: "会议纪要" });
+  const toggle = screen.getByRole("button", { name: "筛选条件" });
+  fireEvent.click(toggle);
+  fireEvent.change(screen.getByLabelText("更新时间起"), { target: { value: "2026-11-19T09:00" } });
+  fireEvent.change(screen.getByLabelText("更新时间止"), { target: { value: "2026-11-18T09:00" } });
+  fireEvent.click(toggle);
+  fireEvent.click(within(screen.getByRole("search")).getByRole("button", { name: "搜索" }));
+  expect(toggle).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByLabelText("更新时间止")).toHaveFocus();
+  expect(screen.getByText("更新时间起点须早于或等于终点。")).toBeVisible();
+  expect(view.requests).toHaveLength(1);
+});
+
+it("keeps keyboard focus on the search input after changing the submitted URL", async () => {
+  const view = await openSearch("/search?q=纪要", () => page([hit]));
+  await screen.findByRole("link", { name: "会议纪要" });
+  const keyword = screen.getByRole("searchbox");
+  keyword.focus();
+  fireEvent.change(keyword, { target: { value: "后续问题" } });
+  fireEvent.submit(screen.getByRole("search"));
+  await waitFor(() => expect(view.requests.at(-1)?.get("q")).toBe("后续问题"));
+  expect(screen.getByRole("searchbox")).toHaveFocus();
+});
+
+it("keeps applied tag IDs available when tag choices fail and retries only that source", async () => {
+  let failTags = true;
+  const requestedOptions: string[] = [];
+  const view = await openSearch(`/search?q=纪要&tags=${tag}`, () => page([hit]), (path) => {
+    requestedOptions.push(path);
+    if (path.endsWith("/tags") && failTags) return json({}, 503);
+    return json({ items: path.endsWith("/tags") ? [{ id: tag, name: "会议资料" }] : [], next_cursor: null });
+  });
+  await screen.findByRole("link", { name: "会议纪要" });
+  fireEvent.click(screen.getByRole("button", { name: "筛选条件" }));
+  expect(await screen.findByText("无法读取标签选项。")).toBeVisible();
+  expect(screen.getByText(`已应用：标签 ${tag}`)).toBeVisible();
+  failTags = false;
+  fireEvent.click(screen.getByRole("button", { name: "重试读取标签" }));
+  expect(await screen.findByText("已应用：标签 会议资料")).toBeVisible();
+  expect(requestedOptions.filter((path) => path.endsWith("/projects"))).toHaveLength(1);
+  expect(view.requests.at(-1)?.get("tags")).toBe(tag);
 });
