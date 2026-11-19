@@ -2,6 +2,8 @@
 
 **依赖与范围** 01 后由账号页面 Agent 负责 `apps/web/src/features/auth/{auth-page,security-page}.tsx` 及 T20 测试。入口为 /login、/bootstrap、/recovery、/settings/security。输入为现有 route search、最近验证要求和两套独立分页数据。
 
+**实施记录** [#250](https://github.com/xingjianxu/knoted/issues/250) · [浏览器对照和验证](evidence/02-account.md)。
+
 ## 页面草图与操作次序
 
 | 页面及现状 | 目标首屏 | 动作与反馈 |

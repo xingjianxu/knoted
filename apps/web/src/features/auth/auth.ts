@@ -38,8 +38,11 @@ export function authError(error: unknown): string {
   )
     return "认证已取消或超时，请重试。";
   if (error instanceof ApiRequestError) {
-    if (error.status === 403)
+    if (error.code === "recent_verification_required")
       return "此操作需要重新登录验证，请重新使用 Passkey 登录。";
+    if (error.code === "csrf_failed")
+      return "无法验证此页面的请求，请刷新页面后重试。";
+    if (error.status === 403) return "没有权限执行此操作。";
     if (error.status === 409)
       return "操作冲突或凭据不可删除（不能删除最后一个凭据），请刷新后重试。";
     if (error.status === 401) return "会话已失效，请重新登录。";

@@ -24,7 +24,11 @@ export function AuthPage({
   const bundle = useRouteContext({ from: "__root__" });
   const navigate = useNavigate();
   const ceremony = useRef<AbortController | null>(null);
-  useEffect(() => () => ceremony.current?.abort(), []);
+  useEffect(() => () => {
+    const pending = ceremony.current;
+    ceremony.current = null;
+    pending?.abort();
+  }, []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const {
@@ -37,7 +41,7 @@ export function AuthPage({
     defaultValues: { token: "", name: "我的 Passkey" },
   });
   async function authenticate(values?: Values) {
-    ceremony.current?.abort();
+    if (ceremony.current) return;
     const controller = new AbortController();
     ceremony.current = controller;
     const signal = controller.signal;
@@ -56,6 +60,7 @@ export function AuthPage({
                 body: { recovery_token: values!.token },
                 signal,
               });
+      signal.throwIfAborted();
       if (!result.data) throw new Error("无法开始认证，请重试。");
       const credential = await runWebAuthn(
         result.data.options,
@@ -80,7 +85,9 @@ export function AuthPage({
                 signal,
               });
       if (!finished.data) throw new Error("认证未完成，请重试。");
+      signal.throwIfAborted();
       await bundle.queryClient.cancelQueries();
+      signal.throwIfAborted();
       bundle.queryClient.clear();
       bundle.queryClient.setQueryData(queryKeys.auth.session(), finished.data);
       resetField("token");
@@ -88,35 +95,40 @@ export function AuthPage({
     } catch (cause) {
       if (!signal.aborted) setError(authError(cause));
     } finally {
-      setBusy(false);
+      if (ceremony.current === controller) {
+        ceremony.current = null;
+        setBusy(false);
+      }
     }
   }
   const title =
     mode === "login"
-      ? "登录 Knoted"
+      ? "登录"
       : mode === "bootstrap"
         ? "首次注册"
         : "恢复账号";
   return (
-    <main className="flex min-h-screen items-center justify-center p-6">
-      <section className="w-full max-w-md space-y-5">
-        <h1 className="text-2xl font-semibold">{title}</h1>
-        <p>使用 Passkey 安全访问个人工作空间。</p>
-        {error && <Alert tone="error">{error}</Alert>}
+    <main aria-labelledby="auth-title" className="grid min-h-dvh place-items-center p-3 sm:p-6">
+      <section className="w-full min-w-0 max-w-sm space-y-6 rounded-panel border border-line bg-surface p-4 sm:p-6">
+        <div className="space-y-2">
+          <p className="font-semibold text-accent">Knoted</p>
+          <h1 id="auth-title" className="page-title">{title}</h1>
+        </div>
         {mode === "login" ? (
-          <Button disabled={busy} onClick={() => void authenticate()}>
-            使用 Passkey 登录
-          </Button>
+          <div className="space-y-3">
+            <Button className="page-primary w-full" variant="solid" size="lg" loading={busy} focusableWhenDisabled
+              onClick={() => void authenticate()}>
+              使用 Passkey 登录
+            </Button>
+            {error && <Alert tone="error">{error}</Alert>}
+          </div>
         ) : (
-          <form
-            className="space-y-4"
-            onSubmit={(event) => void handleSubmit(authenticate)(event)}
-          >
-            <p>
-              {mode === "bootstrap"
-                ? "使用管理员在本机签发的一次性注册令牌。"
-                : "恢复成功后将撤销所有旧凭据与会话。"}
-            </p>
+          <form aria-labelledby="auth-title" className="space-y-4" onSubmit={(event) => void handleSubmit(authenticate)(event)}>
+            {mode === "bootstrap" ? (
+              <p className="text-muted">使用管理员在本机签发的一次性注册令牌。</p>
+            ) : (
+              <Alert tone="warning">恢复成功后将撤销所有旧凭据与会话。</Alert>
+            )}
             <FormField label="一次性令牌" error={errors.token?.message}>
               <Input
                 id="token"
@@ -134,17 +146,21 @@ export function AuthPage({
                 disabled={busy}
               />
             </FormField>
-            <Button type="submit" disabled={busy}>
+            {error && <Alert tone="error">{error}</Alert>}
+            <Button type="submit" className="page-primary w-full" variant="solid" size="lg" loading={busy} focusableWhenDisabled>
               {mode === "bootstrap" ? "注册 Passkey" : "替换凭据并恢复"}
             </Button>
           </form>
         )}
-        <nav className="flex gap-4" aria-label="认证方式">
-          <Link to="/login" search={{ redirect: safeReturnTo(returnTo) }}>
-            登录
-          </Link>
-          <Link to="/bootstrap">首次注册</Link>
-          <Link to="/recovery">恢复账号</Link>
+        <nav className="flex flex-wrap justify-center gap-x-6 gap-y-2 border-t border-line pt-4" aria-label="认证方式">
+          {mode === "login" ? (
+            <>
+              <Link className="page-link" to="/bootstrap">首次注册</Link>
+              <Link className="page-link" to="/recovery">恢复账号</Link>
+            </>
+          ) : (
+            <Link className="page-link" to="/login" search={{ redirect: safeReturnTo(returnTo) }}>返回登录</Link>
+          )}
         </nav>
       </section>
     </main>

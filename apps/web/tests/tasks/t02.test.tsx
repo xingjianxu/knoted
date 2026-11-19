@@ -42,8 +42,9 @@ describe("t02 web scaffold", () => {
     await screen.findByRole("button", { name: "使用 Passkey 登录" });
 
     expect(
-      screen.getByRole("heading", { level: 1, name: /knoted/i }),
+      screen.getByRole("heading", { level: 1, name: "登录" }),
     ).toBeInTheDocument();
+    expect(screen.getByText("Knoted", { exact: true })).toBeInTheDocument();
     scroll.mockRestore();
   });
 
@@ -70,7 +71,7 @@ describe("t02 web scaffold", () => {
     await screen.findAllByRole("button", { name: "使用 Passkey 登录" });
 
     expect(
-      screen.getAllByRole("heading", { level: 1, name: /knoted/i }),
+      screen.getAllByRole("heading", { level: 1, name: "登录" }),
     ).toHaveLength(2);
     scroll.mockRestore();
   });
