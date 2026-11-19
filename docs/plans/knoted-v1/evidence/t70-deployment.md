@@ -24,13 +24,15 @@ API 在迁移结束与 Rust 重新绑定端口之间有短暂交接。若此时�
 
 本地记录在 `/data/knoted-dev/tasks/t70/evidence/`。包括 Rust 门禁 `t70-branch-rust.log`、两组 KVM `t69-module-final.log` 与 `t70-branch-browser-vm.log`、系统 dry-activate 和两次签发失败及回退记录。
 
-## 当前运行与网络边界
+## 生产运行与本机域名验收
 
 - 宿主提交为 `781aba696d6827aee89b4cc85cada494e3a76770`，已快进至本机宿主主线。完整构建输出为 `/nix/store/rsk2ffrh16v8kncl6y6smbsdw7cy1872-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，通过生产 GC root 保留。原启动 profile、运行代和用户未提交文件均比对一致。
 - 最终 DNS-01 仅为新域名选用经实际 acme UID 验证的 `223.5.5.5:53` 查找区域，发布 TXT 后等待 60 秒，由 Let's Encrypt 完成独立验证。正式证书 SAN 为 `kn.bixlab.cn`，证书链和主机名校验通过。续期 timer 活动，证书更新由共享 Caddy 热加载。
 - 在 wks-lab 访问 `https://kn.bixlab.cn` 和 readiness 均为 HTTP 200，未登录会话查询为 401。API、Worker、Python 的 /proc 可执行文件匹配固定产物。15702、15703、15705 均只监听 127.0.0.1。库的迁移版本为 27，生产账号保持首次注册状态。
 - 生产内部接口以合成输入完成一次真实 BGE-M3 GPU 执行。仅配置预定 GPU 可见，返回设备为 `cuda`、1024 个有限归一化值。产物字节和摘要一致，guardian 出具退出证明。校验脚本最初把设备字符串写成 `cuda:0`，改按 BGE 应用实际使用的 `cuda` 复核同一执行。
 - 共享 Caddy、PostgreSQL、Strata、OnlyOffice、DAE、Polkit 的 PID 前后一致，dev readiness 保持 200。独立域名的 Caddy 配置热加载与撤销均已实际执行。
-- 当前 DNS A 仍指向维护者配置的 `115.24.115.250`。外部节点从香港、东京、新加坡、胡志明市及另组三个外部测点请求 HTTPS 均连接超时。主机已监听 443，nftables 允许入站 TCP，尚无通过该公网地址的成功探测。公网入口变更另待维护者确认。[亚洲节点探测](https://check-host.net/check-report/58e546f9k4f8)
+- 维护者确认生产入口为 `kn.bixlab.cn` 直接映射到 wks-lab 本机。复验确认 A 记录 `115.24.115.250` 属于本机 `ens5f0`，请求该域名的 `/health/ready` 返回 HTTP 200 和 `{"status":"ready"}`，TLS 校验结果为 0，续期定时器和生产服务均为 active。
 
-操作和定向回退步骤在宿主仓库 `docs/knoted-production.md`。部署前后、签发和外部探测输出位于同一 T70 evidence 目录。GPU 成功复核输出为 `host-real-gpu-verified.log`。
+早期外部 443 探测的超时记录见证据目录的 `external-*-result.json`。维护者随后确认以本机域名映射和 HTTPS 作为验收范围。
+
+操作和定向回退步骤在宿主仓库 `docs/knoted-production.md`。部署前后与签发输出位于同一 T70 evidence 目录。本机域名复验记录为 `host-local-acceptance.log`。GPU 成功复核输出为 `host-real-gpu-verified.log`。

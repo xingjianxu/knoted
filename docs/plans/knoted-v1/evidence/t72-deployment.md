@@ -27,7 +27,7 @@ Rust 首轮复用缓存时，OCR 用例仍读取已清理的工作树路径。�
 
 ## 生产与访问范围
 
-生产使用独立空库 `knoted_prod`、专用状态根及 Meilisearch。维持已批准的独立运行版本。正式证书、续期 timer、本机 HTTPS、三处回环监听及 CUDA BGE-M3 样本已实测。公网探测连接 443 超时，当前仍保留维护者配置的 A 记录，公网路径由 T70 跟踪。[T70 验收](t70-deployment.md)
+生产使用独立空库 `knoted_prod`、专用状态根及 Meilisearch。维持已批准的独立运行版本。正式证书、续期 timer、本机 HTTPS、三处回环监听及 CUDA BGE-M3 样本已实测。生产域名 `kn.bixlab.cn` 直接解析到 wks-lab 的本机地址 `115.24.115.250`，符合维护者确认的验收范围。[T70 验收](t70-deployment.md)
 
 T69 早期一次测试曾使用 dev 的默认 Meilisearch。交接只读核对在同一小时内有 14 个 T54/T62 测试前缀索引，逐个归属尚未证实，保留现状。后续门禁使用隔离 Meilisearch。
 
