@@ -97,7 +97,7 @@
 | [T68](tasks/T68.md) | 一致性备份 | T67 | done（[PR #227](https://github.com/xingjianxu/knoted/pull/227)，主线/dev `c94232c`，[证据](evidence/t68-consistent-backup.md)） |
 | [T69](tasks/T69.md) | 隔离恢复演练 | T68, T53, T59 | done（[PR #229](https://github.com/xingjianxu/knoted/pull/229)，主线/dev `5308378`，[证据](evidence/t69-isolated-restore.md)） |
 | [T70](tasks/T70.md) | 完整Nix模块与主机接入 | T21, T69 | wks-lab 已启用，公网 443 待确认（[PR #232](https://github.com/xingjianxu/knoted/pull/232)，宿主 `781aba6`，[证据](evidence/t70-deployment.md)） |
-| [T71](tasks/T71.md) | 功能与故障恢复集成验收 | T70 | pending |
+| [T71](tasks/T71.md) | 功能与故障恢复集成验收 | T70 | done（[PR #235](https://github.com/xingjianxu/knoted/pull/235)，主线 `dbc5788`，[证据](evidence/t71-acceptance-matrix.md)） |
 | [T72](tasks/T72.md) | 最终测试部署和交接 | T71 | pending |
 
 T39—T50 最终组合补修：done（PR [#177](https://github.com/xingjianxu/knoted/pull/177)，主线 `e9da413`，dev `e9da413`；[证据](evidence/t39-t50-integration.md)）。表内主线/dev保留各卡首次完整验收修订；最新运行及最终修复以本条为准。
