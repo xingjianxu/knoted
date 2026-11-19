@@ -25,7 +25,7 @@ function chatTarget(hit: SearchHit) {
 }
 
 function resultTitle({ entity_type, id, title }: SearchHit, chat: ReturnType<typeof chatTarget>) {
-  const className = "wrap-anywhere font-semibold text-accent hover:underline";
+  const className = "page-link wrap-anywhere font-semibold";
   switch (entity_type) {
     case "note": return <Link className={className} to="/notes/$noteId" params={{ noteId: id }}>{title}</Link>;
     case "file": return <Link className={className} to="/files/$fileId" params={{ fileId: id }}>{title}</Link>;
