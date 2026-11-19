@@ -151,7 +151,7 @@ fn rules(ctx: &AppContext) -> ScanRules {
 
 /// Watches kernel events every 100ms (not filesystem polling). The supplemental
 /// full-scan deadline is independent of debounce and of an active scan job.
-async fn schedule(ctx: AppContext) -> ! {
+async fn schedule(ctx: AppContext, mut stop: tokio::sync::watch::Receiver<()>) {
     let config = ctx.files();
     let root = config.root.clone().expect("enabled config validated");
     let mut clock = ScanSchedule::new(
@@ -165,8 +165,7 @@ async fn schedule(ctx: AppContext) -> ! {
     let mut last_generation = None;
     let mut tick = tokio::time::interval(Duration::from_millis(100));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        tick.tick().await;
+    while super::next_tick(&mut tick, &mut stop).await {
         let now = Instant::now();
         if watch.is_none() {
             watch = NotificationWatch::new().ok();
@@ -212,22 +211,33 @@ async fn schedule(ctx: AppContext) -> ! {
             }
         }
         if clock.due(now) {
+            let Ok(Some(admission)) = ctx.try_write().await else {
+                continue;
+            };
             match scanner::enqueue_scan(&ctx).await {
                 Ok(true) => clock.enqueued(now),
                 Ok(false) => (), // Busy: retain both the event and supplemental deadline.
                 Err(_) => eprintln!("knoted-worker: scan scheduling unavailable"),
             }
+            if admission.finish().await.is_err() {
+                eprintln!("knoted-worker: maintenance completion could not be recorded");
+            }
         }
     }
 }
 
-async fn recover_chat(ctx: AppContext) -> ! {
+async fn recover_chat(ctx: AppContext, mut stop: tokio::sync::watch::Receiver<()>) {
     let mut tick = tokio::time::interval(Duration::from_secs(2));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        tick.tick().await;
+    while super::next_tick(&mut tick, &mut stop).await {
+        let Ok(Some(admission)) = ctx.try_write().await else {
+            continue;
+        };
         if chat::recover_terminal_generation(&ctx).await.is_err() {
             eprintln!("knoted-worker: generation recovery unavailable");
+        }
+        if admission.finish().await.is_err() {
+            eprintln!("knoted-worker: maintenance completion could not be recorded");
         }
     }
 }
@@ -238,12 +248,27 @@ pub async fn run(ctx: AppContext) {
         format!("files-{}", std::process::id()),
         Dispatcher { ctx: ctx.clone() },
     );
-    // Each scheduler is optional, while the shared dispatcher always runs.
-    tokio::select! {
-        _ = schedule(ctx.clone()), if ctx.files().enabled => unreachable!(),
-        _ = super::chunk_fulltext::schedule(ctx.clone()), if ctx.search().enabled => unreachable!(),
-        _ = super::vector::schedule(ctx.clone()), if ctx.vectors_enabled() => unreachable!(),
-        _ = recover_chat(ctx.clone()) => unreachable!(),
-        _ = runner.run() => {},
-    }
+    let (shutdown, stop) = tokio::sync::watch::channel(());
+    tokio::join!(
+        async {
+            runner.run().await;
+            drop(shutdown);
+        },
+        async {
+            if ctx.files().enabled {
+                schedule(ctx.clone(), stop.clone()).await;
+            }
+        },
+        async {
+            if ctx.search().enabled {
+                super::chunk_fulltext::schedule(ctx.clone(), stop.clone()).await;
+            }
+        },
+        async {
+            if ctx.vectors_enabled() {
+                super::vector::schedule(ctx.clone(), stop.clone()).await;
+            }
+        },
+        recover_chat(ctx.clone(), stop.clone())
+    );
 }

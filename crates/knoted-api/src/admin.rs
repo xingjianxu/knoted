@@ -1,13 +1,14 @@
 //! The `knoted-api admin ...` commands.
 //!
 //! The API process also serves as the operator's administrative entry point, so
-//! the deployment needs no second binary. The only command is `token`, which
-//! issues the one-time credential token used by the browser's bootstrap or
-//! recovery ceremony.
+//! the deployment needs no second binary. The `token` command issues a
+//! one-time browser credential. The `backup` command writes a local archive.
 //!
 //! The token is printed to stdout exactly once and never logged: stdout is the
 //! operator's channel (a shell, an SSH session), while logs are collected and
 //! retained. Error messages are fixed strings for the same reason.
+
+pub mod backup;
 
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -46,6 +47,8 @@ pub enum AdminError {
     /// The loaded configuration has no `[database]` section.
     #[error("configuration is missing required `database` settings")]
     MissingDatabase,
+    #[error("write admission is paused for maintenance")]
+    Maintenance,
     /// Reading the database failed before a token could be issued.
     #[error(transparent)]
     Database(#[from] DbError),
@@ -125,7 +128,15 @@ where
 {
     let database = config.database().ok_or(AdminError::MissingDatabase)?;
     let pool = db::connect(database).await?;
-    let issued = issue_token(&pool, command.purpose, Utc::now()).await?;
+    let ctx = knoted_core::context::AppContext::new(pool);
+    let guard = ctx
+        .try_write()
+        .await
+        .map_err(DbError::from)?
+        .ok_or(AdminError::Maintenance)?;
+    let issued = issue_token(ctx.pool(), command.purpose, Utc::now()).await;
+    guard.finish().await.map_err(DbError::from)?;
+    let issued = issued?;
     write_token(out, &issued)?;
     Ok(())
 }

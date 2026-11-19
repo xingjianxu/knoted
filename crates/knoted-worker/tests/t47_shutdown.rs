@@ -55,5 +55,46 @@ async fn t47_shutdown_stops_claiming_and_waits_for_registered_work() {
         .await
         .unwrap();
     assert_eq!(queued, 1);
+    let unresolved: i64 = sqlx::query_scalar("SELECT count(*) FROM maintenance_operations")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        unresolved, 0,
+        "confirmed worker shutdown retires its active admission"
+    );
+    db.drop().await;
+}
+
+#[tokio::test]
+async fn shutdown_attempts_every_owned_lease_and_keeps_unconfirmed_marker() {
+    struct Unconfirmed(Arc<std::sync::atomic::AtomicUsize>);
+    impl Handler for Unconfirmed {
+        async fn execute(&self, _: &Lease) -> ExecutionOutcome {
+            unreachable!()
+        }
+        async fn cancel_and_wait(&self, _: &Lease) -> bool {
+            self.0.fetch_add(1, Ordering::SeqCst) != 0
+        }
+    }
+
+    let db = TestDb::create().await.unwrap();
+    for kind in ["test.first", "test.second"] {
+        let mut tx = db.pool.begin().await.unwrap();
+        jobs::enqueue(&mut tx, jobs::JobSpec::new(kind))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        jobs::claim(&db.pool, "shutdown").await.unwrap().unwrap();
+    }
+    let visited = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let runner = WorkerRunner::new(db.pool.clone(), "shutdown", Unconfirmed(visited.clone()));
+    runner.run_until(async {}).await;
+    let unresolved: i64 = sqlx::query_scalar("SELECT count(*) FROM maintenance_operations")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(visited.load(Ordering::SeqCst), 2);
+    assert_eq!(unresolved, 1);
     db.drop().await;
 }

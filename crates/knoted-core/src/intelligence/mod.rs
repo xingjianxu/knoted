@@ -395,6 +395,8 @@ pub enum HealthState {
 /// Everything the client can refuse.
 #[derive(Debug, thiserror::Error)]
 pub enum IntelligenceError {
+    #[error("execution submission ledger unavailable")]
+    SubmissionLedger,
     /// The request never produced a response.
     #[error("intelligence service transport error: {0}")]
     Transport(#[from] reqwest::Error),

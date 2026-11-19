@@ -22,16 +22,21 @@ pub async fn cancel_and_wait(ctx: &AppContext, lease: &Lease) -> bool {
 
 /// Runs independently of file scanning so application records can be indexed
 /// even with no source directory configured.
-pub async fn project(ctx: AppContext) {
+pub async fn project(ctx: AppContext, mut stop: tokio::sync::watch::Receiver<()>) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        interval.tick().await;
+    while super::next_tick(&mut interval, &mut stop).await {
+        let Ok(Some(admission)) = ctx.try_write().await else {
+            continue;
+        };
         if knoted_core::search::service::project_pending(&ctx)
             .await
             .is_err()
         {
             eprintln!("knoted-worker: full-text source projection temporarily unavailable");
+        }
+        if admission.finish().await.is_err() {
+            eprintln!("knoted-worker: maintenance completion could not be recorded");
         }
     }
 }

@@ -357,6 +357,12 @@ async fn t26_cancelled_caller_does_not_interrupt_asset_registration() {
     .unwrap();
     caller.abort();
     let _ = caller.await;
+    let refused = knoted_core::maintenance::exclusive(
+        h.ctx.admission_pool(),
+        std::time::Duration::from_millis(200),
+    )
+    .await
+    .is_err();
     blocker.rollback().await.unwrap();
     let completed = tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
@@ -370,6 +376,10 @@ async fn t26_cancelled_caller_does_not_interrupt_asset_registration() {
     assert!(
         completed.is_ok(),
         "registration must finish independently of a disconnected caller"
+    );
+    assert!(
+        refused,
+        "the detached upload must retain write admission until registration commits"
     );
     let replay = h.upload(fixture(ImageFormat::Png), "cancel").await.unwrap();
     assert_eq!(

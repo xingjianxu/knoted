@@ -432,3 +432,85 @@ async fn session_http_maximum_page_keeps_the_101st_session_reachable() {
     );
     db.drop().await;
 }
+
+#[tokio::test]
+async fn t68_maintenance_allows_session_read_without_renewal_and_refuses_rotation() {
+    let (db, app, _, current) = setup().await;
+    let ctx = AppContext::new(db.pool.clone());
+    let exclusive = knoted_core::maintenance::exclusive(
+        ctx.admission_pool(),
+        std::time::Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+    let before: (chrono::DateTime<Utc>, Vec<u8>) =
+        sqlx::query_as("SELECT last_seen_at, csrf_token_hash FROM sessions WHERE id=$1")
+            .bind(current.session.id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    let mut cache_controls = Vec::new();
+    for (method, path, cookie, expected) in [
+        (
+            Method::GET,
+            "/api/v1/auth/session",
+            Some(current.csrf_token.as_str()),
+            StatusCode::OK,
+        ),
+        (
+            Method::GET,
+            "/api/v1/auth/session",
+            None,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            Method::POST,
+            "/api/v1/auth/logout",
+            Some(current.csrf_token.as_str()),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(request(method, path, Some(&current), cookie, true))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        if expected == StatusCode::SERVICE_UNAVAILABLE {
+            cache_controls.push(
+                response
+                    .headers()
+                    .get(header::CACHE_CONTROL)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_owned(),
+            );
+            let data = body(response).await;
+            assert_eq!(data["code"], "dependency_unavailable");
+            assert_eq!(data["message"], "writes are paused for maintenance");
+        }
+    }
+    // A valid CSRF-protected SSE replay still reaches its read-only handler.
+    let replay = format!("/api/v1/chat/runs/{}/events", Uuid::new_v4());
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &replay,
+            Some(&current),
+            Some(&current.csrf_token),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let after = sqlx::query_as("SELECT last_seen_at, csrf_token_hash FROM sessions WHERE id=$1")
+        .bind(current.session.id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(before, after);
+    drop(exclusive);
+    db.drop().await;
+    assert_eq!(cache_controls, ["private, no-store", "private, no-store"]);
+}

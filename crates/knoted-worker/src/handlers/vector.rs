@@ -18,13 +18,18 @@ use uuid::Uuid;
 pub const KIND: &str = "rag_vectors.embed";
 const BATCH_DEADLINE_SECONDS: i64 = 900;
 
-pub async fn schedule(ctx: AppContext) -> ! {
+pub async fn schedule(ctx: AppContext, mut stop: tokio::sync::watch::Receiver<()>) {
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        tick.tick().await;
+    while super::next_tick(&mut tick, &mut stop).await {
+        let Ok(Some(admission)) = ctx.try_write().await else {
+            continue;
+        };
         if enqueue_missing(&ctx).await.is_err() {
             eprintln!("knoted-worker: vector scheduling unavailable");
+        }
+        if admission.finish().await.is_err() {
+            eprintln!("knoted-worker: maintenance completion could not be recorded");
         }
     }
 }

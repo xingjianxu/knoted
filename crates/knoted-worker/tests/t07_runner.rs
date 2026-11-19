@@ -132,3 +132,23 @@ async fn t07_runner_stops_when_the_lease_is_lost() {
 
     db.drop().await;
 }
+
+#[tokio::test]
+async fn t68_maintenance_leaves_queued_job_unclaimed() {
+    let db = test_db().await;
+    enqueue(&db.pool).await;
+    let ctx = knoted_core::context::AppContext::new(db.pool.clone());
+    let guard = knoted_core::maintenance::exclusive(ctx.admission_pool(), Duration::from_secs(2))
+        .await
+        .unwrap();
+    let runner = WorkerRunner::new(db.pool.clone(), "paused", |_lease: &Lease| async {
+        JobOutcome::Succeeded
+    });
+    assert_eq!(runner.run_once().await.unwrap(), None);
+    drop(guard);
+    assert_eq!(
+        runner.run_once().await.unwrap(),
+        Some(JobOutcome::Succeeded)
+    );
+    db.drop().await;
+}

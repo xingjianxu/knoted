@@ -1148,7 +1148,7 @@ async fn finish_generation(
     .fetch_optional(&mut *tx)
     .await?
     .ok_or(DomainError::NotFound)?;
-    sqlx::query("UPDATE generation_runs SET state='completed',admitted=false,partial=false,updated_at=$2 WHERE id=$1")
+    sqlx::query("UPDATE generation_runs SET state='completed',admitted=false,upstream_stopped=upstream_requested,partial=false,updated_at=$2 WHERE id=$1")
         .bind(id).bind(now).execute(&mut *tx).await?;
     chat_projection::record(&mut tx, record.assistant_message_id, version).await?;
     touch_session(&mut tx, record.session_id, now).await?;
@@ -1178,14 +1178,14 @@ pub async fn confirm_generation_stop(
     }
     let now = ctx.now();
     if record.state == "interrupted" {
-        sqlx::query("UPDATE generation_runs SET admitted=false,updated_at=$2 WHERE id=$1")
+        sqlx::query("UPDATE generation_runs SET admitted=false,upstream_stopped=upstream_requested,updated_at=$2 WHERE id=$1")
             .bind(id)
             .bind(now)
             .execute(&mut *tx)
             .await?;
     } else {
         sqlx::query(
-            "UPDATE generation_runs SET state='cancelled',admitted=false,updated_at=$2 WHERE id=$1",
+            "UPDATE generation_runs SET state='cancelled',admitted=false,upstream_stopped=upstream_requested,updated_at=$2 WHERE id=$1",
         )
         .bind(id)
         .bind(now)
@@ -1446,7 +1446,7 @@ async fn fail_generation(
     }
     let now = ctx.now();
     if stopped {
-        sqlx::query("UPDATE generation_runs SET state='failed',admitted=false,error=$2,updated_at=$3 WHERE id=$1")
+        sqlx::query("UPDATE generation_runs SET state='failed',admitted=false,upstream_stopped=upstream_requested,error=$2,updated_at=$3 WHERE id=$1")
             .bind(id).bind(code).bind(now).execute(&mut *tx).await?;
         append_event(
             &mut tx,
@@ -1742,7 +1742,7 @@ pub async fn recover_terminal_generation(ctx: &AppContext) -> Result<bool, Domai
     let now = ctx.now();
     if stopped && job_state == "cancelled" && record.state != "interrupted" {
         sqlx::query(
-            "UPDATE generation_runs SET state='cancelled',admitted=false,updated_at=$2 WHERE id=$1",
+            "UPDATE generation_runs SET state='cancelled',admitted=false,upstream_stopped=upstream_requested,updated_at=$2 WHERE id=$1",
         )
         .bind(id)
         .bind(now)
@@ -1754,7 +1754,7 @@ pub async fn recover_terminal_generation(ctx: &AppContext) -> Result<bool, Domai
             interrupt(&mut tx, id, now, "generation_interrupted").await?;
         }
         if stopped {
-            sqlx::query("UPDATE generation_runs SET admitted=false,updated_at=$2 WHERE id=$1")
+            sqlx::query("UPDATE generation_runs SET admitted=false,upstream_stopped=upstream_requested,updated_at=$2 WHERE id=$1")
                 .bind(id)
                 .bind(now)
                 .execute(&mut *tx)

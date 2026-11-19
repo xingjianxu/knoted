@@ -664,6 +664,7 @@ impl EngineTask {
 /// upserts, task polling and deletion. It is not a general-purpose SDK.
 #[derive(Clone)]
 pub struct MeiliClient {
+    pool: Option<PgPool>,
     base: String,
     api_key: Option<String>,
     http: reqwest::Client,
@@ -673,7 +674,6 @@ impl std::fmt::Debug for MeiliClient {
     // The API key is a credential: `{:?}` must never reveal it.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MeiliClient")
-            .field("base", &self.base)
             .field("api_key_set", &self.api_key.is_some())
             .finish_non_exhaustive()
     }
@@ -685,11 +685,17 @@ impl MeiliClient {
         if !config.enabled {
             return Err(DomainError::Disabled);
         }
+        Self::connect(config, api_key)
+    }
+
+    fn connect(config: &SearchConfig, api_key: Option<&str>) -> Result<Self, DomainError> {
         let http = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(HTTP_TIMEOUT)
             .build()
             .map_err(|_| DomainError::Unavailable)?;
         Ok(MeiliClient {
+            pool: None,
             base: config.base_url.trim_end_matches('/').to_owned(),
             api_key: api_key.map(str::to_owned),
             http,
@@ -698,7 +704,9 @@ impl MeiliClient {
 
     /// Builds a client from the process context.
     pub fn from_context(ctx: &AppContext) -> Result<MeiliClient, DomainError> {
-        MeiliClient::new(ctx.search(), ctx.search_api_key())
+        let mut client = MeiliClient::new(ctx.search(), ctx.search_api_key())?;
+        client.pool = Some(ctx.pool().clone());
+        Ok(client)
     }
 
     pub(crate) fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
@@ -731,6 +739,121 @@ impl MeiliClient {
         }
     }
 
+    async fn submit_task(
+        &self,
+        uid: &str,
+        request: reqwest::RequestBuilder,
+        allow_existing: bool,
+    ) -> Result<Option<i64>, DomainError> {
+        let id = Uuid::new_v4();
+        if let Some(pool) = &self.pool {
+            let mut tx = pool.begin().await?;
+            sqlx::query("INSERT INTO maintenance_external_targets VALUES ('meili',$1,$2) ON CONFLICT DO NOTHING")
+                .bind(&self.base).bind(uid).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO maintenance_external_submissions (id,service,index_uid) VALUES ($1,'meili',$2)")
+                .bind(id).bind(uid).execute(&mut *tx).await?;
+            tx.commit().await?;
+        }
+        let response = request.send().await.map_err(|_| DomainError::Unavailable)?;
+        let status = response.status();
+        let result = if status.is_success() {
+            let value = response
+                .json()
+                .await
+                .map_err(|_| DomainError::Unavailable)?;
+            Ok(Some(task_uid(&value)?))
+        } else if matches!(
+            status.as_u16(),
+            400 | 401 | 403 | 404 | 405 | 409 | 413 | 415 | 422
+        ) {
+            let body: Value = response
+                .json()
+                .await
+                .map_err(|_| DomainError::Unavailable)?;
+            let code = body
+                .get("code")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .ok_or(DomainError::Unavailable)?;
+            let message = body
+                .get("message")
+                .and_then(Value::as_str)
+                .ok_or(DomainError::Unavailable)?;
+            if allow_existing
+                && status == reqwest::StatusCode::CONFLICT
+                && code == "index_already_exists"
+            {
+                Ok(None)
+            } else {
+                Err(DomainError::Rejected(message.to_owned()))
+            }
+        } else {
+            return Err(DomainError::Unavailable);
+        };
+        if let Some(pool) = &self.pool {
+            sqlx::query("DELETE FROM maintenance_external_submissions WHERE id=$1")
+                .bind(id)
+                .execute(pool)
+                .await?;
+        }
+        result
+    }
+
+    /// Probe historical targets even if new business writes are disabled.
+    /// The caller holds the exclusive maintenance guard throughout these GETs.
+    pub(crate) async fn queues_are_empty(
+        ctx: &AppContext,
+        indexes: std::collections::BTreeSet<String>,
+    ) -> Result<bool, DomainError> {
+        if ctx.search().api_key_credential.is_some() && ctx.search_api_key().is_none() {
+            return Err(DomainError::Unavailable);
+        }
+        let client = Self::connect(ctx.search(), ctx.search_api_key())?;
+        for uid in indexes {
+            if !client.queue_is_empty(&uid).await? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    async fn queue_is_empty(&self, uid: &str) -> Result<bool, DomainError> {
+        if !SearchConfig::valid_index_uid(uid) {
+            return Err(DomainError::Unavailable);
+        }
+        // Meili filters /tasks results *and total* by the credential's index
+        // scope. GET /indexes/{uid} checks that scope before looking up the UID.
+        let index = self
+            .request(reqwest::Method::GET, &format!("indexes/{uid}"))
+            .send()
+            .await
+            .map_err(|_| DomainError::Unavailable)?;
+        let status = index.status();
+        let body: Value = index.json().await.map_err(|_| DomainError::Unavailable)?;
+        let authorized = match status {
+            reqwest::StatusCode::OK => body["uid"].as_str() == Some(uid),
+            reqwest::StatusCode::NOT_FOUND => {
+                body["code"] == "index_not_found"
+                    && body["type"] == "invalid_request"
+                    && body["message"] == format!("Index `{uid}` not found.")
+                    && body["link"] == "https://docs.meilisearch.com/errors#index_not_found"
+            }
+            _ => false,
+        };
+        if !authorized {
+            return Err(DomainError::Unavailable);
+        }
+        // An authorized absent index may still have a queued creation task.
+        let response = self
+            .send(self.request(reqwest::Method::GET, "tasks").query(&[
+                ("indexUids", uid),
+                ("statuses", "enqueued,processing"),
+                ("limit", "1"),
+            ]))
+            .await?;
+        Ok(empty_task_page(&response))
+    }
+
     /// Creates the index and its settings when they are missing.
     ///
     /// Settings are re-written only when they drifted, and the task of every
@@ -754,18 +877,11 @@ impl MeiliClient {
         if status.as_u16() == 404 {
             // A concurrent publication may create the index first; losing that
             // race is not an error.
-            let created = self
+            let request = self
                 .request(reqwest::Method::POST, "indexes")
-                .json(&json!({ "uid": uid, "primaryKey": "id" }))
-                .send()
-                .await
-                .map_err(|_| DomainError::Unavailable)?;
-            let created_status = created.status();
-            let body: Value = created.json().await.unwrap_or(Value::Null);
-            if created_status.is_success() {
-                self.require_task(task_uid(&body)?).await?;
-            } else if created_status.as_u16() != 409 {
-                return Err(DomainError::Unavailable);
+                .json(&json!({ "uid": uid, "primaryKey": "id" }));
+            if let Some(task) = self.submit_task(uid, request, true).await? {
+                self.require_task(task).await?;
             }
         } else if status.is_client_error() {
             return Err(DomainError::Rejected(format!(
@@ -797,13 +913,14 @@ impl MeiliClient {
             return Err(DomainError::Unavailable);
         }
         if !settings_match(&settings, expected) {
-            let body = self
-                .send(
-                    self.request(reqwest::Method::PATCH, &format!("indexes/{uid}/settings"))
-                        .json(expected),
-                )
-                .await?;
-            self.require_task(task_uid(&body)?).await?;
+            let request = self
+                .request(reqwest::Method::PATCH, &format!("indexes/{uid}/settings"))
+                .json(expected);
+            let task = self
+                .submit_task(uid, request, false)
+                .await?
+                .ok_or(DomainError::Unavailable)?;
+            self.require_task(task).await?;
         }
         Ok(())
     }
@@ -828,28 +945,26 @@ impl MeiliClient {
         uid: &str,
         documents: &[Value],
     ) -> Result<i64, DomainError> {
-        let body = self
-            .send(
-                self.request(reqwest::Method::PUT, &format!("indexes/{uid}/documents"))
-                    .json(documents),
-            )
-            .await?;
-        task_uid(&body)
+        let request = self
+            .request(reqwest::Method::PUT, &format!("indexes/{uid}/documents"))
+            .json(documents);
+        self.submit_task(uid, request, false)
+            .await?
+            .ok_or(DomainError::Unavailable)
     }
 
     /// Deletes documents by key; deleting an absent key is a no-op in the
     /// engine, which makes a cleanup retry safe.
     pub async fn delete_documents(&self, uid: &str, keys: &[String]) -> Result<i64, DomainError> {
-        let body = self
-            .send(
-                self.request(
-                    reqwest::Method::POST,
-                    &format!("indexes/{uid}/documents/delete-batch"),
-                )
-                .json(&keys),
+        let request = self
+            .request(
+                reqwest::Method::POST,
+                &format!("indexes/{uid}/documents/delete-batch"),
             )
-            .await?;
-        task_uid(&body)
+            .json(keys);
+        self.submit_task(uid, request, false)
+            .await?
+            .ok_or(DomainError::Unavailable)
     }
 
     /// Reads one task once.
@@ -960,10 +1075,21 @@ impl MeiliClient {
     }
 }
 
+fn empty_task_page(body: &Value) -> bool {
+    body.get("results")
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty)
+        && body.get("total").and_then(Value::as_u64) == Some(0)
+        && body.get("limit").and_then(Value::as_u64) == Some(1)
+        && body.get("next") == Some(&Value::Null)
+        && body.get("from") == Some(&Value::Null)
+}
+
 fn task_uid(body: &Value) -> Result<i64, DomainError> {
     body["taskUid"]
         .as_i64()
-        .ok_or_else(|| DomainError::Rejected("engine did not return a task id".into()))
+        .filter(|uid| *uid >= 0)
+        .ok_or(DomainError::Unavailable)
 }
 
 fn engine_settings() -> Value {
@@ -1434,5 +1560,26 @@ fn outcome(error: DomainError) -> ExecutionOutcome {
         DomainError::Unavailable | DomainError::Database(_) | DomainError::Queue(_) => {
             temporary("search publication unavailable")
         }
+    }
+}
+
+#[cfg(test)]
+mod maintenance_queue_tests {
+    use super::*;
+
+    #[test]
+    fn empty_queue_requires_complete_matching_task_page() {
+        for page in [
+            json!({}),
+            json!({"results":[]}),
+            json!({"total":0,"results":[{"uid":1}]}),
+            json!({"total":1,"results":[]}),
+            json!({"total":0,"results":[],"next":2}),
+        ] {
+            assert!(!empty_task_page(&page));
+        }
+        assert!(empty_task_page(
+            &json!({"results":[],"total":0,"limit":1,"from":null,"next":null})
+        ));
     }
 }

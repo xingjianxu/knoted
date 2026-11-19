@@ -7,6 +7,7 @@
 //! `sqlx::query` API, never the compile-time `query!` macros, so the workspace
 //! builds without a live database.
 
+pub mod backup;
 mod entity_registry;
 mod error;
 pub mod testing;
@@ -88,6 +89,10 @@ pub async fn is_ready(pool: &PgPool) -> Result<bool, DbError> {
             Err(_) => return Ok(false),
         };
 
+    Ok(migrations_match(&applied))
+}
+
+fn migrations_match(applied: &[(i64, bool, Vec<u8>)]) -> bool {
     let is_known = |version: i64, checksum: &[u8]| {
         migrator().iter().any(|migration| {
             migration.version == version && migration.checksum.as_ref() == checksum
@@ -106,5 +111,5 @@ pub async fn is_ready(pool: &PgPool) -> Result<bool, DbError> {
             .any(|(version, _, _)| *version == migration.version)
     });
 
-    Ok(applied_rows_are_known && embedded_versions_are_applied)
+    applied_rows_are_known && embedded_versions_are_applied
 }

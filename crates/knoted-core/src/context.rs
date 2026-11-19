@@ -78,6 +78,7 @@ impl Clock for FixedClock {
 #[derive(Clone)]
 pub struct AppContext {
     pool: PgPool,
+    admission_pool: PgPool,
     clock: Arc<dyn Clock>,
     asset_root: std::path::PathBuf,
     files: crate::config::FilesConfig,
@@ -95,7 +96,14 @@ pub struct AppContext {
 impl AppContext {
     /// Builds a context with the system clock.
     pub fn new(pool: PgPool) -> Self {
+        let admission_pool = pool
+            .options()
+            .clone()
+            .min_connections(0)
+            .max_connections(pool.options().get_max_connections().max(4))
+            .connect_lazy_with((*pool.connect_options()).clone());
         Self {
+            admission_pool,
             pool,
             clock: Arc::new(SystemClock),
             asset_root: crate::config::AssetsConfig::default().root,
@@ -213,6 +221,14 @@ impl AppContext {
 
     pub(crate) fn office(&self) -> Option<&Arc<crate::files::office::PreviewStore>> {
         self.office.as_ref()
+    }
+
+    pub fn admission_pool(&self) -> &PgPool {
+        &self.admission_pool
+    }
+
+    pub async fn try_write(&self) -> Result<Option<crate::maintenance::WriteGuard>, sqlx::Error> {
+        crate::maintenance::try_write(self.admission_pool.begin().await?, &self.pool).await
     }
 
     /// The PostgreSQL pool.
