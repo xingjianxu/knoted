@@ -95,7 +95,7 @@
 | [T66](tasks/T66.md) | 回答转存笔记 | T65, T23, T32 | done（[PR #217](https://github.com/xingjianxu/knoted/pull/217)，主线/dev `f796437`，[证据](evidence/t66-save-note.md)） |
 | [T67](tasks/T67.md) | 图片和临时对象回收 | T26, T37, T64 | done（[PR #222](https://github.com/xingjianxu/knoted/pull/222)、[PR #224](https://github.com/xingjianxu/knoted/pull/224)，主线/dev `e51532f`，[证据](evidence/t67-reclamation.md)） |
 | [T68](tasks/T68.md) | 一致性备份 | T67 | done（[PR #227](https://github.com/xingjianxu/knoted/pull/227)，主线/dev `c94232c`，[证据](evidence/t68-consistent-backup.md)） |
-| [T69](tasks/T69.md) | 隔离恢复演练 | T68, T53, T59 | pending |
+| [T69](tasks/T69.md) | 隔离恢复演练 | T68, T53, T59 | done（[PR #229](https://github.com/xingjianxu/knoted/pull/229)，主线/dev `5308378`，[证据](evidence/t69-isolated-restore.md)） |
 | [T70](tasks/T70.md) | 完整Nix模块与主机接入 | T21, T69 | pending |
 | [T71](tasks/T71.md) | 功能与故障恢复集成验收 | T70 | pending |
 | [T72](tasks/T72.md) | 最终测试部署和交接 | T71 | pending |
