@@ -145,37 +145,46 @@ test("主区独立滚动并在切换到另一个长页面时归顶", async ({ pa
   await expect.poll(() => main.evaluate((el) => el.scrollTop)).toBe(0);
 });
 
-test("概览重新取数后恢复历史滚动位置", async ({ page }) => {
-  await page.setViewportSize({ width: 1024, height: 480 });
-  await mockWorkspace(page);
-  let releaseDashboard: () => void = () => {};
-  let holdDashboard = false;
-  const pending = new Promise<void>((resolve) => { releaseDashboard = resolve; });
-  await page.route("**/api/v1/dashboard", async (route) => {
-    if (holdDashboard) await pending;
-    await route.fallback();
+for (const resize of [false, true]) {
+  test(`概览${resize ? "视口缩短" : "重新取数"}后恢复历史滚动位置`, async ({ page }) => {
+    const viewport = { width: 1024, height: 480 };
+    await page.setViewportSize(viewport);
+    await mockWorkspace(page);
+    let releaseDashboard: () => void = () => {};
+    let holdDashboard = false;
+    const pending = new Promise<void>((resolve) => { releaseDashboard = resolve; });
+    await page.route("**/api/v1/dashboard", async (route) => {
+      if (holdDashboard) await pending;
+      await route.fallback();
+    });
+    await page.goto("/");
+    const main = page.getByRole("main");
+    const overview = main.getByRole("heading", { name: "工作概览" });
+    await expect(overview).toBeVisible();
+    const maxScroll = await main.evaluate((el) => el.scrollHeight - el.clientHeight);
+    await main.evaluate((el) => new Promise<void>((resolve) => {
+      el.addEventListener("scroll", () => resolve(), { once: true });
+      el.scrollTop = 320;
+    }));
+    await expect.poll(() => main.evaluate((el) => el.scrollTop)).toBe(320);
+    await page.getByRole("button", { name: "回收站" }).click();
+    await expect(main.getByRole("heading", { name: "回收事项 20", exact: true })).toBeAttached();
+    if (resize) await page.setViewportSize({ ...viewport, height: viewport.height + maxScroll - 160 });
+    holdDashboard = true;
+    try {
+      await page.goBack();
+      await expect(overview).toHaveCount(0);
+    } finally {
+      releaseDashboard();
+    }
+    await expect(overview).toBeVisible();
+    if (resize) {
+      expect(await main.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeLessThan(320);
+      await page.setViewportSize(viewport);
+    }
+    await expect.poll(() => main.evaluate((el) => el.scrollTop)).toBe(320);
   });
-  await page.goto("/");
-  const main = page.getByRole("main");
-  const overview = main.getByRole("heading", { name: "工作概览" });
-  await expect(overview).toBeVisible();
-  await main.evaluate((el) => new Promise<void>((resolve) => {
-    el.addEventListener("scroll", () => resolve(), { once: true });
-    el.scrollTop = 320;
-  }));
-  await expect.poll(() => main.evaluate((el) => el.scrollTop)).toBe(320);
-  await page.getByRole("button", { name: "回收站" }).click();
-  await expect(main.getByRole("heading", { name: "回收事项 20", exact: true })).toBeAttached();
-  holdDashboard = true;
-  try {
-    await page.goBack();
-    await expect(overview).toHaveCount(0);
-  } finally {
-    releaseDashboard();
-  }
-  await expect(overview).toBeVisible();
-  await expect.poll(() => main.evaluate((el) => el.scrollTop)).toBe(320);
-});
+}
 
 test("搜索跳转到已缓存的问答消息时目标留在视口内", async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 640 });
@@ -187,7 +196,9 @@ test("搜索跳转到已缓存的问答消息时目标留在视口内", async ({
 
   await page.getByRole("navigation", { name: "主导航" }).getByRole("button", { name: "搜索" }).click();
   await page.getByRole("searchbox", { name: "搜索词" }).fill("验收消息");
-  await page.getByRole("search", { name: "搜索资料" }).getByRole("button", { name: "搜索" }).click();
+  const searchButton = page.getByRole("search", { name: "搜索资料" }).getByRole("button", { name: "搜索" });
+  await expect(searchButton).toHaveCSS("background-color", "rgb(47, 111, 106)");
+  await searchButton.click();
   await page.getByRole("link", { name: "目标问答消息" }).click();
   await expect(page).toHaveURL((url) => url.pathname === `/chat/${chat.id}` && url.searchParams.get("message") === targetMessageId);
   await expect(message).toBeFocused();

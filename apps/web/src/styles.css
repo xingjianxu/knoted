@@ -19,6 +19,13 @@
   --mt-focus: var(--color-accent-soft);
 }
 
+/* The published solid variant uses --mt-fg for its fill. Scope the accent
+   to workspace actions and explicit page primaries, not body/portal text. */
+.workspace-content .mt-btn-solid,
+.page-primary {
+  --mt-fg: var(--color-accent);
+}
+
 @theme {
   --font-sans:
     system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,

@@ -175,6 +175,7 @@ function useWorkspaceScrollFrame() {
       listeners.abort();
     }
     observer.observe(body);
+    observer.observe(viewport);
     const options = { capture: true, passive: true, signal: listeners.signal };
     for (const event of ["wheel", "pointerdown", "touchstart", "keydown"]) {
       window.addEventListener(event, cancel, options);
