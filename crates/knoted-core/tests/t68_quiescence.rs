@@ -29,6 +29,22 @@ fn task_page() -> ResponseTemplate {
     }))
 }
 
+async fn visible_index(server: &MockServer, uid: &str) {
+    Mock::given(method("GET"))
+        .and(path(format!("/indexes/{uid}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"uid":uid})))
+        .mount(server)
+        .await;
+}
+
+fn absent_index(uid: &str) -> ResponseTemplate {
+    ResponseTemplate::new(404).set_body_json(json!({
+        "code":"index_not_found", "type":"invalid_request",
+        "message":format!("Index `{uid}` not found."),
+        "link":"https://docs.meilisearch.com/errors#index_not_found"
+    }))
+}
+
 #[tokio::test]
 async fn canceled_document_submission_blocks_even_after_empty_queue_response() {
     let db = TestDb::create().await.unwrap();
@@ -38,6 +54,9 @@ async fn canceled_document_submission_blocks_even_after_empty_queue_response() {
         base_url: server.uri(),
         ..SearchConfig::default()
     });
+    for uid in [&ctx.search().index_uid, &ctx.search().rag_chunk_index_uid] {
+        visible_index(&server, uid).await;
+    }
     Mock::given(method("GET"))
         .and(path("/tasks"))
         .respond_with(task_page())
@@ -100,7 +119,9 @@ async fn checks_each_historic_generation_after_definite_task_receipt() {
             .unwrap(),
         0
     );
+    visible_index(&server, "previous").await;
     for uid in [&ctx.search().index_uid, &ctx.search().rag_chunk_index_uid] {
+        visible_index(&server, uid).await;
         Mock::given(method("GET"))
             .and(path("/tasks"))
             .and(query_param("indexUids", uid.as_str()))
@@ -254,5 +275,84 @@ async fn queued_chat_is_archivable_and_only_confirmed_terminal_releases_a_reques
         verify_quiescence(&ctx).await,
         Err(QuiescenceError::Job)
     ));
+    db.drop().await;
+}
+
+#[tokio::test]
+async fn empty_task_page_requires_authorized_visibility_for_each_index() {
+    let db = TestDb::create().await.unwrap();
+    let server = MockServer::start().await;
+    let ctx = AppContext::new(db.pool.clone()).with_search(SearchConfig {
+        base_url: server.uri(),
+        enabled: true,
+        ..Default::default()
+    });
+    let uid = &ctx.search().index_uid;
+    visible_index(&server, &ctx.search().rag_chunk_index_uid).await;
+    Mock::given(method("GET"))
+        .and(path("/tasks"))
+        .respond_with(task_page())
+        .mount(&server)
+        .await;
+    for denied in [
+        ResponseTemplate::new(403),
+        ResponseTemplate::new(200).set_body_json(json!({"uid":"other"})),
+        ResponseTemplate::new(404).set_body_json(json!({"code":"index_not_found"})),
+        absent_index("other"),
+    ] {
+        let _guard = Mock::given(method("GET"))
+            .and(path(format!("/indexes/{uid}")))
+            .respond_with(denied)
+            .mount_as_scoped(&server)
+            .await;
+        assert!(matches!(
+            verify_quiescence(&ctx).await,
+            Err(QuiescenceError::Search)
+        ));
+    }
+    Mock::given(method("GET"))
+        .and(path(format!("/indexes/{uid}")))
+        .respond_with(absent_index(uid))
+        .mount(&server)
+        .await;
+    verify_quiescence(&ctx).await.unwrap();
+    db.drop().await;
+}
+
+#[tokio::test]
+async fn disabled_search_probes_recorded_index_with_configured_credential() {
+    use wiremock::matchers::header_exists;
+    let db = TestDb::create().await.unwrap();
+    let server = MockServer::start().await;
+    let config = SearchConfig {
+        base_url: server.uri(),
+        enabled: false,
+        ..Default::default()
+    };
+    let ctx = AppContext::new(db.pool.clone())
+        .with_search(config)
+        .with_search_api_key(Some(uuid::Uuid::new_v4().to_string()));
+    sqlx::query("INSERT INTO maintenance_external_targets VALUES ('meili',$1,'previous')")
+        .bind(server.uri())
+        .execute(ctx.pool())
+        .await
+        .unwrap();
+    assert!(MeiliClient::from_context(&ctx).is_err());
+    Mock::given(method("GET"))
+        .and(path("/indexes/previous"))
+        .and(header_exists("authorization"))
+        .respond_with(absent_index("previous"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/tasks"))
+        .and(query_param("indexUids", "previous"))
+        .and(header_exists("authorization"))
+        .respond_with(task_page())
+        .expect(1)
+        .mount(&server)
+        .await;
+    verify_quiescence(&ctx).await.unwrap();
     db.drop().await;
 }

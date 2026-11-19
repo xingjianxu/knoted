@@ -203,17 +203,12 @@ async fn verify_external_state(ctx: &crate::context::AppContext) -> Result<(), Q
          UNION SELECT index_uid FROM rag_chunk_publications WHERE meili_task_uid IS NOT NULL OR last_confirmed_meili_task_uid IS NOT NULL OR published_at IS NOT NULL"
     ).fetch_all(pool).await?;
     indexes.extend(historic);
-    if !indexes.is_empty() {
-        let client = MeiliClient::from_context(ctx).map_err(|_| QuiescenceError::Search)?;
-        for uid in indexes {
-            if !client
-                .queue_is_empty(&uid)
-                .await
-                .map_err(|_| QuiescenceError::Search)?
-            {
-                return Err(QuiescenceError::Search);
-            }
-        }
+    if !indexes.is_empty()
+        && !MeiliClient::queues_are_empty(ctx, indexes)
+            .await
+            .map_err(|_| QuiescenceError::Search)?
+    {
+        return Err(QuiescenceError::Search);
     }
     Ok(())
 }
