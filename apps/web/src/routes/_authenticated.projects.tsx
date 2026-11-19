@@ -14,6 +14,7 @@ function ProjectsRoute() {
     <ProjectsPage
       bundle={bundle}
       projectId={projectId}
+      onSelectTask={(taskId) => void navigate({ to: "/tasks/$taskId", params: { taskId } })}
       onSelectProject={(id) => {
         if (id === null) {
           void navigate({ to: "/projects" });

@@ -98,7 +98,7 @@ function apiError(status: number, code: string, currentVersion?: number): Respon
 }
 
 /** Minimal in-memory implementation of the /projects, /tasks, tags and links contract. */
-function harness(options: { tasks?: TaskRow[] } = {}) {
+function harness(options: { tasks?: TaskRow[]; failCreate?: boolean; cursorMode?: boolean; failSecondPage?: boolean; failAfterArchive?: boolean } = {}) {
   const projects: ProjectRow[] = [project(projectA, "项目甲"), project(projectB, "项目乙")];
   const tasks: TaskRow[] = options.tasks ?? [];
   const tags: Record<string, { id: string; name: string; version: number; created_at: string; updated_at: string }[]> = {
@@ -129,13 +129,20 @@ function harness(options: { tasks?: TaskRow[] } = {}) {
       });
     }
     if (method === "GET" && path === "/api/v1/projects") {
-      const archived = new URL(request.url).searchParams.get("archived") === "true";
+      const query = new URL(request.url).searchParams;
+      const archived = query.get("archived") === "true";
       const items = projects.filter(
         (row) => row.deleted_at === null && (archived ? row.archived_at !== null : row.archived_at === null),
       );
+      if (options.cursorMode && archived) {
+        const next = query.get("cursor") === "archived-second";
+        if (next && options.failSecondPage) return apiError(503, "第二页暂时不可用");
+        return json({ items: items.slice(next ? 1 : 0, next ? 2 : 1), next_cursor: next ? null : "archived-second" });
+      }
       return json({ items, next_cursor: null });
     }
     if (method === "POST" && path === "/api/v1/projects") {
+      if (options.failCreate) return apiError(503, "暂时无法创建");
       const input = body as { title: string; description?: string | null };
       const created = project(`00000000-0000-4000-8000-0000000000${projects.length + 1}c`, input.title);
       created.description = input.description ?? null;
@@ -146,7 +153,8 @@ function harness(options: { tasks?: TaskRow[] } = {}) {
     if (detail) {
       const row = projects.find((entry) => entry.id === detail[1]);
       if (!row) return apiError(404, "not_found");
-      if (method === "GET") return json(row);
+      if (method === "GET") return options.failAfterArchive && row.archived_at
+        ? apiError(503, "归档后暂时无法刷新") : json(row);
       if (method === "PATCH") {
         const patch = body as { expected_version: number; title?: string; description?: string | null };
         if (patch.expected_version !== row.version) return apiError(409, "version_conflict", row.version);
@@ -217,7 +225,9 @@ function harness(options: { tasks?: TaskRow[] } = {}) {
 /** Stands in for the route adapter: the page owns no URL knowledge. */
 function Page({ bundle }: { bundle: QueryClientBundle }) {
   const [projectId, setProjectId] = useState<string | undefined>(undefined);
-  return <ProjectsPage bundle={bundle} projectId={projectId} onSelectProject={(id) => setProjectId(id ?? undefined)} />;
+  return <>{projectId && <button onClick={() => setProjectId(undefined)}>返回项目</button>}
+    <ProjectsPage bundle={bundle} projectId={projectId} onSelectProject={(id) => setProjectId(id ?? undefined)} />
+  </>;
 }
 
 function renderPage(bundle: QueryClientBundle) {
@@ -234,21 +244,54 @@ function requestPath(request: Request): string {
   return new URL(request.url).pathname + new URL(request.url).search;
 }
 
+async function editProject() {
+  const trigger = await screen.findByRole("button", { name: "编辑项目" });
+  await waitFor(() => expect(trigger).toBeEnabled());
+  fireEvent.click(trigger);
+  return within(await screen.findByRole("dialog", { name: "编辑项目" }));
+}
+
+async function projectAction(name: string) {
+  const trigger = await screen.findByRole("button", { name: "更多项目操作" });
+  await waitFor(() => expect(trigger).toBeEnabled());
+  fireEvent.click(trigger);
+  fireEvent.click(await screen.findByRole("menuitem", { name }));
+}
+
+async function returnToProjects() {
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: "返回项目" }));
+}
+
 describe("T38 project page", () => {
+  it("项目创建失败后保留弹层草稿", async () => {
+    const { bundle } = harness({ failCreate: true });
+    renderPage(bundle);
+
+    expect(screen.queryByLabelText("新项目名称")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "新建项目" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "新建项目" }));
+    fireEvent.change(dialog.getByLabelText("新项目名称"), { target: { value: "待重试的项目" } });
+    fireEvent.click(dialog.getByRole("button", { name: "创建项目" }));
+    expect(await dialog.findByText("暂时无法创建")).toBeInTheDocument();
+    expect(dialog.getByLabelText("新项目名称")).toHaveValue("待重试的项目");
+  });
+
   it("t38_1 切换项目后不残留上一个项目的标签与资料关联", async () => {
     const { bundle } = harness();
     renderPage(bundle);
 
-    fireEvent.click(await screen.findByRole("button", { name: "打开项目 项目甲" }));
+    fireEvent.click(await screen.findByRole("link", { name: "项目甲" }));
     expect(await screen.findByText("甲标签")).toBeInTheDocument();
     expect(await screen.findByText("暂无资料关联")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "打开项目 项目乙" }));
+    await returnToProjects();
+    fireEvent.click(await screen.findByRole("link", { name: "项目乙" }));
     expect(await screen.findByText("乙标签")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText("甲标签")).not.toBeInTheDocument());
     expect(screen.getByRole("region", { name: "项目标签与资料关联" })).not.toHaveTextContent("甲标签");
     // 详情草稿属于当前项目，不能继承上一个项目的标题。
-    expect(await screen.findByLabelText("项目名称")).toHaveValue("项目乙");
+    expect((await editProject()).getByLabelText("项目名称")).toHaveValue("项目乙");
     expect(screen.queryByDisplayValue("项目甲")).not.toBeInTheDocument();
   });
 
@@ -262,23 +305,23 @@ describe("T38 project page", () => {
     });
     renderPage(bundle);
 
-    fireEvent.click(await screen.findByRole("button", { name: "打开项目 项目甲" }));
-    fireEvent.click(await screen.findByRole("button", { name: "归档项目" }));
+    fireEvent.click(await screen.findByRole("link", { name: "项目甲" }));
+    await projectAction("归档项目");
 
     expect(await screen.findByText("无法归档：仍有未完成事项")).toBeInTheDocument();
     const list = screen.getByRole("list", { name: "未完成事项" });
     expect(within(list).getByText("写文档")).toBeInTheDocument();
     expect(within(list).getByText("审阅初稿")).toBeInTheDocument();
     expect(within(list).queryByText("已完成的事")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "归档项目" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "更多项目操作" })).toBeEnabled();
   });
 
   it("t38_3 删除确认不暗示会删除笔记", async () => {
     const { bundle, requests } = harness();
     renderPage(bundle);
 
-    fireEvent.click(await screen.findByRole("button", { name: "打开项目 项目甲" }));
-    fireEvent.click(await screen.findByRole("button", { name: "删除项目" }));
+    fireEvent.click(await screen.findByRole("link", { name: "项目甲" }));
+    await projectAction("删除项目");
 
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent("笔记");
@@ -289,8 +332,8 @@ describe("T38 project page", () => {
       expect(requests.some((entry) => entry.method === "DELETE" && requestPath(entry) === `/api/v1/projects/${projectA}?expected_version=1`)).toBe(true);
     });
     // The project leaves the active list and the detail closes; other projects stay.
-    await waitFor(() => expect(screen.queryByRole("button", { name: "打开项目 项目甲" })).not.toBeInTheDocument());
-    expect(screen.getByRole("button", { name: "打开项目 项目乙" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("link", { name: "项目甲" })).not.toBeInTheDocument());
+    expect(screen.getByRole("link", { name: "项目乙" })).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "项目详情" })).not.toBeInTheDocument();
   });
 
@@ -298,16 +341,19 @@ describe("T38 project page", () => {
     const { bundle, requests } = harness();
     renderPage(bundle);
 
+    fireEvent.click(screen.getByRole("button", { name: "新建项目" }));
     fireEvent.change(await screen.findByLabelText("新项目名称"), { target: { value: "项目丙" } });
     fireEvent.change(screen.getByLabelText("新项目说明"), { target: { value: "新的说明" } });
     fireEvent.click(screen.getByRole("button", { name: "创建项目" }));
 
-    expect(await screen.findByRole("button", { name: "打开项目 项目丙" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "项目丙", level: 1 })).toBeInTheDocument();
     const created = requests.find((entry) => entry.method === "POST" && new URL(entry.url).pathname === "/api/v1/projects");
     expect(await created?.json()).toEqual({ title: "项目丙", description: "新的说明" });
 
-    fireEvent.click(screen.getByRole("button", { name: "打开项目 项目甲" }));
-    fireEvent.change(await screen.findByLabelText("项目名称"), { target: { value: "项目甲改名" } });
+    await returnToProjects();
+    fireEvent.click(await screen.findByRole("link", { name: "项目甲" }));
+    const edit = await editProject();
+    fireEvent.change(edit.getByLabelText("项目名称"), { target: { value: "项目甲改名" } });
     fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
     await waitFor(() => {
       const patch = requests.find((entry) => entry.method === "PATCH" && new URL(entry.url).pathname === `/api/v1/projects/${projectA}`);
@@ -315,13 +361,13 @@ describe("T38 project page", () => {
     });
     const patch = requests.find((entry) => entry.method === "PATCH" && new URL(entry.url).pathname === `/api/v1/projects/${projectA}`);
     expect(await patch?.json()).toEqual({ expected_version: 1, title: "项目甲改名" });
-    expect(await screen.findByRole("button", { name: "打开项目 项目甲改名" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "项目甲改名", level: 1 })).toBeInTheDocument();
 
     bundle.queryClient.setQueryData(queryKeys.tasks.list({ project_id: projectA }), { items: [], next_cursor: null });
-    fireEvent.click(await screen.findByRole("button", { name: "归档项目" }));
+    await projectAction("归档项目");
     expect(await screen.findByRole("button", { name: "取消归档" })).toBeInTheDocument();
     // 归档后只读：编辑与关联入口禁用。
-    expect(screen.getByRole("button", { name: "保存修改" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "编辑项目" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "移除标签 甲标签" })).toBeDisabled();
     await waitFor(() => {
       expect(bundle.queryClient.getQueryState(queryKeys.tasks.list({ project_id: projectA }))?.isInvalidated).toBe(true);
@@ -329,20 +375,23 @@ describe("T38 project page", () => {
 
     // 撤销路径：取消归档后恢复可写与列表可见。
     fireEvent.click(screen.getByRole("button", { name: "取消归档" }));
-    expect(await screen.findByRole("button", { name: "归档项目" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "更多项目操作" })).toBeInTheDocument();
     expect(screen.queryByText("已归档")).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole("button", { name: "保存修改" })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "编辑项目" })).toBeEnabled());
     await waitFor(() => expect(screen.getByRole("button", { name: "移除标签 甲标签" })).toBeEnabled());
-    await waitFor(() => expect(screen.getByRole("button", { name: "打开项目 项目甲改名" })).toBeInTheDocument());
+    await returnToProjects();
+    expect(await screen.findByRole("link", { name: "项目甲改名" })).toBeInTheDocument();
   });
 
   it("保存冲突时保留输入、提示当前版本，并允许用刷新后的版本重试", async () => {
     const { bundle, projects } = harness();
     renderPage(bundle);
 
-    fireEvent.click(await screen.findByRole("button", { name: "打开项目 项目甲" }));
-    const title = await screen.findByLabelText("项目名称");
+    fireEvent.click(await screen.findByRole("link", { name: "项目甲" }));
+    const edit = await editProject();
+    const title = edit.getByLabelText("项目名称");
     projects[0]!.version = 7;
+    projects[0]!.description = "远端更新的说明";
     fireEvent.change(title, { target: { value: "冲突后保留的标题" } });
     fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
 
@@ -350,11 +399,59 @@ describe("T38 project page", () => {
     expect(screen.getByLabelText("项目名称")).toHaveValue("冲突后保留的标题");
 
     // 重试必须用刷新后的版本，而不是拿着陈旧版本反复撞 409。
-    fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
-    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    await waitFor(() => expect(edit.getByRole("button", { name: "保存修改" })).toBeEnabled());
+    fireEvent.click(edit.getByRole("button", { name: "保存修改" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(projects[0]!.version).toBe(8);
     expect(projects[0]!.title).toBe("冲突后保留的标题");
-    expect(screen.getByLabelText("项目名称")).toHaveValue("冲突后保留的标题");
+    expect(projects[0]!.description).toBe("远端更新的说明");
+    expect(screen.getByRole("heading", { name: "冲突后保留的标题", level: 1 })).toBeInTheDocument();
+  });
+
+  it("归档第二页读取失败时仍可返回上一页", async () => {
+    const { bundle, projects } = harness({ cursorMode: true, failSecondPage: true });
+    projects.forEach((row) => { row.archived_at = stamp; });
+    renderPage(bundle);
+    fireEvent.click(screen.getByRole("radio", { name: "已归档" }));
+    const next = await screen.findByRole("button", { name: "下一页项目" });
+    await waitFor(() => expect(next).toBeEnabled());
+    fireEvent.click(next);
+    await screen.findByText("第二页暂时不可用");
+    fireEvent.click(screen.getByRole("button", { name: "上一页项目" }));
+    expect(await screen.findByRole("link", { name: "项目甲" })).toBeInTheDocument();
+  });
+
+  it("项目归档成功后即使详情刷新失败也显示确认的归档状态", async () => {
+    const { bundle } = harness({ failAfterArchive: true });
+    renderPage(bundle);
+    fireEvent.click(await screen.findByRole("link", { name: "项目甲" }));
+    await projectAction("归档项目");
+    await screen.findByText("归档后暂时无法刷新");
+    expect(screen.getByText("已归档")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "编辑项目" })).toBeDisabled();
+  });
+
+  it("从归档第二页打开项目并返回同一筛选与游标", async () => {
+    const { bundle, projects } = harness({ cursorMode: true });
+    projects.forEach((row) => { row.archived_at = stamp; });
+    const router = createAppRouter({ history: createMemoryHistory({ initialEntries: ["/projects"] }), bundle });
+    render(<UiProvider><App router={router} /></UiProvider>);
+    await act(async () => { await router.load(); });
+
+    screen.getByRole("main").scrollTo = () => {};
+    fireEvent.click(await screen.findByRole("radio", { name: "已归档" }));
+    const next = await screen.findByRole("button", { name: "下一页项目" });
+    await waitFor(() => expect(next).toBeEnabled());
+    fireEvent.click(next);
+    fireEvent.click(await screen.findByRole("link", { name: "项目乙" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "项目乙" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "项目列表" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("link", { name: "返回项目" }));
+    expect(await screen.findByRole("radio", { name: "已归档" })).toBeChecked();
+    expect(await screen.findByRole("link", { name: "项目乙" })).toHaveFocus();
+    expect(screen.queryByRole("link", { name: "项目甲" })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "上一页项目" })).toBeEnabled());
   });
 
   it("深层链接 /projects/$projectId 直接打开对应项目详情", async () => {
@@ -371,12 +468,14 @@ describe("T38 project page", () => {
     await act(async () => {
       await router.load();
     });
-    expect(await screen.findByRole("button", { name: "打开项目 项目甲" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "项目甲" })).toBeInTheDocument();
 
     await act(async () => {
       await router.navigate({ to: "/projects/$projectId", params: { projectId: projectA } });
     });
     expect(await screen.findByText("甲标签")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "项目甲" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "项目列表" })).not.toBeInTheDocument();
     expect(router.state.location.pathname).toBe(`/projects/${projectA}`);
   });
 });
