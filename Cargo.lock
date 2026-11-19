@@ -1893,7 +1893,6 @@ dependencies = [
  "futures-util",
  "http",
  "knoted-core",
- "reqwest",
  "ring",
  "rustix",
  "serde",
