@@ -6,6 +6,7 @@ import { afterEach, expect, it } from "vitest";
 
 import App from "../../src/App";
 import { createAppRouter } from "../../src/lib/router";
+import { queryKeys } from "../../src/lib/query";
 import { UiProvider } from "../../src/lib/ui-provider";
 
 type Run = components["schemas"]["ChatRun"];
@@ -110,7 +111,7 @@ async function openApp(
   });
   const view = render(<UiProvider><App router={router} /></UiProvider>);
   await act(async () => router.load());
-  return { requests, router, ...view };
+  return { requests, router, queryClient, ...view };
 }
 
 async function sendQuestion() {
@@ -458,4 +459,21 @@ it("returns from a failed session deep link to the session index", async () => {
   fireEvent.click(screen.getByRole("link", { name: "返回会话列表" }));
   await waitFor(() => expect(view.router.state.location.pathname).toBe("/chat"));
   expect(screen.getByRole("link", { name: "甲会话" })).toBeVisible();
+});
+
+it("keeps the next question and its scope open when a cached session refresh fails", async () => {
+  let fail = false;
+  const { queryClient } = await openApp((path) => {
+    if (path === `/chat/sessions/${sessionA}`) return fail ? json({}, 503) : json(session(sessionA, [question, answer]));
+  });
+  const draft = await screen.findByRole("textbox", { name: "问题" });
+  fireEvent.change(draft, { target: { value: "下一条问题的草稿" } });
+  fireEvent.click(screen.getByRole("button", { name: "资料范围" }));
+  fail = true;
+  await act(async () => queryClient.invalidateQueries({ queryKey: queryKeys.chat.session(sessionA) }));
+  expect(await screen.findByText("会话刷新失败。")).toBeVisible();
+  expect(screen.getByRole("textbox", { name: "问题" })).toBe(draft);
+  expect(draft).toHaveValue("下一条问题的草稿");
+  expect(screen.getByRole("button", { name: "资料范围" })).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByText(answer.body)).toBeVisible();
 });

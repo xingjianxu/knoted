@@ -100,7 +100,7 @@ it("t56_2 renders the cancellation as pending until the worker confirms", async 
   expect(await screen.findByText("已取消")).toBeInTheDocument();
 });
 
-it("t56_3 reads persisted failures again after remount and reports unavailable vector indexing", async () => {
+it("t56_3 reads persisted failures again after remount and reports an empty vector stage for the current page", async () => {
   const handler = () => json({ items: [failed], next_cursor: null });
   const first = await openJobs([], handler);
   await screen.findByText("unsupported_format");
@@ -108,7 +108,8 @@ it("t56_3 reads persisted failures again after remount and reports unavailable v
 
   const reopened = await openJobs([], handler);
   expect(await screen.findByText("unsupported_format")).toBeInTheDocument();
-  expect(screen.getByText("未启用")).toBeInTheDocument();
+  expect(screen.getByText("本页没有向量索引任务")).toBeInTheDocument();
+  expect(screen.queryByText("未启用")).not.toBeInTheDocument();
   expect(reopened.router.state.location.pathname).toBe("/files/jobs");
 });
 

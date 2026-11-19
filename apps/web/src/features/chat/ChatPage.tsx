@@ -116,7 +116,7 @@ export function ChatPage({ bundle, currentSession, children }: {
       </nav>
       {currentSession ? (
         <div className="min-w-0 space-y-3">
-          <Link className="page-link @min-[42rem]/workspace:hidden" to="/chat">返回会话列表</Link>
+          <Link className="page-link @min-[42rem]/workspace:hidden" to="/chat" activeOptions={{ exact: true }}>返回会话列表</Link>
           {children}
         </div>
       ) : sessions.isSuccess && rows.length > 0 && (

@@ -52,18 +52,16 @@ it("t42_1 父缺失提示允许显式恢复根目录，确认/取消后才提交
     h.mount();
     const row = await screen.findByRole("region", { name: "回收对象 子笔记" });
     expect(row).toHaveTextContent("父笔记缺失");
-    expect(within(row).getByRole("button", { name: "恢复 子笔记" })).toBeDisabled();
-    fireEvent.click(within(row).getByRole("combobox", { name: "恢复位置 子笔记" }));
-    {
-        const option = await screen.findByRole("option", { name: "根目录" });
-        fireEvent.pointerDown(option, { pointerType: "mouse" });
-        fireEvent.click(option);
-    }
-    fireEvent.click(within(row).getByRole("button", { name: "恢复 子笔记" }));
-    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    const trigger = within(row).getByRole("button", { name: "恢复 子笔记" });
+    expect(within(row).queryByRole("combobox")).not.toBeInTheDocument();
+    fireEvent.click(trigger);
+    const dialog = await screen.findByRole("dialog", { name: "恢复 子笔记" });
+    const position = within(dialog).getByRole("combobox", { name: "恢复位置 子笔记" });
+    expect(position).toHaveTextContent("根目录");
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
     expect(h.requests.filter(r => r.method === "POST")).toHaveLength(0);
-    fireEvent.click(within(row).getByRole("button", { name: "恢复 子笔记" }));
-    fireEvent.click(screen.getByRole("button", { name: "确认恢复" }));
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole("button", { name: "确认恢复" }));
     await screen.findByText("已恢复 子笔记");
     const write = h.requests.find(r => r.method === "POST")!;
     expect(write.url).toBe("http://localhost/api/v1/notes/a/restore");
@@ -74,16 +72,19 @@ it("t42_3 其他对象恢复并刷新时保留本行位置选择、冲突反馈"
     const h = harness([item("a", "原对象"), item("b", "另一个", { entity_type: "project" })]);
     h.mount();
     const row = await screen.findByRole("region", { name: "回收对象 原对象" });
-    fireEvent.click(within(row).getByRole("combobox", { name: "恢复位置 原对象" }));
+    const originalTrigger = within(row).getByRole("button", { name: "恢复 原对象" });
+    fireEvent.click(originalTrigger);
+    const originalDialog = await screen.findByRole("dialog", { name: "恢复 原对象" });
+    fireEvent.click(within(originalDialog).getByRole("combobox", { name: "恢复位置 原对象" }));
     {
         const option = await screen.findByRole("option", { name: "根目录" });
         fireEvent.pointerDown(option, { pointerType: "mouse" });
         fireEvent.click(option);
     }
     h.failWrite();
-    fireEvent.click(within(row).getByRole("button", { name: "恢复 原对象" }));
     fireEvent.click(screen.getByRole("button", { name: "确认恢复" }));
-    await within(row).findByText(/版本或恢复条件已变化/);
+    await within(originalDialog).findByText(/版本或恢复条件已变化/);
+    fireEvent.click(within(originalDialog).getByRole("button", { name: "取消" }));
     h.recoverWrite();
     const other = screen.getByRole("region", { name: "回收对象 另一个" });
     fireEvent.click(within(other).getByRole("button", { name: "恢复 另一个" }));
@@ -91,8 +92,10 @@ it("t42_3 其他对象恢复并刷新时保留本行位置选择、冲突反馈"
     fireEvent.click(screen.getByRole("button", { name: "确认恢复" }));
     await screen.findByText("已恢复 另一个");
     expect(screen.getByRole("region", { name: "回收对象 原对象" })).toBe(row);
-    expect(row).toHaveTextContent("版本或恢复条件已变化");
-    expect(within(row).getByRole("combobox")).toHaveTextContent("根目录");
+    fireEvent.click(originalTrigger);
+    const reopened = await screen.findByRole("dialog", { name: "恢复 原对象" });
+    expect(reopened).toHaveTextContent("版本或恢复条件已变化");
+    expect(within(reopened).getByRole("combobox")).toHaveTextContent("根目录");
     await act(async () => h.release());
 });
 it("写成功后读取失败仍移除已恢复行，并将刷新失败作为读取反馈", async () => {

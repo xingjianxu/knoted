@@ -12,4 +12,4 @@
 
 `AdminLayout.Content` 仍是唯一外壳滚动容器。`.workspace-frame` 提供约 1120px 版心；笔记、问答及承载看板的事项路由允许满宽。另外可直接用 `.reading-measure`（68ch）、`.page-title`、`.section-title`、`.page-link`；每个业务模块继续拥有自己的标题与交互。游标导航样例仍使用 mtone Button 与应用游标状态，见 [T19](../../knoted-v1/evidence/t19.md)；不造总条数，取数中锁定翻页，业务列表改造不在本卡完成。
 
-`npm view @bixlab/mtone dist-tags.latest` → `0.6.0`。发行包 `package.json` 公开根类型、`styles.css`，React/React DOM peers 为 `^19.2.0`；应用仍为 `19.3.1`。实查 `dist/index.d.ts` 和同版 `llms.txt` 的 `AdminLayout` slots、Sider 折叠与 Button loading，复用现有 UiProvider tokens；工作区实心主操作与显式 `.page-primary` 使用青绿填充，正文、Portal 文字和危险按钮语义保持不变。无需修改锁定版本或申请上游能力。
+`npm view @bixlab/mtone dist-tags.latest` → `0.6.0`。发行包 `package.json` 公开根类型、`styles.css`，React/React DOM peers 为 `^19.2.0`；应用仍为 `19.3.1`。实查 `dist/index.d.ts` 和同版 `llms.txt` 的 `AdminLayout` slots、Sider 折叠与 Button loading，当时复用 UiProvider tokens，实心主操作使用青绿填充。03–12 集成按用户要求将调色板切换为 [mtone 默认值](03-12.md)。无需修改锁定版本或申请上游能力。

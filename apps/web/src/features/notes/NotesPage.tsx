@@ -53,6 +53,9 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState<string[]>([]);
   const [directorySelection, setDirectorySelection] = useState<string>();
+  const [openDirectoryFor, setOpenDirectoryFor] = useState<string>();
+  const directoryTrigger = useRef<HTMLDivElement>(null);
+  const directoryHeading = useRef<HTMLHeadingElement>(null);
   const [receipts, setReceipts] = useState<DeleteReceipt[]>([]);
   const [rootRecovery, setRootRecovery] = useState<string | null>(null);
   useEffect(() => {
@@ -63,6 +66,20 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
     bundle.api.raw.use(middleware);
     return () => { bundle.api.raw.eject(middleware); };
   }, [bundle, writeAccess]);
+  // The opener stays mounted as a completed navigation closes the drawer.
+  if (openDirectoryFor && openDirectoryFor !== noteId) setOpenDirectoryFor(undefined);
+  useEffect(() => {
+    const trigger = directoryTrigger.current;
+    if (!openDirectoryFor || !trigger || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (trigger.getClientRects().length > 0) return;
+      setOpenDirectoryFor(undefined);
+      const heading = directoryHeading.current;
+      window.requestAnimationFrame(() => { if (heading?.isConnected) heading.focus(); });
+    });
+    observer.observe(trigger);
+    return () => observer.disconnect();
+  }, [openDirectoryFor]);
   const tree = useQuery(notesTreeQuery(bundle));
   const detail = useQuery({ ...noteQuery(bundle, noteId ?? ""), enabled: Boolean(noteId) && !writeAccess.isDeleted(noteId!) });
   // Titles can use confirmed detail responses immediately. Parent/position stay
@@ -169,12 +186,12 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
     </Alert>)}
     <div className={noteId ? "notes-workspace notes-workspace--detail" : "notes-workspace"}>
       <aside className="notes-directory min-w-0 space-y-3" aria-label="笔记目录">
-        {noteId ? <h2 className="section-title">笔记目录</h2> : <h1 className="page-title">笔记</h1>}
+        {noteId ? <h2 ref={directoryHeading} tabIndex={-1} className="section-title">笔记目录</h2> : <h1 className="page-title">笔记</h1>}
         {directoryContents}
       </aside>
       <div className="min-w-0 space-y-3">
-        {noteId && <div className="notes-directory-trigger">
-          <Drawer key={noteId} title="笔记目录" trigger={<Button size="sm" variant="outline">目录</Button>}>
+        {noteId && <div ref={directoryTrigger} className="notes-directory-trigger">
+          <Drawer open={openDirectoryFor === noteId} onOpenChange={open => setOpenDirectoryFor(open ? noteId : undefined)} title="笔记目录" trigger={<Button size="sm" variant="outline">目录</Button>}>
             <div className="space-y-3">
               {error && <Alert tone="error">{error}</Alert>}
               {directoryContents}

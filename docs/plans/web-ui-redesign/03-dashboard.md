@@ -1,5 +1,7 @@
 # 03 · 工作概览
 
+实施 Issue [#253](https://github.com/xingjianxu/knoted/issues/253) · [验收与限制](evidence/03-12.md)
+
 **领取条件与文件** 01 后可独立领取。负责 `apps/web/src/features/dashboard/DashboardPage.tsx`、首页路由回调及 `apps/web/tests/tasks/t41.test.tsx`。输入取现有 /dashboard 汇总。
 
 ## 现状与信息优先级

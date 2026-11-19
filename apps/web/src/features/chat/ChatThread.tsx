@@ -1,4 +1,5 @@
 import { Alert, Badge, Button, Checkbox, Form, FormField, MultiSelect, Spinner, Textarea } from "@bixlab/mtone";
+import { ApiRequestError } from "@knoted/api-client";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState } from "react";
 import type { QueryClientBundle } from "../../lib/query";
@@ -221,7 +222,8 @@ export function ChatThread({ bundle, sessionId, targetMessage }: {
   const showStream = viewed && (!attached || attached.incomplete);
 
   if (query.isPending) return <Spinner label="正在读取会话" />;
-  if (query.isError || !session) {
+  const unreadable = query.error instanceof ApiRequestError && [401, 403, 404].includes(query.error.status);
+  if (!session || unreadable) {
     return <Alert tone="error">无法读取会话。{" "}<Button onClick={() => void query.refetch()}>重试</Button></Alert>;
   }
   return (
@@ -230,6 +232,7 @@ export function ChatThread({ bundle, sessionId, targetMessage }: {
         <h1 className="page-title">{session.title}</h1>
         <Badge className="max-w-full wrap-anywhere">{session.provider === "local" ? "本地服务" : `外部服务 ${session.provider}`}</Badge>
       </header>
+      {query.isError && <Alert tone="error">会话刷新失败。{" "}<Button onClick={() => void query.refetch()}>重试刷新会话</Button></Alert>}
       {targetMessage && !session.messages.some((item) => item.id === targetMessage) && (
         <Alert tone="warning">这条消息已不存在。</Alert>
       )}
@@ -249,13 +252,14 @@ export function ChatThread({ bundle, sessionId, targetMessage }: {
         )}
       </ol>}
       {controls.problem && <Alert tone="error">{controls.problem}</Alert>}
+      {persistedRunId && persisted.isPending && <Spinner label="正在读取运行状态" />}
       {persisted.isError && !controls.current && (
         <Alert tone="error">无法读取运行状态。{" "}<Button onClick={() => void persisted.refetch()}>重试</Button></Alert>
       )}
       <QuestionForm
         bundle={bundle}
         provider={session.provider}
-        blocked={controls.busy || (!!viewed && runIsActive(viewed.run))}
+        blocked={controls.busy || (!!persistedRunId && !persisted.data) || (!!viewed && runIsActive(viewed.run))}
         onSubmit={controls.submit}
       />
     </section>

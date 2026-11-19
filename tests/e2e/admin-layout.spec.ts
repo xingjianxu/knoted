@@ -197,7 +197,7 @@ test("搜索跳转到已缓存的问答消息时目标留在视口内", async ({
   await page.getByRole("navigation", { name: "主导航" }).getByRole("button", { name: "搜索" }).click();
   await page.getByRole("searchbox", { name: "搜索词" }).fill("验收消息");
   const searchButton = page.getByRole("search", { name: "搜索资料" }).getByRole("button", { name: "搜索" });
-  await expect(searchButton).toHaveCSS("background-color", "rgb(47, 111, 106)");
+  await expect(searchButton).toHaveCSS("background-color", "rgb(55, 53, 47)");
   await searchButton.click();
   await page.getByRole("link", { name: "目标问答消息" }).click();
   await expect(page).toHaveURL((url) => url.pathname === `/chat/${chat.id}` && url.searchParams.get("message") === targetMessageId);

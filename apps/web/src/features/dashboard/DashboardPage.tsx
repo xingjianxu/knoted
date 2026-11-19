@@ -3,6 +3,13 @@ import { useQuery } from "@tanstack/react-query";
 import { queryKeys, type QueryClientBundle } from "../../lib/query";
 import { dateBoundary } from "../tasks/dates";
 
+function Count({ label, value }: { label: string; value: number }) {
+  return <div role="group" aria-label={label} className="min-w-0">
+    <dt className="text-sm text-muted">{label}</dt>
+    <dd className="wrap-anywhere text-2xl font-semibold tabular-nums">{value}</dd>
+  </div>;
+}
+
 export function DashboardPage({ bundle, onSelectNote, onSelectTask }: {
   bundle: QueryClientBundle;
   onSelectNote: (id: string) => void;
@@ -13,37 +20,61 @@ export function DashboardPage({ bundle, onSelectNote, onSelectTask }: {
     if (!data) throw new Error("无法读取工作概览");
     return data;
   } });
-  // Never display a previously cached overdue list while refreshing on entry.
+  // Cached overdue labels may be stale when the summary is opened again.
   if (summary.isFetching) return <Spinner label="加载工作概览" />;
-  if (summary.isError || !summary.data) return <Alert tone="error" title="工作概览暂时不可用">请稍后重试。<Button onClick={() => { void summary.refetch(); }}>重试</Button></Alert>;
+  if (summary.isError || !summary.data) return <Alert tone="error" title="工作概览暂时不可用">
+    <Button onClick={() => { void summary.refetch(); }}>重试</Button>
+  </Alert>;
+
   const data = summary.data;
-  return <section aria-label="工作概览" className="grid gap-4">
-    <h1>工作概览</h1>
-    <Card title="当前概况">
-      <p>笔记：{data.counts.notes} · 未完成事项：{data.counts.tasks_open} · 活跃项目：{data.counts.projects_active}</p>
-      <p>今日到期：{data.counts.tasks_due_today} · 失败任务：{data.job_failures}</p>
-      <p>待办：{data.tasks_by_status.todo} · 进行中：{data.tasks_by_status.in_progress} · 已完成：{data.tasks_by_status.done} · 已取消：{data.tasks_by_status.cancelled}</p>
-      <p>文件：{data.counts.files}（已开放文件浏览；支持文本、PDF、PNG、JPEG、WebP、DOCX、XLSX、PPTX 解析）</p>
-      {!data.indexing_enabled && <Badge>索引未启用</Badge>}
-    </Card>
-    <Card title="到期与逾期事项">
-      <List aria-label="到期事项">{data.due_tasks.map(task => {
-        const boundary = task.due ? dateBoundary(task.due, true) : null;
-        const overdue = task.status !== "done" && task.status !== "cancelled" && boundary !== null && summary.dataUpdatedAt >= boundary;
-        return <ListItem key={task.id} description={task.due ? `${task.due.date}${task.due.time ? ` ${task.due.time}` : ""}（上海）` : undefined}
-          actions={<Button aria-label={`打开事项 ${task.title}`} onClick={() => onSelectTask(task.id)}>打开</Button>}>
-          {task.title} <Badge>{overdue ? "已逾期" : "今日到期"}</Badge>
-        </ListItem>;
-      })}</List>
-      {data.due_tasks.length === 0 && <Empty title="暂无到期事项" description="没有需要提示的到期或逾期事项。" />}
-    </Card>
-    <Card title="最近笔记">
-      <List aria-label="最近笔记">{data.recent_notes.map(note => <ListItem key={note.id} actions={<Button aria-label={`打开笔记 ${note.title}`} onClick={() => onSelectNote(note.id)}>打开</Button>}>{note.title}</ListItem>)}</List>
-      {data.recent_notes.length === 0 && <Empty title="暂无最近笔记" description="创建笔记后会在这里显示。" />}
-    </Card>
-    <Card title="最近事项">
-      <List aria-label="最近事项">{data.recent_tasks.map(task => <ListItem key={task.id} actions={<Button aria-label={`打开事项 ${task.title}`} onClick={() => onSelectTask(task.id)}>打开</Button>}>{task.title}</ListItem>)}</List>
-      {data.recent_tasks.length === 0 && <Empty title="暂无最近事项" />}
+  return <section aria-labelledby="dashboard-title" className="grid gap-5">
+    <h1 id="dashboard-title">工作概览</h1>
+    <dl className="grid grid-cols-2 gap-4 rounded-panel border border-line bg-surface p-4 @min-[34rem]/workspace:grid-cols-4">
+      <Count label="今日到期" value={data.counts.tasks_due_today} />
+      <Count label="未完成事项" value={data.counts.tasks_open} />
+      <Count label="活跃项目" value={data.counts.projects_active} />
+      <Count label="失败任务" value={data.job_failures} />
+    </dl>
+    <div className="grid gap-4 @min-[54rem]/workspace:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+      <section aria-labelledby="dashboard-due" className="min-w-0">
+        <Card title={<h2 id="dashboard-due" className="section-title">到期与逾期事项</h2>}>
+          {data.due_tasks.length === 0 ? <Empty title="暂无到期事项" /> :
+            <List aria-label="到期事项">{data.due_tasks.map(task => {
+              const boundary = task.due ? dateBoundary(task.due, true) : null;
+              const overdue = task.status !== "done" && task.status !== "cancelled" && boundary !== null && summary.dataUpdatedAt >= boundary;
+              return <ListItem key={task.id} description={task.due ? `${task.due.date}${task.due.time ? ` ${task.due.time}` : ""}（上海）` : undefined}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button variant="ghost" aria-label={`打开事项 ${task.title}`} className="page-link h-auto max-w-full !whitespace-normal !p-0 text-start wrap-anywhere" onClick={() => onSelectTask(task.id)}>{task.title}</Button>
+                  <Badge tone={overdue ? "red" : "neutral"}>{overdue ? "已逾期" : "今日到期"}</Badge>
+                </div>
+              </ListItem>;
+            })}</List>}
+        </Card>
+      </section>
+      <div className="grid min-w-0 content-start gap-4">
+        <Card title={<h2 className="section-title">最近笔记</h2>}>
+          {data.recent_notes.length === 0 ? <Empty title="暂无最近笔记" /> :
+            <List aria-label="最近笔记">{data.recent_notes.map(note => <ListItem key={note.id}>
+              <Button variant="ghost" aria-label={`打开笔记 ${note.title}`} className="page-link h-auto max-w-full !whitespace-normal !p-0 text-start wrap-anywhere" onClick={() => onSelectNote(note.id)}>{note.title}</Button>
+            </ListItem>)}</List>}
+        </Card>
+        <Card title={<h2 className="section-title">最近事项</h2>}>
+          {data.recent_tasks.length === 0 ? <Empty title="暂无最近事项" /> :
+            <List aria-label="最近事项">{data.recent_tasks.map(task => <ListItem key={task.id}>
+              <Button variant="ghost" aria-label={`打开事项 ${task.title}`} className="page-link h-auto max-w-full !whitespace-normal !p-0 text-start wrap-anywhere" onClick={() => onSelectTask(task.id)}>{task.title}</Button>
+            </ListItem>)}</List>}
+        </Card>
+      </div>
+    </div>
+    <Card title={<h2 className="section-title">对象统计</h2>}>
+      <dl className="grid grid-cols-2 gap-4 @min-[40rem]/workspace:grid-cols-3 @min-[54rem]/workspace:grid-cols-6">
+        <Count label="笔记" value={data.counts.notes} />
+        <Count label="文件" value={data.counts.files} />
+        <Count label="待办" value={data.tasks_by_status.todo} />
+        <Count label="进行中" value={data.tasks_by_status.in_progress} />
+        <Count label="已完成" value={data.tasks_by_status.done} />
+        <Count label="已取消" value={data.tasks_by_status.cancelled} />
+      </dl>
     </Card>
   </section>;
 }

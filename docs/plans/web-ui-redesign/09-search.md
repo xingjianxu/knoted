@@ -1,5 +1,7 @@
 # 09 全站搜索
 
+实施 Issue [#259](https://github.com/xingjianxu/knoted/issues/259) · [验收与限制](evidence/03-12.md)
+
 目标是让简单搜索在首屏留下结果空间，复杂搜索仍可按全部已有条件精确复现。路由为 `/search`，由 AdminLayout.Content 提供滚动区域，前置为 01-foundation 验收的最新正式版 mtone（当前仓库 0.6.0）。
 
 ## 页面审计与排布

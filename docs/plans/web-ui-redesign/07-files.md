@@ -1,5 +1,7 @@
 # 07 文件浏览、详情与预览
 
+实施 Issue [#257](https://github.com/xingjianxu/knoted/issues/257) · [验收与限制](evidence/03-12.md)
+
 目标是让使用者从文件清单进入详情后，直接打开原件或预览，同时能区分原件属性、Knoted 内维护的备注与标签、来源重关联。前置为 01-foundation 已验收并锁定的最新正式版 mtone（本次审计的仓库版本为 0.6.0）。设计放在现有 AdminLayout.Content 内。文件写入与预览边界见 [ADR 0006](../../decisions/0006-file-pipeline-and-aggregate-contracts.md)、[ADR 0008](../../decisions/0008-office-preview-authorization.md)、[ADR 0009](../../decisions/0009-office-source-jwt-header.md)、[ADR 0010](../../decisions/0010-office-preview-credentialless-host.md)。
 
 ## 页面审计与排布

@@ -87,7 +87,7 @@ test("t17_3 descriptions and errors stay accessible through recovery", async ({ 
   await expect(title).toHaveAccessibleDescription("填写笔记标题");
 });
 
-test("t17_4 application system fonts and theme reach body-level scopes without remote requests", async ({ page }) => {
+test("t17_4 mtone default fonts and colors reach body-level scopes without remote requests", async ({ page }) => {
   const external: string[] = [];
   const errors: string[] = [];
   page.on("request", (request) => {
@@ -96,13 +96,13 @@ test("t17_4 application system fonts and theme reach body-level scopes without r
   page.on("pageerror", (error) => errors.push(error.message));
   await page.reload();
   const save = page.getByRole("button", { name: "保存", exact: true });
-  await expect(save).toHaveCSS("font-family", /system-ui/);
-  await expect(page.getByRole("textbox", { name: "标题" })).toHaveCSS("font-family", /system-ui/);
+  await expect(save).toHaveCSS("font-family", /^Inter,/);
+  await expect(page.getByRole("textbox", { name: "标题" })).toHaveCSS("font-family", /^Inter,/);
   // A body-level MtoneScope is rendered by the fixture to model portal inheritance.
   const scope = page.getByRole("note", { name: "body-level scope" });
-  await expect(scope).toHaveCSS("font-family", /system-ui/);
-  await expect(scope).toHaveCSS("color", "rgb(31, 41, 51)");
-  await expect(save).toHaveCSS("background-color", "rgb(31, 41, 51)");
+  await expect(scope).toHaveCSS("font-family", /^Inter,/);
+  await expect(scope).toHaveCSS("color", "rgb(55, 53, 47)");
+  await expect(save).toHaveCSS("background-color", "rgb(55, 53, 47)");
   expect(external).toEqual([]);
   expect(errors).toEqual([]);
 });

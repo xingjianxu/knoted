@@ -96,8 +96,8 @@ test("t19_3 confirm object copy, cancel zero callbacks, pending single and visib
   await trigger.click();
   await expect(dialog).toBeVisible();
   await expect(dialog).toHaveAccessibleDescription(/项目甲/);
-  await expect(dialog).toHaveCSS("font-family", /system-ui/);
-  await expect(dialog).toHaveCSS("color", "rgb(31, 41, 51)");
+  await expect(dialog).toHaveCSS("font-family", /^Inter,/);
+  await expect(dialog).toHaveCSS("color", "rgb(55, 53, 47)");
   await dialog.getByRole("button", { name: "取消" }).click();
   await expect(dialog).not.toBeVisible();
   await expect(result).toHaveText("请求：0；成功：0");
@@ -140,8 +140,8 @@ test("t19_4 cursor paging without total, disabled boundaries and filter reset", 
   await expect(state).toHaveText("游标：首屏；历史：0；筛选：all");
 
   // Real list/button theme tokens reach the controls.
-  await expect(next).toHaveCSS("font-family", /system-ui/);
-  await expect(next).toHaveCSS("color", "rgb(31, 41, 51)");
+  await expect(next).toHaveCSS("font-family", /^Inter,/);
+  await expect(next).toHaveCSS("color", "rgb(55, 53, 47)");
   await expect(page.getByRole("listitem").first()).toHaveCSS("border-bottom-width", "1px");
 
   await next.click();

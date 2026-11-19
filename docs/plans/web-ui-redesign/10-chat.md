@@ -1,5 +1,7 @@
 # 10 问答会话、引用与存为笔记
 
+实施 Issue [#260](https://github.com/xingjianxu/knoted/issues/260) · [验收与限制](evidence/03-12.md)
+
 目标是让使用者在长对话中继续提问、看清生成状态、核验引用并保存完整回答。依赖 01-foundation 已验收并锁定的最新正式版 mtone（仓库基线 0.6.0）。与 09-search 共用「搜索结果定位消息」验收场景。所有页面继续使用 AdminLayout.Content 作为工作区的滚动容器。
 
 ## 页面审计与排布

@@ -5,6 +5,7 @@ import { afterEach } from "vitest";
 
 // jsdom has no layout; actual scroll restoration is covered in Chromium.
 window.scrollTo = () => {};
+Element.prototype.scrollTo = () => {};
 
 // Vitest runs without globals, so Testing Library cannot auto-register cleanup.
 afterEach(cleanup);

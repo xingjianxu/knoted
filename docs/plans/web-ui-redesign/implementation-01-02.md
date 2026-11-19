@@ -46,4 +46,4 @@
 
 ### 集成
 
-- [ ] 两张卡分别记录真实门禁、适用的浏览器验收和未验证项。按 01→02 普通合并至 `master`，主线复跑；只清理本次已合并分支及 Worktree。业务验收不写真实账号、令牌或凭据标识。
+- [x] 01、02 已经 PR [#251](https://github.com/xingjianxu/knoted/pull/251) 和 [#252](https://github.com/xingjianxu/knoted/pull/252) 普通合并至 `master`。02 合并提交 `f269d01` 是剩余任务的基线。

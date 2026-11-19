@@ -2,46 +2,23 @@
 @import "tailwindcss";
 @import "@bixlab/mtone/styles.css" layer(mtone);
 
-/* Typography adaptation only; control styling remains owned by mtone.
-   Include independent scopes used by portals, not just descendants of #root. */
-.mt-scope,
-.mt-btn,
-.mt-input,
-.mt-card,
-.mt-badge,
-.mt-list,
-.mt-table-wrap {
-  font-family: var(--font-sans);
-}
-
-/* mtone draws the focus outline inside the solid button's dark fill. */
-.mt-btn-solid {
-  --mt-focus: var(--color-accent-soft);
-}
-
-/* The published solid variant uses --mt-fg for its fill. Scope the accent
-   to workspace actions and explicit page primaries, not body/portal text. */
-.workspace-content .mt-btn-solid,
-.page-primary {
-  --mt-fg: var(--color-accent);
-}
-
 @theme {
   --font-sans:
     system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
     "Noto Sans", "Noto Sans SC", sans-serif;
   --font-mono:
     ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-
-  --color-canvas: #fbfaf7;
-  --color-surface: #ffffff;
-  --color-ink: #1f2933;
-  --color-muted: #616e7c;
-  --color-line: #e4e7eb;
-  --color-accent: #2f6f6a;
-  --color-accent-soft: #e3f0ee;
-
   --radius-panel: 0.75rem;
+}
+
+@theme inline {
+  --color-canvas: var(--mt-subtle);
+  --color-surface: var(--mt-bg);
+  --color-ink: var(--mt-fg);
+  --color-muted: var(--mt-muted);
+  --color-line: var(--mt-border);
+  --color-accent: var(--mt-primary);
+  --color-accent-soft: var(--mt-hover);
 }
 
 /* Application page composition. The mtone Content remains the scroll owner. */
@@ -87,14 +64,14 @@
   }
 
   .page-link {
-    color: var(--color-accent);
+    color: var(--mt-primary);
     text-decoration: underline;
     text-underline-offset: 0.2em;
   }
 
   .page-link:focus-visible,
   .workspace-content:focus-visible {
-    outline: 2px solid var(--color-accent);
+    outline: 2px solid var(--mt-focus);
   }
 
   .workspace-content:focus-visible {
@@ -111,7 +88,5 @@
 
   body {
     margin: 0;
-    background-color: var(--color-canvas);
-    color: var(--color-ink);
   }
 }

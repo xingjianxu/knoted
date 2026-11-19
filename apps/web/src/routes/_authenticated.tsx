@@ -39,6 +39,7 @@ function Shell() {
     select: ({ matches }) => {
       if (matches.some(({ routeId }) => routeId === "/_authenticated/projects/$projectId")) return "/projects";
       if (matches.some(({ routeId }) => routeId === "/_authenticated/tasks/$taskId")) return "/tasks";
+      if (matches.some(({ routeId }) => routeId === "/_authenticated/files/$fileId")) return "/files";
       return null;
     },
   });
@@ -121,9 +122,9 @@ function Shell() {
         <AdminLayout.Header className="px-3 sm:px-6">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
             {collection && (
-              <Link className="page-link inline-flex items-center gap-1" to={collection} activeOptions={{ exact: true }}>
+              <Link className="page-link inline-flex items-center gap-1" to={collection} resetScroll={collection !== "/files"} activeOptions={{ exact: true }}>
                 <ArrowLeft aria-hidden="true" size={16} />
-                {collection === "/projects" ? "返回项目" : "返回事项"}
+                {{ "/projects": "返回项目", "/tasks": "返回事项", "/files": "返回文件列表" }[collection]}
               </Link>
             )}
             <Button className="ms-auto" loading={busy} onClick={() => void logout()}>退出登录</Button>

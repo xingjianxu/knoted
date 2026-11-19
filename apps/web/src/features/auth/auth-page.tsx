@@ -116,7 +116,7 @@ export function AuthPage({
         </div>
         {mode === "login" ? (
           <div className="space-y-3">
-            <Button className="page-primary w-full" variant="solid" size="lg" loading={busy} focusableWhenDisabled
+            <Button className="w-full" variant="solid" size="lg" loading={busy} focusableWhenDisabled
               onClick={() => void authenticate()}>
               使用 Passkey 登录
             </Button>
@@ -147,7 +147,7 @@ export function AuthPage({
               />
             </FormField>
             {error && <Alert tone="error">{error}</Alert>}
-            <Button type="submit" className="page-primary w-full" variant="solid" size="lg" loading={busy} focusableWhenDisabled>
+            <Button type="submit" className="w-full" variant="solid" size="lg" loading={busy} focusableWhenDisabled>
               {mode === "bootstrap" ? "注册 Passkey" : "替换凭据并恢复"}
             </Button>
           </form>

@@ -143,6 +143,6 @@ export function OfficePreview({ api, file, disposeRef, onUnauthorized }: {
     return <>
         {current.kind === "loading" && <Spinner label="正在读取 Office 预览"/>}
         {current.kind === "error" && <Alert tone="warning">{current.message} <Button onClick={() => setAttempt(value => value + 1)}>重试 Office 预览</Button></Alert>}
-        <div ref={host} className={current.kind === "error" ? "hidden" : "h-[60vh] w-full"}/>
+        <div ref={host} className={current.kind === "error" ? "hidden" : "h-[max(3rem,min(60dvh,calc(100dvh-9rem)))] w-full"}/>
     </>;
 }

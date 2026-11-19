@@ -55,7 +55,7 @@ describe("T49 files",()=>{
 });
 
 it("missing detail retains unknown tags and disables ordinary editing/download",async()=>{
- const h=setup();h.rows[0]!.status="missing";render(view(h.bundle));expect(await screen.findByLabelText("文件备注")).toBeDisabled();expect(screen.getByRole("button",{name:"下载原文件"})).toBeDisabled();expect(screen.getByText(b,{exact:true})).toBeInTheDocument();expect(screen.getByRole("button",{name:"读取重关联目标"})).toBeEnabled();
+ const h=setup();h.rows[0]!.status="missing";render(view(h.bundle));expect(await screen.findByLabelText("文件备注")).toBeDisabled();expect(screen.getByRole("button",{name:"下载原文件"})).toBeDisabled();expect(screen.getByText(b,{exact:true})).toBeInTheDocument();fireEvent.click(screen.getByRole("button",{name:"手动重关联"}));expect(screen.getByRole("button",{name:"读取重关联目标"})).toBeEnabled();
 });
 it("rejects mismatched download ETag without creating a URL",async()=>{
  const h=setup(),create=vi.fn();vi.stubGlobal("URL",Object.assign(URL,{createObjectURL:create,revokeObjectURL:vi.fn()}));h.content(()=>new Response("bytes",{headers:{etag:'"2"'}}));render(view(h.bundle));await screen.findByLabelText("文件备注");fireEvent.click(screen.getByRole("button",{name:"下载原文件"}));await screen.findByText("文件版本已变化，请刷新后重试下载。");expect(create).not.toHaveBeenCalled();
@@ -74,7 +74,7 @@ it("locks cursor buttons while the next file page is loading",async()=>{
  const h=setup();let resolve!:(r:Response)=>void;let calls=0;h.list(()=>++calls===1?json({items:[file()],next_cursor:"opaque-next"}):new Promise<Response>(r=>{resolve=r}));render(view(h.bundle));await waitFor(()=>expect(screen.getByRole("button",{name:"下一页文件"})).toBeEnabled());fireEvent.click(screen.getByRole("button",{name:"下一页文件"}));await waitFor(()=>expect(resolve).toBeDefined());expect(screen.getByRole("button",{name:"上一页文件"})).toBeDisabled();expect(screen.getByRole("button",{name:"下一页文件"})).toBeDisabled();await act(async()=>resolve(json({items:[file(b)],next_cursor:null})));await waitFor(()=>expect(screen.getByRole("button",{name:"上一页文件"})).toBeEnabled());
 });
 it("explicit relink stores target under its own identity and navigates to target",async()=>{
- const h=setup(),select=vi.fn();render(<UiProvider><QueryClientProvider client={h.bundle.queryClient}><FilesPage bundle={h.bundle} fileId={a} onSelectFile={select} /></QueryClientProvider></UiProvider>);await screen.findByLabelText("文件备注");fireEvent.change(screen.getByLabelText("重关联目标 UUID"),{target:{value:b}});fireEvent.click(screen.getByRole("button",{name:"读取重关联目标"}));fireEvent.click(await screen.findByRole("button",{name:"重关联到 beta.txt"}));fireEvent.click(await screen.findByRole("button",{name:"确认重关联"}));await waitFor(()=>expect(select).toHaveBeenCalledWith(b));expect(h.bundle.queryClient.getQueryData<FileSource>(queryKeys.files.detail(a))?.id).toBe(a);expect(h.bundle.queryClient.getQueryData<FileSource>(queryKeys.files.detail(b))?.id).toBe(b);
+ const h=setup(),select=vi.fn();render(<UiProvider><QueryClientProvider client={h.bundle.queryClient}><FilesPage bundle={h.bundle} fileId={a} onSelectFile={select} /></QueryClientProvider></UiProvider>);await screen.findByLabelText("文件备注");fireEvent.click(screen.getByRole("button",{name:"手动重关联"}));fireEvent.change(screen.getByLabelText("重关联目标 UUID"),{target:{value:b}});fireEvent.click(screen.getByRole("button",{name:"读取重关联目标"}));fireEvent.click(await screen.findByRole("button",{name:"重关联到 beta.txt"}));fireEvent.click(await screen.findByRole("button",{name:"确认重关联"}));await waitFor(()=>expect(select).toHaveBeenCalledWith(b));expect(h.bundle.queryClient.getQueryData<FileSource>(queryKeys.files.detail(a))?.id).toBe(a);expect(h.bundle.queryClient.getQueryData<FileSource>(queryKeys.files.detail(b))?.id).toBe(b);
 });
 
 it("files deep link is authenticated and uses a strict return destination",async()=>{
@@ -83,7 +83,7 @@ it("files deep link is authenticated and uses a strict return destination",async
  const h=setup();const router=createAppRouter({history:createMemoryHistory({initialEntries:[`/files/${a}`]}),bundle:h.bundle});render(<UiProvider><App router={router} /></UiProvider>);await act(async()=>router.load());expect(await screen.findByLabelText("文件备注")).toHaveValue("original");
 });
 it("does not allow the same relink UUID with different casing",async()=>{
- const h=setup();const id="abcdefab-abcd-4abc-8abc-abcdefabcdef";h.rows[0]!.id=id;render(view(h.bundle,id));await screen.findByLabelText("文件备注");fireEvent.change(screen.getByLabelText("重关联目标 UUID"),{target:{value:id.toUpperCase()}});fireEvent.click(screen.getByRole("button",{name:"读取重关联目标"}));await screen.findByText("请输入不同来源的 UUID");expect(screen.queryByRole("button",{name:/重关联到/})).not.toBeInTheDocument();
+ const h=setup();const id="abcdefab-abcd-4abc-8abc-abcdefabcdef";h.rows[0]!.id=id;render(view(h.bundle,id));await screen.findByLabelText("文件备注");fireEvent.click(screen.getByRole("button",{name:"手动重关联"}));fireEvent.change(screen.getByLabelText("重关联目标 UUID"),{target:{value:id.toUpperCase()}});fireEvent.click(screen.getByRole("button",{name:"读取重关联目标"}));await screen.findByText("请输入不同来源的 UUID");expect(screen.queryByRole("button",{name:/重关联到/})).not.toBeInTheDocument();
 });
 it("accepts a pristine same-version projection when a tag was soft-deleted",async()=>{
  const h=setup();render(view(h.bundle));await screen.findByLabelText("文件备注");expect(screen.getByText(b,{exact:true})).toBeInTheDocument();act(()=>h.bundle.queryClient.setQueryData(queryKeys.files.detail(a),{...file(),tag_ids:[]}));await waitFor(()=>expect(screen.queryByText(b,{exact:true})).not.toBeInTheDocument());expect(screen.getByRole("button",{name:"保存备注和标签"})).toBeDisabled();
@@ -221,4 +221,16 @@ it.each(["remote note","local draft"])("recompares retained fields after explici
  fireEvent.click(screen.getByRole("button",{name:"保存备注和标签"}));await screen.findByText("保存成功。");
  expect(h.patches).toEqual([{expected_version:1,note:"local draft"},{expected_version:2,...(serverNote==="local draft"?{}:{note:"local draft"}),tag_ids:[b]}]);
  expect(h.rows[0]).toMatchObject({version:3,note:"local draft",tag_ids:[b]});
+});
+
+it("opens current file actions before metadata and marks the selection in the list", async () => {
+ const h = setup();
+ render(view(h.bundle));
+ const title = await screen.findByRole("heading", { name: "alpha.txt", level: 1 });
+ const preview = screen.getByRole("button", { name: "预览文件" });
+ const notes = screen.getByLabelText("文件备注");
+ expect(title.compareDocumentPosition(preview) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+ expect(preview.compareDocumentPosition(notes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+ expect(screen.getByRole("button", { name: "打开文件 alpha.txt" })).toHaveAttribute("aria-current", "page");
+ expect(screen.queryByLabelText("重关联目标 UUID")).not.toBeInTheDocument();
 });
