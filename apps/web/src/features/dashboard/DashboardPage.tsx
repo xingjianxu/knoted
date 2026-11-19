@@ -17,7 +17,7 @@ export function DashboardPage({ bundle, onSelectNote, onSelectTask }: {
   if (summary.isFetching) return <Spinner label="加载工作概览" />;
   if (summary.isError || !summary.data) return <Alert tone="error" title="工作概览暂时不可用">请稍后重试。<Button onClick={() => { void summary.refetch(); }}>重试</Button></Alert>;
   const data = summary.data;
-  return <main aria-label="工作概览" className="grid gap-4">
+  return <section aria-label="工作概览" className="grid gap-4">
     <h1>工作概览</h1>
     <Card title="当前概况">
       <p>笔记：{data.counts.notes} · 未完成事项：{data.counts.tasks_open} · 活跃项目：{data.counts.projects_active}</p>
@@ -45,5 +45,5 @@ export function DashboardPage({ bundle, onSelectNote, onSelectTask }: {
       <List aria-label="最近事项">{data.recent_tasks.map(task => <ListItem key={task.id} actions={<Button aria-label={`打开事项 ${task.title}`} onClick={() => onSelectTask(task.id)}>打开</Button>}>{task.title}</ListItem>)}</List>
       {data.recent_tasks.length === 0 && <Empty title="暂无最近事项" />}
     </Card>
-  </main>;
+  </section>;
 }

@@ -7,11 +7,18 @@ export default defineConfig({
   retries: 0,
   reporter: "list",
   use: { baseURL: "http://127.0.0.1:4177" },
-  webServer: {
-    command: "pnpm --filter @knoted/web exec vite --config ../../tests/e2e/fixtures/vite.config.mts",
-    url: "http://127.0.0.1:4177/tests/e2e/fixtures/index.html",
-    reuseExistingServer: false,
-  },
+  webServer: [
+    {
+      command: "pnpm --filter @knoted/web exec vite --config ../../tests/e2e/fixtures/vite.config.mts",
+      url: "http://127.0.0.1:4177/tests/e2e/fixtures/index.html",
+      reuseExistingServer: false,
+    },
+    {
+      command: "pnpm --filter @knoted/web dev --host 127.0.0.1 --port 4178 --strictPort",
+      url: "http://127.0.0.1:4178/",
+      reuseExistingServer: false,
+    },
+  ],
   projects: [
     {
       name: "chromium",

@@ -144,9 +144,12 @@ function MessageRow({ message, bundle, selected, children }: {
 }) {
   const element = useRef<HTMLLIElement>(null);
   useEffect(() => {
-    if (!selected) return;
-    element.current?.scrollIntoView?.({ block: "center" });
-    element.current?.focus({ preventScroll: true });
+    const target = element.current;
+    if (!selected || !target) return;
+    target.focus({ preventScroll: true });
+    // A cached thread can render before the router resets the workspace scroll.
+    const frame = requestAnimationFrame(() => target.scrollIntoView?.({ block: "center" }));
+    return () => cancelAnimationFrame(frame);
   }, [selected]);
   return (
     <li

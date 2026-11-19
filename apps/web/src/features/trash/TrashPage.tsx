@@ -30,7 +30,7 @@ export function TrashPage({ bundle }: { bundle: QueryClientBundle }) {
       void bundle.queryClient.invalidateQueries({ queryKey });
     }
   }
-  return <main aria-label="回收站" className="grid gap-4">
+  return <section aria-label="回收站" className="grid gap-4">
     <h1>回收站</h1>
     <p>软删除对象保留原有关联，删除满 30 天后具备清理资格。仍在列表中的对象可以尝试恢复，恢复时将再次校验版本与关系。</p>
     <Select label="对象类型" value={filter} options={[{ value: "all", label: "全部" }, { value: "note", label: "笔记" }, { value: "project", label: "项目" }, { value: "task", label: "事项" }]} onValueChange={value => { if (value) { setFilter(value as EntityType | "all"); dispatch({ type: "filter", filterKey: value }); } }} />
@@ -44,7 +44,7 @@ export function TrashPage({ bundle }: { bundle: QueryClientBundle }) {
       <Button disabled={page.isFetching || paging.previous.length === 0} onClick={() => dispatch({ type: "previous" })}>上一页</Button>
       <Button disabled={page.isFetching || !page.data?.next_cursor} onClick={() => dispatch({ type: "next", nextCursor: page.data?.next_cursor ?? null })}>下一页</Button>
     </div>
-  </main>;
+  </section>;
 }
 
 function RestoreAction({ bundle, item, onRestored }: { bundle: QueryClientBundle; item: Item; onRestored: (item: Item) => void }) {
