@@ -388,12 +388,17 @@ fn csrf_failed(request_id: RequestId) -> Response {
 
 /// A 503 in the shared error shape.
 pub(crate) fn maintenance_response(request_id: RequestId) -> Response {
-    ApiErrorBody::new(
+    let mut response = ApiErrorBody::new(
         DEPENDENCY_UNAVAILABLE,
         "writes are paused for maintenance",
         request_id.get(),
     )
-    .into_response(StatusCode::SERVICE_UNAVAILABLE)
+    .into_response(StatusCode::SERVICE_UNAVAILABLE);
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    response
 }
 
 fn unavailable(request_id: RequestId) -> Response {

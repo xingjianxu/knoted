@@ -430,13 +430,18 @@ impl<H: Handler> WorkerRunner<H> {
         let Ok(jobs) = owned else {
             return;
         };
+        let mut all_confirmed = true;
         for job in jobs {
             if let Some(lease) = job.lease()
                 && !self.handler.cancel_and_wait(&lease).await
             {
-                // The durable mark prevents backup even if this process exits.
-                return;
+                all_confirmed = false;
             }
+        }
+        if !all_confirmed {
+            // Every owned lease received a stop request. Retain the durable
+            // mark if an execution could still be active when this process exits.
+            return;
         }
         if guard.finish().await.is_err() {
             eprintln!("knoted-worker: shutdown completion could not be recorded");

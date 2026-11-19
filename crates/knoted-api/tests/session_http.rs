@@ -449,6 +449,7 @@ async fn t68_maintenance_allows_session_read_without_renewal_and_refuses_rotatio
             .fetch_one(&db.pool)
             .await
             .unwrap();
+    let mut cache_controls = Vec::new();
     for (method, path, cookie, expected) in [
         (
             Method::GET,
@@ -476,6 +477,14 @@ async fn t68_maintenance_allows_session_read_without_renewal_and_refuses_rotatio
             .unwrap();
         assert_eq!(response.status(), expected);
         if expected == StatusCode::SERVICE_UNAVAILABLE {
+            cache_controls.push(
+                response
+                    .headers()
+                    .get(header::CACHE_CONTROL)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_owned(),
+            );
             let data = body(response).await;
             assert_eq!(data["code"], "dependency_unavailable");
             assert_eq!(data["message"], "writes are paused for maintenance");
@@ -503,4 +512,5 @@ async fn t68_maintenance_allows_session_read_without_renewal_and_refuses_rotatio
     assert_eq!(before, after);
     drop(exclusive);
     db.drop().await;
+    assert_eq!(cache_controls, ["private, no-store", "private, no-store"]);
 }
