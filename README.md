@@ -26,6 +26,7 @@ UI 方向已确认：通用组件直接消费 npm `@bixlab/mtone`，本项目只
 测试实例（`https://wlab.132140.xyz:15601/`）由 [pcwrap](https://www.npmjs.com/package/@bixlab/pcwrap) + process-compose 管理，控制端口 15600：
 
 ```bash
+pnpm deploy:dev                      # 取最新主线：构建 → 切换 → 重启 → 验证
 pnpm pc up -D                        # prepare → migrate → intelligence、API 和 Worker
 pnpm pc process list
 pnpm pc process restart knoted-api   # 只重启 API，不重跑迁移
@@ -33,7 +34,7 @@ pnpm pc process logs knoted-api -n 200
 pnpm pc down                         # 停止实例（不影响 PostgreSQL 等外部依赖）
 ```
 
-运行根是固定提交产物（`tools/dev/build-artifact.sh` → `/data/knoted-dev/runtime/<sha>`），配置由 `tools/dev/pc/*.tmpl` 渲染。pcwrap 初次接管测试实例见 [PR #64 的历史验证](docs/plans/knoted-v1/evidence/pcwrap-dev-service.md)。HTTPS 由宿主共享 Caddy 提供。dev 使用 `knoted_dev`，数据库由宿主用户创建。独立生产实例由 NixOS 和共享 Caddy 运行，使用另一数据库和数据根。固定发布、生产入口与回退见 [T72 交接记录](docs/plans/knoted-v1/evidence/t72-deployment.md)。[ADR 0003](docs/decisions/0003-test-instance-process-management.md) · [ADR 0004](docs/decisions/0004-database-owned-by-host-user.md)
+运行根是固定提交产物（`tools/dev/build-artifact.sh` → `/data/knoted-dev/runtime/<sha>`），配置由 `tools/dev/pc/*.tmpl` 渲染。日常发版用 `pnpm deploy:dev`（[一键部署](docs/plans/knoted-v1/development-and-deploy.md#一键部署)）。pcwrap 初次接管测试实例见 [PR #64 的历史验证](docs/plans/knoted-v1/evidence/pcwrap-dev-service.md)。HTTPS 由宿主共享 Caddy 提供。dev 使用 `knoted_dev`，数据库由宿主用户创建。独立生产实例由 NixOS 和共享 Caddy 运行，使用另一数据库和数据根。固定发布、生产入口与回退见 [T72 交接记录](docs/plans/knoted-v1/evidence/t72-deployment.md)。[ADR 0003](docs/decisions/0003-test-instance-process-management.md) · [ADR 0004](docs/decisions/0004-database-owned-by-host-user.md)
 
 ## 流程入口
 
