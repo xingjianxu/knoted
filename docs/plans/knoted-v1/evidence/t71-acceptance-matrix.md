@@ -20,7 +20,7 @@
 | Python超时/重启/取消 | `t47_real_running_cancel_proves_exit_before_replay`、`t47_python_deadline_crossed_waiting_for_publication_locks_rolls_back`、`t08_3_unconfirmed_cancel_keeps_slot` | 3 | 取消、过期与未证明退出的槽位。T70 隔离 VM 还验证实际 Python 主进程 SIGKILL 后 guardian 确认退出、重启可读取终态，缺失证明报告 degraded。 |
 | Worker租约转移 | `t07_3_stale_token_cannot_finish`、`t07_2_expired_lease_is_taken_over`、`t07_runner_stops_when_the_lease_is_lost` | 3 | 租约接管后旧 token 无法发布，旧执行者停止。 |
 | Meili接收但未应用 | `t53_2_accepted_engine_task_is_not_published`、`t53_9_permanent_engine_rejection_ends_in_failed` | 2 | 引擎接收和最终应用分别记账。T71 浏览器第二步另让索引写入失败后恢复。 |
-| 全文好向量坏 | `t54_3_only_latest_fulltext_is_visible_without_vectors`、`t59_1_source_change_immediately_revokes_vector_visibility` | 2 | 全文索引与向量发布独立判断新鲜度；这两个用例没有检查页面上的“未就绪”文案。 |
+| 全文好向量坏 | `t54_3_only_latest_fulltext_is_visible_without_vectors`、`t59_1_source_change_immediately_revokes_vector_visibility` | 2 | 全文索引与向量发布分别判断新鲜度。浏览器另核对新版文件的真实向量任务失败、任务页显示“失败”和“重试任务”，同一文件仍能通过全文检索命中。 |
 | 删除后迟到索引 | `t54_1_soft_delete_hides_the_existing_engine_hit`、`t59_2_filtering_returns_only_real_matching_current_vectors`、`t60_2_current_visibility_filters_both_paths` | 3 | 旧引擎命中须过 PostgreSQL 可见性检查，两条召回路径都受限。 |
 | 中文词语位于长句中 | `t53_1_chinese_word_inside_a_long_sentence_is_found` | 1 | 长句内中文可命中；T55 组件 `t55_3 highlights matching text without interpreting HTML` 检查片段呈现。 |
 | 聊天含关键词 | `t62_4_completed_reply_is_searchable_and_soft_delete_is_immediate`、`t60_1_document_index_and_chat_cannot_supply_evidence` | 2 | 聊天进入全文索引；RAG 排除聊天证据。 |
@@ -34,10 +34,11 @@
 ## 可复核的运行记录
 
 - Rust 主线执行 `cargo test --locked --workspace`；`/data/knoted-dev/tasks/t69/evidence/t69-mainline-rust.log` 记录提交、命令、逐项结果和 ignored 示例。涉及受控上游的 Rust 用例检查状态机；实际引擎验证见下述独立演练。
-- T71 浏览器执行 `bash tests/fixtures/t71/instance.sh pnpm exec playwright test tests/e2e/t71.spec.ts`，Chromium 1 项通过、0 失败。同一用例先从文件问答、查看引用、转存笔记并关联事项，再阻断索引写入、确认旧引擎命中被应用过滤、解除故障并等待新版可检索。真实 HTTPS、PostgreSQL/pgvector、Meilisearch 和固定 BGE-M3 参与；聊天生成使用读取合成上下文后返回 SSE 的确定性夹具，认证使用 Chromium 虚拟 CTAP2。日志为 `/data/knoted-dev/tasks/t71/evidence/t71-merged-t69-browser.log`。
+- T71 浏览器执行 `bash tests/fixtures/t71/instance.sh pnpm exec playwright test tests/e2e/t71.spec.ts`，Chromium 1 项通过、0 失败。同一用例先从文件问答、查看引用、转存笔记并关联事项，再阻断索引写入、确认旧引擎命中被应用过滤、解除故障并等待新版可检索。向量故障代理仅更改该新版一次真实 BGE 执行的结果大小，验证同一执行在数据库和真实任务页面终止失败、无可见向量，而全文结果与文件身份一致。真实 HTTPS、PostgreSQL/pgvector、Meilisearch 和固定 BGE-M3 参与；聊天生成使用读取合成上下文后返回 SSE 的确定性夹具，认证使用 Chromium 虚拟 CTAP2。日志为 `/data/knoted-dev/tasks/t71/evidence/t71-vector-ui-final.log`。
 - T69 恢复演练执行一轮隔离实例恢复，包含第 26 行的两个拒绝场景，并核验源实例 HTTP 200、恢复实例的旧会话 401、同一虚拟 Passkey 重新登录，以及历史、引用、图片和重建的 1024 维向量。日志为 `/data/knoted-dev/tasks/t71/evidence/t71-restore-missing-image.log`。
 - T70 在同一应用产物的独立 KVM 内执行 1 组生命周期测试；正常停止为 cancelled，主进程异常退出为 interrupted，两者都有退出证明。删除证明后为 degraded。日志为 `/data/knoted-dev/tasks/t70/evidence/t69-module-final.log`。这些运行未验证生产 GPU 或实体认证器。
-- Web 组件回归在 T71 测试分支执行 23 文件、442 项通过（`/data/knoted-dev/tasks/t71/evidence/agent-web-test.log`）。编辑器与 mtone 定向执行 6 文件、82 项通过（`t71-editor-mtone-vitest.log`）；当前锁版 `@bixlab/mtone@0.4.0` 的 T17–T19 Chromium 用例 15 项通过（`t71-locked-mtone-browser.log`），两份日志均位于同一 T71 evidence 目录。自动化 composition 事件与选区检查覆盖应用行为，真实操作系统中文输入法候选窗及候选词确认仍未验证。
+- Web 组件回归在 T71 测试分支执行 23 文件、442 项通过（`/data/knoted-dev/tasks/t71/evidence/t71-gate-web-tests.log`）。编辑器与 mtone 定向执行 6 文件、82 项通过（`t71-editor-mtone-vitest.log`）；当前锁版 `@bixlab/mtone@0.4.0` 的 T17–T19 Chromium 用例 15 项通过（`t71-locked-mtone-browser.log`），两份日志均位于同一 T71 evidence 目录。
+- Linux 原生输入法实跑使用 IBus/libpinyin、GTK 候选窗、隔离 Xvfb 和 Chromium。在 T27 编辑器中，X11 逐键输入拼音，候选窗显示“你好”在首位，Space 提交后保存 JSON 包含“你好”。再次输入“再见”的拼音后按 Escape，保存 JSON 逐字未变，caret 偏移保持 6，编辑器保留焦点。命令为 `dbus-run-session -- bash /data/knoted-dev/tasks/t71/tmp/ime-secondary/session.sh`，退出 0。日志和候选窗截图为 `t71-native-ime.log`、`t71-native-ime-candidates.png`。本次覆盖 Linux IBus/X11。
 - T52 的实际 OnlyOffice 证据对应主线 `4e722319dc850ee7627c94bb7d7919cdf0020e97`；T61–T65 的历史集成对应 `867b004910efd5711e26a9578421054c76413ba0`，其中 T65 组件定向 10 项通过。 [T52 查看器验收](t52-office-preview.md) · [T61–T65 集成记录](t61-t65-integration.md)
 
 T70 生产主机和 T71 最终集成由各自任务记录提交、运行产物与验收结果。本矩阵所列结果固定在上述各轮版本。
