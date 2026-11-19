@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use knoted_api::admin::{self, TokenCommand, backup};
+use knoted_api::admin::{self, TokenCommand, backup, restore};
 use knoted_api::build_router_with_auth;
 use knoted_api::logging;
 use knoted_core::config::{AppConfig, ProcessKind};
@@ -19,7 +19,7 @@ use knoted_core::db;
 
 const USAGE: &str = "usage: knoted-api [--config <PATH>]\n       \
      knoted-api admin token --purpose <bootstrap|recovery> --config <PATH>\n       \
-     knoted-api admin backup --output <new-directory> [--config <PATH>]";
+     knoted-api admin backup --output <new-directory> [--config <PATH>]\n     knoted-api admin restore --input <archive> --target <descriptor>";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -153,6 +153,7 @@ async fn run_admin(args: &[String]) -> ExitCode {
 
     match subcommand.as_str() {
         "token" => run_admin_token(&args[1..]).await,
+        "restore" => run_admin_restore(&args[1..]).await,
         "backup" => run_admin_backup(&args[1..]).await,
         "--help" | "help" => {
             println!("{USAGE}");
@@ -227,6 +228,27 @@ async fn run_admin_backup(args: &[String]) -> ExitCode {
         }
         Err(error) => {
             eprintln!("knoted-api: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run_admin_restore(args: &[String]) -> ExitCode {
+    if args == ["--help"] {
+        println!("{}", restore::USAGE);
+        return ExitCode::SUCCESS;
+    }
+    let Ok(command) = restore::RestoreCommand::parse(args) else {
+        eprintln!("{}", restore::USAGE);
+        return ExitCode::from(2);
+    };
+    match restore::run(&command).await {
+        Ok(()) => {
+            println!("isolated restore complete");
+            ExitCode::SUCCESS
+        }
+        Err(message) => {
+            eprintln!("knoted-api: {message}");
             ExitCode::FAILURE
         }
     }

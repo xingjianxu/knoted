@@ -312,7 +312,7 @@ fn copy_assets(
     Ok(assets)
 }
 
-fn open_regular_file(directory: impl AsFd, name: &str, size: u64) -> io::Result<File> {
+pub(super) fn open_regular_file(directory: impl AsFd, name: &str, size: u64) -> io::Result<File> {
     let fd = fs::openat2(
         &directory,
         name,
@@ -330,7 +330,10 @@ fn open_regular_file(directory: impl AsFd, name: &str, size: u64) -> io::Result<
     Ok(File::from(fd))
 }
 
-fn copy_and_hash(mut input: impl Read, mut output: impl Write) -> io::Result<FileDigest> {
+pub(super) fn copy_and_hash(
+    mut input: impl Read,
+    mut output: impl Write,
+) -> io::Result<FileDigest> {
     let mut hash = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     let mut size = 0_u64;
@@ -348,7 +351,7 @@ fn copy_and_hash(mut input: impl Read, mut output: impl Write) -> io::Result<Fil
     }
 }
 
-fn private_file(directory: impl AsFd, name: &str) -> io::Result<File> {
+pub(super) fn private_file(directory: impl AsFd, name: &str) -> io::Result<File> {
     Ok(File::from(fs::openat(
         directory,
         name,

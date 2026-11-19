@@ -10,6 +10,7 @@
 pub mod backup;
 mod entity_registry;
 mod error;
+pub mod restore;
 pub mod testing;
 
 use std::time::Duration;
