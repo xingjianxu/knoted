@@ -47,6 +47,7 @@ repository=$(git -C "$script_dir" rev-parse --show-toplevel)
 instance_repository=$(dirname -- "$(git -C "$repository" rev-parse --path-format=absolute --git-common-dir)")
 build_script=$script_dir/build-artifact.sh
 service_script=$script_dir/pc/service.sh
+source "$script_dir/pc/runtime-env.sh"
 
 instance_root=${KNOTED_INSTANCE_ROOT:-/data/knoted-dev/service}
 runtime_parent=$(realpath -m -- "${KNOTED_DEPLOY_RUNTIME_PARENT:-/data/knoted-dev/runtime}")
@@ -63,19 +64,6 @@ domain=${KNOTED_HTTPS_DOMAIN:-wlab.132140.xyz}
 deploy_env_file=$instance_root/deploy.env
 lock_file=$instance_root/.deploy.lock
 
-# 运行变量白名单：全部是路径或开关，不含密钥本身。
-runtime_variable_keys=(
-  KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR
-  KNOTED_INTELLIGENCE_BGE_M3_DIR
-  KNOTED_SEARCH_ENABLED
-  KNOTED_SEARCH_CREDENTIAL_FILE
-  KNOTED_VECTORS_ENABLED
-  KNOTED_OFFICE_ORIGIN
-  KNOTED_OFFICE_JWT_SECRET_FILE
-  KNOTED_CHAT_LOCAL_BASE_URL
-  KNOTED_CHAT_LOCAL_MODEL
-  KNOTED_CHAT_LOCAL_CREDENTIAL_FILE
-)
 # 缺了这两个，knoted-intelligence 直接拒绝启动（PC 编排里 worker 又依赖它健康）。
 required_variable_keys=(
   KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR
@@ -97,7 +85,7 @@ usage: bash tools/dev/deploy-dev.sh [<full-40-hex-sha>]
 
 无参数时 fetch origin 并部署 origin/master 的最新提交。
 脚本把 dev 固定产物构建到 <KNOTED_DEPLOY_RUNTIME_PARENT>/<sha>，原子切换 current，
-按迁移文件集合决定 down + up 还是只 restart，最后验证并报告。
+按迁移文件集合与本地聊天配置决定 down + up 还是只 restart，最后验证并报告。
 TEXT
 }
 
@@ -155,17 +143,6 @@ resolve_revision() {
   fi
 }
 
-# deploy.env 只接受 KEY=VALUE 行，不 source（避免执行文件内容）。调用者环境优先。
-read_deploy_env() {
-  local key value
-  while IFS='=' read -r key value || [ -n "$key" ]; do
-    [ -n "$key" ] || continue
-    case " ${runtime_variable_keys[*]} " in
-    *" $key "*) [ -n "$value" ] && [ -z "${resolved[$key]:-}" ] && resolved[$key]=$value ;;
-    esac
-  done <"$deploy_env_file"
-}
-
 # 从活动进程读回运行变量（机器上真实运行的实例即事实来源）。三个进程的 exe 各不相同：
 # api/worker 直接跑 Rust 二进制，intelligence 的包装器 exec 固定解释器（exe 是产物里的
 # python3.12），且 service.sh 用 `env -i` 只给 intelligence 留模型根与端口。所以不能只看
@@ -189,11 +166,16 @@ capture_running_variables() {
   for env_file in "${candidates[@]}"; do
     [ -r "$env_file" ] || continue
     found=1
-    while IFS='=' read -r key value; do
+    while IFS= read -r -d '' value; do
+      [[ $value =~ ^[A-Z_][A-Z_0-9]*= ]] || continue
+      key=${value%%=*}
+      value=${value#*=}
+      # 已落盘的配置是问答设置的事实来源；删掉三项即关闭本地模型。
+      if [[ -f $deploy_env_file && $key == KNOTED_CHAT_LOCAL_* ]]; then continue; fi
       case " ${runtime_variable_keys[*]} " in
-      *" $key "*) [ -n "$value" ] && [ -z "${resolved[$key]:-}" ] && resolved[$key]=$value ;;
+      *" $key "*) if [[ -n $value && -z ${resolved[$key]:-} ]]; then resolved[$key]=$value; fi ;;
       esac
-    done < <(tr '\0' '\n' <"$env_file")
+    done <"$env_file"
   done
   test "$found" = 1
 }
@@ -213,23 +195,18 @@ write_deploy_env() {
   mv -f "$tmp" "$deploy_env_file"
 }
 
-# 解析顺序：调用者环境 > deploy.env > 活动进程抓取；最终结果回写文件，
-# 下一次没有 shell 环境时仍然拿到同一套变量。
+# 解析顺序：调用者环境 > deploy.env > 活动进程抓取。配置预检通过后再回写。
 resolve_runtime_variables() {
-  local key captured=0 missing="" file_before=""
+  local key missing=""
   declare -gA resolved=()
+  load_deploy_env "$deploy_env_file" || fail "运行变量文件无效" 2
   for key in "${runtime_variable_keys[@]}"; do
     if [ -n "${!key:-}" ]; then resolved[$key]=${!key}; fi
   done
-  if [ -f "$deploy_env_file" ]; then
-    file_before=$(grep -E '^[A-Z_]+=' "$deploy_env_file" 2>/dev/null || true)
-    read_deploy_env
-  fi
   for key in "${runtime_variable_keys[@]}"; do
     [ -n "${resolved[$key]:-}" ] || missing="$missing $key"
   done
   if [ -n "$missing" ] && capture_running_variables; then
-    captured=1
     missing=""
     for key in "${runtime_variable_keys[@]}"; do
       [ -n "${resolved[$key]:-}" ] || missing="$missing $key"
@@ -244,22 +221,25 @@ resolve_runtime_variables() {
     log "未设置的可选运行变量：${missing# }（不影响启动，相关能力保持关闭）"
   fi
   for key in "${runtime_variable_keys[@]}"; do
-    if [ -n "${resolved[$key]:-}" ]; then export "$key=${resolved[$key]}"; fi
+    local value=${resolved[$key]:-}
+    if [[ $value == *$'\n'* || $value == *$'\r'* ]]; then
+      fail "运行变量 $key 必须在同一行" 2
+    fi
+    if [[ -n $value ]]; then export "$key=$value"; fi
   done
-  if [ "$captured" = 1 ] || deploy_env_outdated "$file_before"; then
+}
+
+persist_runtime_variables() {
+  local key expected='' before=''
+  for key in "${runtime_variable_keys[@]}"; do
+    [[ -n ${resolved[$key]:-} ]] || continue
+    expected+="$key=${resolved[$key]}"$'\n'
+  done
+  if [[ -f $deploy_env_file ]]; then before=$(<"$deploy_env_file"); fi
+  if [[ ${expected%$'\n'} != "$before" ]]; then
     write_deploy_env
     log "运行变量写入 $deploy_env_file（0600）"
   fi
-}
-
-# 文件内容与本次解析结果不一致（缺失键、调用者覆盖、或首次）就需要回写。
-deploy_env_outdated() {
-  local key value expected=""
-  for key in "${runtime_variable_keys[@]}"; do
-    [ -n "${resolved[$key]:-}" ] || continue
-    expected+="$key=${resolved[$key]}"$'\n'
-  done
-  test "$expected" != "${1:+$1$'\n'}"
 }
 
 # 产物可用性检查：不直接退出，让调用方决定“重建还是报错”。
@@ -328,8 +308,11 @@ compare_migrations() {
 
 switch_current() {
   local link=$runtime_parent/.current.$$
-  ln -s "$1" "$link"
-  mv -Tf "$link" "$runtime_parent/current"
+  ln -s "$1" "$link" || return 1
+  if ! mv -Tf "$link" "$runtime_parent/current"; then
+    unlink "$link" || true
+    return 1
+  fi
 }
 
 # 所有 pcwrap 调用都在主检出执行：daemon 的 cwd 决定后续 prepare/restart 用哪份
@@ -466,13 +449,77 @@ fail_after_switch() {
     log "排查入口：pnpm pc process logs knoted-api -n 200"
     exit 1
   fi
-  log "$reason；复位 current → $previous 并重启回旧版本"
-  switch_current "$previous"
-  restart_running || log "复位后的重启返回非零，请手工检查（pnpm pc process list）"
+  log "$reason；恢复 $previous 与上次运行设置"
+  if [ "$reload_instance" = 1 ]; then
+    stop_instance || fail "停止新实例失败，未执行回退（pnpm pc process list）"
+  fi
+  restore_previous_runtime
+  if [[ $(readlink -f "$runtime_parent/current" 2>/dev/null || true) != "$previous" ]]; then
+    switch_current "$previous"
+  fi
+  if [ "$reload_instance" = 1 ]; then
+    pc up -D || log "复位后的完整启动失败，请手工检查（pnpm pc process list）"
+  else
+    restart_running || log "复位后的重启返回非零，请手工检查（pnpm pc process list）"
+  fi
   exit 1
 }
 
+snapshot_previous_runtime() (
+  local key value
+  local -A resolved=()
+  for key in "${runtime_variable_keys[@]}"; do unset "$key"; done
+  load_deploy_env "$deploy_env_file" || return 1
+  capture_running_variables || true
+  for key in "${runtime_variable_keys[@]}"; do
+    [[ $key != KNOTED_CHAT_LOCAL_* ]] || continue
+    value=${resolved[$key]:-${!key:-}}
+    [[ $value != *$'\n'* && $value != *$'\r'* ]] || return 1
+    if [[ -n $value ]]; then printf '%s=%s\n' "$key" "$value"; fi
+  done
+  bash "$service_script" active-chat-env
+)
+
+restore_previous_runtime() {
+  local key line
+  for key in "${runtime_variable_keys[@]}"; do unset "$key" 'resolved[$key]'; done
+  while IFS= read -r line; do
+    [[ -n $line ]] || continue
+    key=${line%%=*}
+    resolved[$key]=${line#*=}
+    export "$line"
+  done <<< "$previous_runtime_env"
+  persist_runtime_variables
+}
+
+check_chat_config() {
+  bash "$service_script" check-chat-config
+}
+
+check_chat_processes() {
+  local runtime=$1 digest=$2 exe_link exe env_file seen_api=0 seen_worker=0
+  for exe_link in "$proc_root"/[0-9]*/exe; do
+    exe=$(readlink -- "$exe_link" 2>/dev/null) || continue
+    case "$exe" in
+    "$runtime/bin/knoted-api") seen_api=1 ;;
+    "$runtime/bin/knoted-worker") seen_worker=1 ;;
+    *) continue ;;
+    esac
+    env_file=${exe_link%/exe}/environ
+    grep -zFqx -- "KNOTED_DEV_CHAT_CONFIG_DIGEST=$digest" "$env_file" 2>/dev/null || return 1
+  done
+  [[ $seen_api == 1 && $seen_worker == 1 ]]
+}
+
 verify_deployed() {
+  check_chat_config >/dev/null || {
+    log "[chat.local] 配置未应用或无法验证（pnpm pc process logs prepare）"
+    return 1
+  }
+  check_chat_processes "$target" "$chat_digest" || {
+    log "运行的 API 或 Worker 未加载预期的 [chat.local] 配置"
+    return 1
+  }
   check_https || {
     log "$https_problem"
     return 1
@@ -497,28 +544,63 @@ main() {
   target=$(realpath -m -- "$runtime_parent/$revision")
   previous=$(readlink -f "$runtime_parent/current" 2>/dev/null || true)
 
+  # 同一 SHA 也先核对配置；新的运行变量不能通过 restart 传给旧的编排进程。
+  resolve_runtime_variables
+  local chat_status=0 reload_instance=0 chat_digest previous_runtime_env
+  chat_digest=$(check_chat_config) || chat_status=$?
+  case "$chat_status" in
+  0 | 3) ;;
+  *) fail "运行配置预检失败，未停止实例" 2 ;;
+  esac
+  if [[ $chat_status == 3 ]] || ! check_chat_processes "$previous" "$chat_digest"; then
+    reload_instance=1
+    log "[chat.local] 配置变化或未加载，将完整重载编排"
+  fi
+  previous_runtime_env=$(snapshot_previous_runtime) || fail "无法保存上次运行设置，未停止实例" 2
+
   if [ "$previous" = "$target" ]; then
-    log "已是最新：current 已指向 $revision，只做验证"
     verify_artifact
-    wait_for_convergence "$ready_timeout" || fail "实例未收敛：${process_problem:-readiness 未通过}（pnpm pc process list / pnpm pc process logs knoted-api）"
-    verify_deployed
+    migrations_changed=0
+    if [ "$reload_instance" = 0 ] && instance_running; then
+      log "已是最新：current 已指向 $revision，只做验证"
+      wait_for_convergence "$ready_timeout" || fail "实例未收敛：${process_problem:-readiness 未通过}"
+      verify_deployed
+      persist_runtime_variables
+    else
+      reload_instance=1
+      persist_runtime_variables
+      if ! stop_instance; then
+        restore_previous_runtime
+        fail "停止实例失败（pnpm pc process list）"
+      fi
+      pc up -D || fail_after_switch "完整启动失败（pnpm pc process logs prepare）"
+      wait_for_convergence "$ready_timeout" || fail_after_switch "实例未收敛：${process_problem:-readiness 未通过}"
+      verify_deployed || fail_after_switch "验证未通过"
+    fi
     return 0
   fi
 
-  # 构建前就要有运行变量：Vite 用 KNOTED_OFFICE_ORIGIN 决定是否编入 Office。
-  resolve_runtime_variables
-
   build_or_reuse_artifact
   compare_migrations
+  if [ "$migrations_changed" = 1 ]; then reload_instance=1; fi
 
-  # 迁移路径先停实例再切指针：停止失败时什么都没改，实例仍旧版本。
-  if [ "$migrations_changed" = 1 ]; then
-    stop_instance || fail "停止实例失败：指针未切换，实例仍在旧版本（pnpm pc process list）"
+  # 在停机前完成文件发布；需要 prepare 时先停实例，再切换指针。
+  persist_runtime_variables
+  if [[ $reload_instance == 1 ]] && ! stop_instance; then
+    restore_previous_runtime
+    fail "停止实例失败：指针未切换，实例仍在旧版本（pnpm pc process list）"
   fi
-  switch_current "$target"
+  if ! switch_current "$target"; then
+    if [[ $reload_instance == 1 && -n $previous ]]; then
+      migrations_changed=0 # 指针未切换，尚未启动或应用迁移。
+      fail_after_switch "切换指针失败"
+    fi
+    restore_previous_runtime
+    fail "切换指针失败"
+  fi
   log "current → $target"
 
-  if [ "$migrations_changed" = 1 ]; then
+  if [ "$reload_instance" = 1 ]; then
     pc up -D || fail_after_switch "pnpm pc up -D 失败"
   else
     restart_running || fail_after_switch "重启失败"
