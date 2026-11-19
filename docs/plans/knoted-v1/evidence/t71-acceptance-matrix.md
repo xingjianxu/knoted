@@ -42,3 +42,5 @@
 - T52 的实际 OnlyOffice 证据对应主线 `4e722319dc850ee7627c94bb7d7919cdf0020e97`；T61–T65 的历史集成对应 `867b004910efd5711e26a9578421054c76413ba0`，其中 T65 组件定向 10 项通过。 [T52 查看器验收](t52-office-preview.md) · [T61–T65 集成记录](t61-t65-integration.md)
 
 T70 生产主机和 T71 最终集成由各自任务记录提交、运行产物与验收结果。本矩阵所列结果固定在上述各轮版本。
+
+PR #235 合入 `dbc5788fb64dcf7babf94ed3b70ce0088a4b72e7` 后，T72 以该主线提交完整构建新固定产物。同一 Chromium 入口再次通过 1 项，0 失败、0 跳过，包含新增的向量失败断言。实际日志为 `/data/knoted-dev/tasks/t72/evidence/t72-mainline-t71-browser.log`。
