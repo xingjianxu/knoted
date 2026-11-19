@@ -160,10 +160,23 @@ impl<H: Handler> WorkerRunner<H> {
     /// Unlike [`WorkerRunner::run_once`], this reports a pending cancellation
     /// separately from an idle queue and returns the committed job row.
     pub async fn step(&self) -> Result<StepOutcome, RunnerError> {
+        let Some(admission) = self.ctx.try_write().await.map_err(DbError::from)? else {
+            return Ok(StepOutcome::Idle);
+        };
+        let result = self.step_admitted().await;
+        admission.finish().await.map_err(DbError::from)?;
+        result
+    }
+
+    async fn step_admitted(&self) -> Result<StepOutcome, RunnerError> {
         let Some(lease) = jobs::claim(self.ctx.pool(), &self.worker).await? else {
             return Ok(StepOutcome::Idle);
         };
 
+        self.process_lease(lease).await
+    }
+
+    async fn process_lease(&self, lease: Lease) -> Result<StepOutcome, RunnerError> {
         // A takeover of a cancellation request must not execute the work again;
         // it continues where the dead worker stopped: confirming the exit.
         if lease.state == JobState::CancelRequested {
@@ -357,31 +370,81 @@ impl<H: Handler> WorkerRunner<H> {
     pub async fn run_until(&self, shutdown: impl Future<Output = ()> + Send) {
         tokio::pin!(shutdown);
         loop {
-            let result = tokio::select! {
-                biased;
-                _ = &mut shutdown => break,
-                result = self.step() => result,
+            // Finish admission and claim even when the signal arrives between
+            // sending SQL and receiving its result. The returned lease then
+            // identifies exactly which execution may require cancellation.
+            let result = match self.ctx.try_write().await {
+                Ok(Some(guard)) => {
+                    let claimed = tokio::select! {
+                        biased;
+                        _ = &mut shutdown => {
+                            self.shutdown_admitted(guard).await;
+                            return;
+                        }
+                        // Never cancel a claim already sent to PostgreSQL.
+                        _ = std::future::ready(()) => jobs::claim(self.ctx.pool(), &self.worker).await,
+                    };
+                    let result = match claimed {
+                        Ok(Some(lease)) => tokio::select! {
+                            biased;
+                            _ = &mut shutdown => {
+                                self.shutdown_admitted(guard).await;
+                                return;
+                            }
+                            result = self.process_lease(lease) => result,
+                        },
+                        Ok(None) => Ok(StepOutcome::Idle),
+                        Err(error) => Err(RunnerError::Database(error)),
+                    };
+                    match guard.finish().await {
+                        Ok(()) => result,
+                        Err(e) => Err(RunnerError::Database(e.into())),
+                    }
+                }
+                Ok(None) => Ok(StepOutcome::Idle),
+                Err(e) => Err(RunnerError::Database(e.into())),
             };
             if let Err(error) = &result {
                 eprintln!("worker attempt failed: {error}");
             }
             if !matches!(result, Ok(StepOutcome::Finished { .. })) {
-                tokio::select! { _ = &mut shutdown => break, _ = tokio::time::sleep(self.idle_backoff) => {} }
+                tokio::select! {
+                    _ = &mut shutdown => {
+                        if let Ok(Some(guard)) = self.ctx.try_write().await {
+                            self.shutdown_admitted(guard).await;
+                        }
+                        return;
+                    }
+                    _ = tokio::time::sleep(self.idle_backoff) => {}
+                }
             }
         }
-        // A dropped claim/execute has no detached SQL/HTTP producer. Registered
-        // executions remain in the payload even if the lease is no longer live.
+    }
+
+    async fn shutdown_admitted(&self, guard: knoted_core::maintenance::WriteGuard) {
         let owned: Result<Vec<Job>, _> =
             sqlx::query_as("SELECT * FROM jobs WHERE locked_by=$1 AND lease_token IS NOT NULL")
                 .bind(&self.worker)
                 .fetch_all(self.ctx.pool())
                 .await;
-        if let Ok(jobs) = owned {
-            for job in jobs {
-                if let Some(lease) = job.lease() {
-                    let _ = self.handler.cancel_and_wait(&lease).await;
-                }
+        let Ok(jobs) = owned else {
+            return;
+        };
+        let mut all_confirmed = true;
+        for job in jobs {
+            if let Some(lease) = job.lease()
+                && !self.handler.cancel_and_wait(&lease).await
+            {
+                all_confirmed = false;
             }
+        }
+        if !all_confirmed {
+            // Every owned lease received a stop request. Retain the durable
+            // mark if an execution could still be active when this process exits.
+            return;
+        }
+        if guard.finish().await.is_err() {
+            eprintln!("knoted-worker: shutdown completion could not be recorded");
         }
     }
 }

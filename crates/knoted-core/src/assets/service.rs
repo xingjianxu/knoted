@@ -54,11 +54,17 @@ pub enum DomainError {
 /// cancellation must not drop the publication guard while COMMIT is in flight.
 pub async fn upload(ctx: &AppContext, input: UploadAsset) -> Result<Asset, DomainError> {
     let ctx = ctx.clone();
-    tokio::spawn(async move { upload_inner(&ctx, input).await })
-        .await
-        .map_err(|_| DomainError::Storage)?
+    tokio::spawn(async move {
+        let guard = ctx.try_write().await?.ok_or(DomainError::Storage)?;
+        let result = upload_admitted(&ctx, input).await;
+        guard.finish().await?;
+        result
+    })
+    .await
+    .map_err(|_| DomainError::Storage)?
 }
-async fn upload_inner(ctx: &AppContext, input: UploadAsset) -> Result<Asset, DomainError> {
+/// Called by the owned, admitted HTTP handler or the independently owned upload.
+pub async fn upload_admitted(ctx: &AppContext, input: UploadAsset) -> Result<Asset, DomainError> {
     if input.idempotency_key.is_empty()
         || input.idempotency_key.len() > 255
         || input.idempotency_key.contains('\0')

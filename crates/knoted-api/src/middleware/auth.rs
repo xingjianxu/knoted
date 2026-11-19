@@ -53,6 +53,7 @@ pub const DEPENDENCY_UNAVAILABLE: &str = "dependency_unavailable";
 pub struct CurrentSession {
     /// The live session behind this request.
     pub session: Session,
+    pub write_admitted: bool,
 }
 
 /// Resolves the session cookie and rejects the request when it is not live.
@@ -66,7 +67,7 @@ pub struct CurrentSession {
 /// ```
 pub async fn require_session(
     State(ctx): State<AppContext>,
-    mut request: Request,
+    request: Request,
     next: Next,
 ) -> Response {
     let request_id = request_id(&request);
@@ -80,6 +81,26 @@ pub async fn require_session(
         return unauthenticated(request_id);
     };
 
+    let replay = request.method() == Method::POST
+        && request
+            .extensions()
+            .get::<axum::extract::MatchedPath>()
+            .is_some_and(|path| path.as_str().ends_with("/chat/runs/{run_id}/events"));
+    let read = !is_write(request.method()) || replay;
+    owned_request(ctx.clone(), request_id, read, move |admitted| {
+        resolve_and_run(ctx, request, next, token, admitted)
+    })
+    .await
+}
+
+async fn resolve_and_run(
+    ctx: AppContext,
+    mut request: Request,
+    next: Next,
+    token: String,
+    write_admitted: bool,
+) -> Response {
+    let request_id = request_id(&request);
     let mut connection = match ctx.pool().acquire().await {
         Ok(connection) => connection,
         Err(error) => {
@@ -96,12 +117,19 @@ pub async fn require_session(
     // Resolve on the connection and give it back before running the handler: a
     // handler (and every downstream layer) may check out its own connection, so
     // holding this one across `next.run` would deadlock a small pool.
-    let resolved = sessions::resolve_session(&mut connection, &token, ctx.now()).await;
+    let resolved = if write_admitted {
+        sessions::resolve_session(&mut connection, &token, ctx.now()).await
+    } else {
+        sessions::lookup_session(&mut connection, &token, ctx.now()).await
+    };
     drop(connection);
 
     match resolved {
         Ok(Some(session)) => {
-            request.extensions_mut().insert(CurrentSession { session });
+            request.extensions_mut().insert(CurrentSession {
+                session,
+                write_admitted,
+            });
             next.run(request).await
         }
         Ok(None) => {
@@ -123,6 +151,54 @@ pub async fn require_session(
             unavailable(request_id)
         }
     }
+}
+
+/// Anonymous ceremony handlers mutate challenges or credentials.
+pub async fn admit_anonymous(
+    State(ctx): State<AppContext>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let id = request_id(&request);
+    owned_request(ctx, id, false, move |_| next.run(request)).await
+}
+
+// Reserve a connection before detaching, bounding owners by the admission
+// pool. The task owns marker registration, the operation and marker retirement
+// even if the original HTTP connection vanishes during any of those steps.
+async fn owned_request<F>(
+    ctx: AppContext,
+    id: RequestId,
+    allow_read_only: bool,
+    operation: impl FnOnce(bool) -> F + Send + 'static,
+) -> Response
+where
+    F: Future<Output = Response> + Send + 'static,
+{
+    let Ok(tx) = ctx.admission_pool().begin().await else {
+        return unavailable(id);
+    };
+    tokio::spawn(async move {
+        match knoted_core::maintenance::try_write(tx, ctx.pool()).await {
+            Ok(Some(guard)) => {
+                let response = operation(true).await;
+                match guard.finish().await {
+                    Ok(()) => response,
+                    Err(_) => unavailable(id),
+                }
+            }
+            Ok(None) if allow_read_only => operation(false).await,
+            Ok(None) => maintenance_response(id),
+            Err(_) => unavailable(id),
+        }
+    })
+    .await
+    .unwrap_or_else(|panic| {
+        if panic.is_panic() {
+            std::panic::resume_unwind(panic.into_panic());
+        }
+        unavailable(id)
+    })
 }
 
 /// Rejects a state-changing request whose `Origin` is not the configured one.
@@ -311,6 +387,20 @@ fn csrf_failed(request_id: RequestId) -> Response {
 }
 
 /// A 503 in the shared error shape.
+pub(crate) fn maintenance_response(request_id: RequestId) -> Response {
+    let mut response = ApiErrorBody::new(
+        DEPENDENCY_UNAVAILABLE,
+        "writes are paused for maintenance",
+        request_id.get(),
+    )
+    .into_response(StatusCode::SERVICE_UNAVAILABLE);
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    response
+}
+
 fn unavailable(request_id: RequestId) -> Response {
     ApiErrorBody::new(
         DEPENDENCY_UNAVAILABLE,

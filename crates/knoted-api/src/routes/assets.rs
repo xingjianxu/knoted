@@ -138,7 +138,7 @@ async fn upload(
         }
     }
     let Some(bytes) = bytes else { return bad(id) };
-    match service::upload(
+    match service::upload_admitted(
         &ctx,
         UploadAsset {
             owner_id: session.session.user_id,
