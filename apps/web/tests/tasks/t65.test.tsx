@@ -6,6 +6,7 @@ import { afterEach, expect, it } from "vitest";
 
 import App from "../../src/App";
 import { createAppRouter } from "../../src/lib/router";
+import { queryKeys } from "../../src/lib/query";
 import { UiProvider } from "../../src/lib/ui-provider";
 
 type Run = components["schemas"]["ChatRun"];
@@ -110,7 +111,7 @@ async function openApp(
   });
   const view = render(<UiProvider><App router={router} /></UiProvider>);
   await act(async () => router.load());
-  return { requests, router, ...view };
+  return { requests, router, queryClient, ...view };
 }
 
 async function sendQuestion() {
@@ -359,7 +360,13 @@ it("creates a session with an explicit named external service and submits the se
   expect(await creation?.json()).toEqual({ title: external.title, provider: external.provider });
   expect(screen.getByText("问题和相关资料将发送给外部服务 research。")).toBeInTheDocument();
 
+  const scope = screen.getByRole("button", { name: "资料范围" });
+  expect(scope).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByRole("checkbox", { name: "笔记" })).not.toBeInTheDocument();
+  fireEvent.click(scope);
   fireEvent.click(screen.getByRole("checkbox", { name: "笔记" }));
+  fireEvent.click(scope);
+  expect(within(scope.parentElement!).getByText("笔记", { exact: true })).toBeVisible();
   await sendQuestion();
   await screen.findByText("已完成");
   const submission = view.requests.find(toMessages);
@@ -425,4 +432,48 @@ it("t66_6 can save to the root when the parent list cannot load", async () => {
   expect(await within(dialog).findByRole("alert")).toHaveTextContent("无法读取笔记目录");
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
   expect(await screen.findByRole("link", { name: "打开笔记" })).toHaveAttribute("href", `/notes/${noteID}`);
+});
+
+
+it("shows an empty session index only after its list loads successfully", async () => {
+  let finish: (response: Response) => void = () => {};
+  let loads = 0;
+  await openApp((path) => {
+    if (path !== "/chat/sessions") return undefined;
+    loads += 1;
+    if (loads > 1) return json({ items: [], next_cursor: null });
+    return new Promise((resolve) => { finish = resolve; });
+  }, "/chat");
+  await screen.findByRole("status", { name: "正在读取会话列表" });
+  expect(screen.queryByText("暂无会话")).not.toBeInTheDocument();
+  await act(async () => finish(json({}, 503)));
+  expect(await screen.findByText("无法读取会话列表。")).toBeVisible();
+  expect(screen.queryByText("暂无会话")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "重试" }));
+  expect(await screen.findByText("暂无会话")).toBeVisible();
+});
+
+it("returns from a failed session deep link to the session index", async () => {
+  const view = await openApp((path) => path === `/chat/sessions/${sessionA}` ? json({}, 404) : undefined);
+  expect(await screen.findByText("无法读取会话。")).toBeVisible();
+  fireEvent.click(screen.getByRole("link", { name: "返回会话列表" }));
+  await waitFor(() => expect(view.router.state.location.pathname).toBe("/chat"));
+  expect(screen.getByRole("link", { name: "甲会话" })).toBeVisible();
+});
+
+it("keeps the next question and its scope open when a cached session refresh fails", async () => {
+  let fail = false;
+  const { queryClient } = await openApp((path) => {
+    if (path === `/chat/sessions/${sessionA}`) return fail ? json({}, 503) : json(session(sessionA, [question, answer]));
+  });
+  const draft = await screen.findByRole("textbox", { name: "问题" });
+  fireEvent.change(draft, { target: { value: "下一条问题的草稿" } });
+  fireEvent.click(screen.getByRole("button", { name: "资料范围" }));
+  fail = true;
+  await act(async () => queryClient.invalidateQueries({ queryKey: queryKeys.chat.session(sessionA) }));
+  expect(await screen.findByText("会话刷新失败。")).toBeVisible();
+  expect(screen.getByRole("textbox", { name: "问题" })).toBe(draft);
+  expect(draft).toHaveValue("下一条问题的草稿");
+  expect(screen.getByRole("button", { name: "资料范围" })).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByText(answer.body)).toBeVisible();
 });

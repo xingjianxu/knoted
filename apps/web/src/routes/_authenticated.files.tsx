@@ -14,7 +14,7 @@ function FilesRoute() {
     <FilesPage
       bundle={bundle}
       fileId={fileId}
-      jobsLink={<Link to="/files/jobs" className="text-accent hover:underline">索引任务</Link>}
+      jobsLink={<Link to="/files/jobs" className="page-link">索引任务</Link>}
       onSelectFile={(id) => {
         if (id === null) {
           void navigate({ to: "/files" });

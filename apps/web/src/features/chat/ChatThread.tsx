@@ -1,6 +1,7 @@
-import { Alert, Badge, Button, Checkbox, Empty, Form, FormField, MultiSelect, Spinner, Textarea } from "@bixlab/mtone";
+import { Alert, Badge, Button, Checkbox, Form, FormField, MultiSelect, Spinner, Textarea } from "@bixlab/mtone";
+import { ApiRequestError } from "@knoted/api-client";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { QueryClientBundle } from "../../lib/query";
 import { searchTagChoicesQuery } from "../search/queries";
 import { projectChoicesQuery } from "../tasks/queries";
@@ -46,7 +47,7 @@ export function StreamMessage({ view, actions, busy }: {
         <Badge tone={run.state === "failed" || view.disconnected ? "orange" : "neutral"}>{stateLabel(view)}</Badge>
         {run.partial && !active && <Badge tone="orange">未完成回答</Badge>}
       </div>
-      {showDraft && view.body && <p className="whitespace-pre-wrap wrap-anywhere">{view.body}</p>}
+      {showDraft && view.body && <p className="whitespace-pre-wrap wrap-anywhere leading-relaxed">{view.body}</p>}
       {view.citations.length > 0 && <CitationList citations={view.citations} />}
       <div className="flex flex-wrap gap-2">
         {active && <Button disabled={busy || view.stopping} onClick={() => void actions.stop(run)}>停止生成</Button>}
@@ -71,10 +72,25 @@ function QuestionForm({ bundle, provider, blocked, onSubmit }: {
   const [types, setTypes] = useState<string[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
   const [tags, setTags] = useState<string[]>([]);
-  const projectOptions = useQuery(projectChoicesQuery(bundle));
-  const tagOptions = useQuery(searchTagChoicesQuery(bundle));
+  const [expanded, setExpanded] = useState(false);
+  const scopeId = useId();
+  const projectOptions = useQuery({ ...projectChoicesQuery(bundle), enabled: expanded });
+  const tagOptions = useQuery({ ...searchTagChoicesQuery(bundle), enabled: expanded });
+  const projectLabels = new Map((projectOptions.data ?? []).map(({ id, title }) => [id, title]));
+  const tagLabels = new Map((tagOptions.data ?? []).map(({ id, name }) => [id, name]));
+  for (const id of projects) {
+    if (!projectLabels.has(id)) projectLabels.set(id, id);
+  }
+  for (const id of tags) {
+    if (!tagLabels.has(id)) tagLabels.set(id, id);
+  }
+  const summary = [
+    ...sourceOptions.filter(({ value }) => types.includes(value)).map(({ label }) => label),
+    projects.length > 0 ? `${projects.length} 个项目` : null,
+    tags.length > 0 ? `${tags.length} 个标签` : null,
+  ].filter(Boolean).join(" · ");
   return (
-    <Form className="space-y-3" onSubmit={(event) => {
+    <Form className="space-y-3 border-t border-line pt-4" onSubmit={(event) => {
       event.preventDefault();
       const content = draft.trim();
       if (!content || blocked) return;
@@ -90,46 +106,63 @@ function QuestionForm({ bundle, provider, blocked, onSubmit }: {
       <FormField label="问题">
         <Textarea value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={20_000} rows={3} />
       </FormField>
-      <div className="grid gap-2 sm:grid-cols-3">
-        <fieldset className="space-y-1">
-          <legend className="text-sm font-medium">资料类型</legend>
-          <div className="flex flex-wrap gap-x-2">
-            {sourceOptions.map(({ value, label }) => (
-              <Checkbox
-                key={value}
-                label={label}
-                checked={types.includes(value)}
-                onCheckedChange={(checked) => setTypes((selected) => (
-                  checked ? [...selected, value] : selected.filter((item) => item !== value)
-                ))}
-              />
-            ))}
-          </div>
-        </fieldset>
-        <FormField label="项目范围">
-          <MultiSelect
-            options={(projectOptions.data ?? []).map((project) => ({ value: project.id, label: project.title }))}
-            value={projects}
-            onValueChange={setProjects}
-          />
-        </FormField>
-        <FormField label="标签范围">
-          <MultiSelect
-            options={(tagOptions.data ?? []).map((tag) => ({ value: tag.id, label: tag.name }))}
-            value={tags}
-            onValueChange={setTags}
-          />
-        </FormField>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="button" aria-expanded={expanded} aria-controls={scopeId} onClick={() => setExpanded(!expanded)}>
+          资料范围
+        </Button>
+        {!expanded && <span className="text-sm text-muted">{summary || "全部资料"}</span>}
       </div>
-      {(tagOptions.isError || projectOptions.isError) && <Alert tone="error">
-        无法读取资料范围选项。{" "}
-        <Button type="button" onClick={() => {
-          if (tagOptions.isError) void tagOptions.refetch();
-          if (projectOptions.isError) void projectOptions.refetch();
-        }}>重试</Button>
-      </Alert>}
+      <div id={scopeId} hidden={!expanded}>
+        {expanded && (
+          <div className="grid gap-3 rounded-panel border border-line p-3 @min-[42rem]/workspace:grid-cols-2">
+            <fieldset className="min-w-0 @min-[42rem]/workspace:col-span-2">
+              <legend className="text-sm font-medium">资料类型</legend>
+              <div className="flex flex-wrap gap-x-2">
+                {sourceOptions.map(({ value, label }) => (
+                  <Checkbox
+                    key={value}
+                    label={label}
+                    checked={types.includes(value)}
+                    onCheckedChange={(checked) => setTypes((selected) => (
+                      checked ? [...selected, value] : selected.filter((item) => item !== value)
+                    ))}
+                  />
+                ))}
+              </div>
+            </fieldset>
+            <div className="min-w-0 space-y-2">
+              <FormField label="项目范围">
+                <MultiSelect
+                  options={Array.from(projectLabels, ([value, label]) => ({ value, label }))}
+                  value={projects}
+                  onValueChange={setProjects}
+                />
+              </FormField>
+              {projectOptions.isPending && <Spinner label="正在读取项目选项" />}
+              {projectOptions.isError && <Alert tone="error">
+                无法读取项目选项。{" "}
+                <Button type="button" onClick={() => void projectOptions.refetch()}>重试读取项目</Button>
+              </Alert>}
+            </div>
+            <div className="min-w-0 space-y-2">
+              <FormField label="标签范围">
+                <MultiSelect
+                  options={Array.from(tagLabels, ([value, label]) => ({ value, label }))}
+                  value={tags}
+                  onValueChange={setTags}
+                />
+              </FormField>
+              {tagOptions.isPending && <Spinner label="正在读取标签选项" />}
+              {tagOptions.isError && <Alert tone="error">
+                无法读取标签选项。{" "}
+                <Button type="button" onClick={() => void tagOptions.refetch()}>重试读取标签</Button>
+              </Alert>}
+            </div>
+          </div>
+        )}
+      </div>
       <div className="flex flex-wrap items-center justify-end gap-3">
-        {provider !== "local" && <span className="text-sm text-muted">问题和相关资料将发送给外部服务 {provider}。</span>}
+        {provider !== "local" && <span className="text-sm wrap-anywhere text-muted">问题和相关资料将发送给外部服务 {provider}。</span>}
         <Button type="submit" variant="solid" disabled={blocked || !draft.trim()}>发送问题</Button>
       </div>
     </Form>
@@ -153,7 +186,7 @@ function MessageRow({ message, bundle, selected, children }: {
   }, [selected]);
   return (
     <li
-      className={`space-y-2 rounded-panel border p-4 ${selected ? "border-accent bg-accent-soft" : "border-line bg-surface"}`}
+      className={`space-y-2 rounded-panel px-3 py-2 ${message.role === "user" ? "bg-surface" : ""} ${selected ? "outline-2 outline-offset-2 outline-accent" : ""}`}
       ref={element}
       tabIndex={selected ? -1 : undefined}
       data-message-id={message.id}
@@ -162,12 +195,11 @@ function MessageRow({ message, bundle, selected, children }: {
         <span className="text-sm font-medium">{message.role === "user" ? "你" : "助手"}</span>
         {message.incomplete && !children && <Badge tone="orange">未完成回答</Badge>}
       </div>
-      {children ?? <p className="whitespace-pre-wrap wrap-anywhere">{message.body}</p>}
+      {children ?? <p className="whitespace-pre-wrap wrap-anywhere leading-relaxed">{message.body}</p>}
       {message.role === "assistant" && !message.incomplete && (
-        <>
-          <CitationPanel bundle={bundle} messageId={message.id} />
+        <CitationPanel bundle={bundle} messageId={message.id}>
           <SaveNoteDialog bundle={bundle} messageId={message.id} />
-        </>
+        </CitationPanel>
       )}
     </li>
   );
@@ -190,20 +222,21 @@ export function ChatThread({ bundle, sessionId, targetMessage }: {
   const showStream = viewed && (!attached || attached.incomplete);
 
   if (query.isPending) return <Spinner label="正在读取会话" />;
-  if (query.isError || !session) {
+  const unreadable = query.error instanceof ApiRequestError && [401, 403, 404].includes(query.error.status);
+  if (!session || unreadable) {
     return <Alert tone="error">无法读取会话。{" "}<Button onClick={() => void query.refetch()}>重试</Button></Alert>;
   }
   return (
-    <section className="min-w-0 space-y-4" aria-label="会话详情">
+    <section className="reading-measure min-w-0 space-y-5" aria-label="会话详情">
       <header className="flex flex-wrap items-center gap-2">
-        <h2 className="text-xl font-semibold wrap-anywhere">{session.title}</h2>
-        <Badge>{session.provider === "local" ? "本地服务" : `外部服务 ${session.provider}`}</Badge>
+        <h1 className="page-title">{session.title}</h1>
+        <Badge className="max-w-full wrap-anywhere">{session.provider === "local" ? "本地服务" : `外部服务 ${session.provider}`}</Badge>
       </header>
+      {query.isError && <Alert tone="error">会话刷新失败。{" "}<Button onClick={() => void query.refetch()}>重试刷新会话</Button></Alert>}
       {targetMessage && !session.messages.some((item) => item.id === targetMessage) && (
         <Alert tone="warning">这条消息已不存在。</Alert>
       )}
-      {session.messages.length === 0 && !showStream && <Empty title="开始问答" />}
-      <ol className="space-y-3" aria-label="会话消息">
+      {(session.messages.length > 0 || showStream) && <ol className="space-y-4" aria-label="会话消息">
         {session.messages.map((message) => (
           <MessageRow key={message.id} message={message} selected={targetMessage === message.id} bundle={bundle}>
             {showStream && attached?.id === message.id ? (
@@ -212,20 +245,21 @@ export function ChatThread({ bundle, sessionId, targetMessage }: {
           </MessageRow>
         ))}
         {showStream && !attached && (
-          <li className="space-y-2 rounded-panel border border-line bg-surface p-4">
+          <li className="space-y-2 px-3 py-2">
             <span className="text-sm font-medium">助手</span>
             <StreamMessage view={viewed} actions={controls} busy={controls.busy} />
           </li>
         )}
-      </ol>
+      </ol>}
       {controls.problem && <Alert tone="error">{controls.problem}</Alert>}
+      {persistedRunId && persisted.isPending && <Spinner label="正在读取运行状态" />}
       {persisted.isError && !controls.current && (
         <Alert tone="error">无法读取运行状态。{" "}<Button onClick={() => void persisted.refetch()}>重试</Button></Alert>
       )}
       <QuestionForm
         bundle={bundle}
         provider={session.provider}
-        blocked={controls.busy || (!!viewed && runIsActive(viewed.run))}
+        blocked={controls.busy || (!!persistedRunId && !persisted.data) || (!!viewed && runIsActive(viewed.run))}
         onSubmit={controls.submit}
       />
     </section>

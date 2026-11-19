@@ -41,18 +41,30 @@ function harness() {
  const bundle={queryClient,api:createApiClient({baseUrl:"http://localhost/api/v1",fetch})} satisfies QueryClientBundle;
  return {bundle,rows,activities,requests,failActivities:()=>{failActivities=true;},failLists:()=>{failLists=true;},cursorMode:()=>{cursorMode=true;},pauseActivity:()=>{activityGate=new Promise<void>(resolve=>{releaseActivity=resolve;});},releaseActivity:()=>releaseActivity?.(),reject:()=>{reject=true;},fail:()=>{fail=true;},recover:()=>{fail=false;},pause:()=>{gate=new Promise<void>(resolve=>{release=resolve;});},release:()=>release?.()};
 }
-function Page({bundle}:{bundle:QueryClientBundle}){const[id,setId]=useState<string>();return <TasksPage bundle={bundle} taskId={id} onSelectTask={id=>setId(id??undefined)}/>;}
+function Page({bundle}:{bundle:QueryClientBundle}){const[id,setId]=useState<string>();return <>{id && <button onClick={() => setId(undefined)}>返回事项</button>}
+   <TasksPage bundle={bundle} taskId={id} onSelectTask={id=>setId(id??undefined)}/>
+ </>;}
 function mount(bundle:QueryClientBundle){return render(<UiProvider><QueryClientProvider client={bundle.queryClient}><Page bundle={bundle}/></QueryClientProvider></UiProvider>);}
-async function board(){fireEvent.click(await screen.findByRole("button",{name:"看板视图"}));return screen.findByRole("region",{name:"事项看板"});}
-async function timeline(){fireEvent.click(await screen.findByRole("button",{name:"打开事项 事项1"}));return screen.findByRole("region",{name:"跟进时间线"});}
+async function board(){fireEvent.click(await screen.findByRole("radio",{name:"看板视图"}));return screen.findByRole("region",{name:"事项看板"});}
+async function timeline(){fireEvent.click(await screen.findByRole("link",{name:"事项1"}));return screen.findByRole("region",{name:"跟进时间线"});}
 describe("T40 看板和时间线",()=>{
+ it("菜单移列使用事项版本，失败后退回原列",async()=>{
+  const h=harness();h.reject();mount(h.bundle);await board();
+  const todo=within(screen.getByRole("list",{name:"待办事项"}));
+  fireEvent.click(await todo.findByRole("button",{name:"更改状态 事项1"}));
+  fireEvent.click(await screen.findByRole("menuitem",{name:"进行中"}));
+  expect(await screen.findByText(/已回到原列/)).toBeInTheDocument();
+  expect(todo.getByText("事项1")).toBeInTheDocument();
+  const patch=h.requests.find((request)=>request.method==="PATCH");
+  expect(await patch?.json()).toEqual({status:"in_progress",expected_version:1});
+ });
  it("t40_1 父状态门槛409先乐观移动再回滚原列",async()=>{
   const h=harness();h.rows[1]!.parent_id=a;h.reject();h.pause();mount(h.bundle);await board();
   const todo=screen.getByRole("list",{name:"待办事项"});const done=screen.getByRole("list",{name:"已完成事项"});
   const card=within(todo).getByText("事项1").closest("li")!;const dataTransfer={setData:()=>{},getData:()=>a};
   fireEvent.dragStart(card,{dataTransfer});fireEvent.dragOver(done,{dataTransfer});fireEvent.drop(done,{dataTransfer});
   await waitFor(()=>expect(within(done).getByText("事项1")).toBeInTheDocument());
-  expect(screen.getByRole("button",{name:"列表视图"})).toBeDisabled();await act(async()=>h.release());
+  expect(screen.getByRole("radio",{name:"列表视图"})).toHaveAttribute("aria-disabled","true");await act(async()=>h.release());
   expect(await screen.findByText(/父事项仍有未完成子事项/)).toBeInTheDocument();
   expect(within(todo).getByText("事项1")).toBeInTheDocument();expect(within(done).queryByText("事项1")).not.toBeInTheDocument();
  });
@@ -70,12 +82,13 @@ describe("T40 看板和时间线",()=>{
  });
  it("失败保留输入可重试，Query刷新不提升编辑草稿CAS，取消和切事项清除草稿",async()=>{
   const h=harness();mount(h.bundle);const line=within(await timeline());
-  fireEvent.change(line.getByLabelText("新增跟进正文"),{target:{value:"新增草稿"}});h.fail();fireEvent.click(line.getByRole("button",{name:"添加跟进"}));await line.findByText(/暂时不可用/);
-  expect(line.getByLabelText("新增跟进正文")).toHaveValue("新增草稿");h.recover();fireEvent.click(line.getByRole("button",{name:"添加跟进"}));await waitFor(()=>expect(line.getByLabelText("新增跟进正文")).toHaveValue(""));
+  fireEvent.click(line.getByRole("button",{name:"添加跟进"}));
+  fireEvent.change(line.getByLabelText("新增跟进正文"),{target:{value:"新增草稿"}});h.fail();fireEvent.click(line.getByRole("button",{name:"提交跟进"}));await line.findByText(/暂时不可用/);
+  expect(line.getByLabelText("新增跟进正文")).toHaveValue("新增草稿");h.recover();fireEvent.click(line.getByRole("button",{name:"提交跟进"}));await waitFor(()=>expect(line.getByLabelText("新增跟进正文")).toHaveValue(""));
   fireEvent.click(line.getAllByRole("button",{name:"编辑跟进"})[1]!);fireEvent.change(line.getByLabelText("编辑跟进正文"),{target:{value:"我的编辑"}});h.activities.find(v=>v.id===c)!.version=2;
   await act(async()=>{await h.bundle.queryClient.invalidateQueries({queryKey:queryKeys.tasks.all()});});
   fireEvent.click(line.getByRole("button",{name:"保存跟进"}));expect(await line.findByText(/草稿已保留/)).toBeInTheDocument();expect(line.getByLabelText("编辑跟进正文")).toHaveValue("我的编辑");expect(line.getByRole("button",{name:"保存跟进"})).toBeDisabled();
-  fireEvent.click(line.getByRole("button",{name:"取消编辑跟进"}));expect(line.queryByLabelText("编辑跟进正文")).not.toBeInTheDocument();fireEvent.click(screen.getByRole("button",{name:"打开事项 事项2"}));expect(await screen.findByRole("region",{name:"跟进时间线"})).not.toHaveTextContent("原始跟进");
+  fireEvent.click(line.getByRole("button",{name:"取消编辑跟进"}));expect(line.queryByLabelText("编辑跟进正文")).not.toBeInTheDocument();fireEvent.click(screen.getByRole("button",{name:"返回事项"}));fireEvent.click(await screen.findByRole("link",{name:"事项2"}));expect(await screen.findByRole("region",{name:"跟进时间线"})).not.toHaveTextContent("原始跟进");
  });
  it("状态保存成功但列表刷新失败时仍显示已确认的新列",async()=>{
   const h=harness();mount(h.bundle);await board();h.failLists();
@@ -89,7 +102,7 @@ describe("T40 看板和时间线",()=>{
   h.pauseActivity();fireEvent.click(line.getByRole("button",{name:"下一页跟进"}));
   await waitFor(()=>expect(line.getByRole("button",{name:"上一页跟进"})).toBeDisabled());
   expect(line.getByRole("button",{name:"下一页跟进"})).toBeDisabled();
-  fireEvent.click(screen.getByRole("button",{name:"打开事项 事项2"}));
+  fireEvent.click(screen.getByRole("button",{name:"返回事项"}));fireEvent.click(await screen.findByRole("link",{name:"事项2"}));
   const second=within(await screen.findByRole("region",{name:"跟进时间线"}));await second.findByText("暂无跟进记录");
   await act(async()=>h.releaseActivity());expect(second.queryByText("原始跟进")).not.toBeInTheDocument();
   expect(h.requests.some(r=>new URL(r.url).searchParams.get("cursor")==="opaque-activities")).toBe(true);
@@ -99,7 +112,7 @@ describe("T40 看板和时间线",()=>{
   const card=within(screen.getByRole("list",{name:"待办事项"})).getByText("事项1").closest("li")!;
   expect(card).toHaveAttribute("draggable","false");fireEvent.keyDown(card,{key:"ArrowRight",altKey:true});
   expect(h.requests.some(r=>r.method==="PATCH")).toBe(false);
-  const line=within(await timeline());await line.findByText("原始跟进");expect(line.getByRole("button",{name:"编辑跟进"})).toBeDisabled();expect(line.getByLabelText("新增跟进正文")).toBeDisabled();
+  const line=within(await timeline());await line.findByText("原始跟进");expect(line.getByRole("button",{name:"编辑跟进"})).toBeDisabled();expect(line.getByRole("button",{name:"添加跟进"})).toBeDisabled();
  });
 
  it("冲突后显式刷新基础版本保留草稿，保存成功，再次编辑取消不发请求",async()=>{
@@ -124,8 +137,12 @@ describe("T40 看板和时间线",()=>{
   const card=within(screen.getByRole("list",{name:"待办事项"})).getByText("事项1").closest("li")!;card.focus();fireEvent.keyDown(card,{key:"ArrowRight",altKey:true});
   await waitFor(()=>expect(screen.getByRole("button",{name:"刷新事项列表"})).toBeEnabled());
   const moved=within(screen.getByRole("list",{name:"进行中事项"})).getByText("事项1").closest("li")!;expect(moved).toHaveFocus();
-  const refresh=screen.getByRole("button",{name:"刷新事项列表"});refresh.focus();fireEvent.click(refresh);
-  await waitFor(()=>expect(refresh).toBeEnabled());expect(refresh).toHaveFocus();
+  const refresh=screen.getByRole("button",{name:"刷新事项列表"});
+  h.rows[0]!.status = "done";
+  refresh.focus();fireEvent.click(refresh);
+  await waitFor(()=>expect(refresh).toBeEnabled());
+  expect(within(screen.getByRole("list",{name:"已完成事项"})).getByText("事项1")).toBeInTheDocument();
+  expect(refresh).toHaveFocus();
  });
 
  it("DELETE成功后即使跟进刷新失败也必须隐藏旧正文并保留删除标记",async()=>{

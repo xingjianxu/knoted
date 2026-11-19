@@ -91,6 +91,7 @@ test("t71_1 file citation, saved note and linked task; t71_2 stale source recove
       await dialog.getByRole("textbox", { name: "会话名称" }).fill("T71 文件问答");
       await dialog.getByRole("button", { name: "创建会话" }).click();
       const thread = page.getByRole("region", { name: "会话详情" });
+      await thread.getByRole("button", { name: "资料范围" }).click();
       await thread.getByRole("checkbox", { name: "文件" }).click();
       await thread.getByRole("textbox", { name: "问题" }).fill(oldTerm);
       await thread.getByRole("button", { name: "发送问题" }).click();
@@ -113,14 +114,18 @@ test("t71_1 file citation, saved note and linked task; t71_2 stale source recove
       expect(text).toContain(oldTerm);
       const task = await api(page, "POST", "/tasks", { title: "复核紫檀标本" });
       expect(task.status).toBe(201);
+      const openAssociations = page.getByRole("button", { name: "标签与关联" });
+      await openAssociations.click();
       const associations = page.getByRole("region", { name: "笔记标签与资料关联" });
+      await associations.getByRole("button", { name: "新建关联" }).click();
       await associations.getByRole("combobox", { name: "关联目标类型" }).click();
       await page.getByRole("option", { name: "事项" }).click();
       await associations.getByLabel("关联目标 ID").fill(task.data.id);
       await associations.getByRole("button", { name: "添加关联" }).click();
-      await expect(associations.getByRole("list", { name: "资料关联" })).toContainText(task.data.id);
+      await expect(associations.getByRole("list", { name: "资料关联列表" })).toContainText(task.data.id);
       await page.reload();
-      await expect(associations.getByRole("list", { name: "资料关联" })).toContainText(task.data.id);
+      await openAssociations.click();
+      await expect(associations.getByRole("list", { name: "资料关联列表" })).toContainText(task.data.id);
     });
 
     await test.step("t71_2 refuse publication, observe filtered stale hit, recover publication", async () => {

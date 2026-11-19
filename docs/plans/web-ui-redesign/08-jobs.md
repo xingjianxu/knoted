@@ -1,5 +1,7 @@
 # 08 文件索引任务
 
+实施 Issue [#258](https://github.com/xingjianxu/knoted/issues/258) · [验收与限制](evidence/03-12.md)
+
 目标是从当前批次中看出任务处于哪个阶段、是否需要干预，以及一次取消或重试是否已生效。入口为 `/files/jobs`，从文件页或直接链接访问。前置为 01-foundation 锁定的最新正式版 mtone（仓库基线 0.6.0）。沿用 AdminLayout 与文件导航选中态。队列和退出确认语义见 [ADR 0006](../../decisions/0006-file-pipeline-and-aggregate-contracts.md) 和 [ADR 0007](../../decisions/0007-execution-exit-confirmation.md)。
 
 ## 页面审计与排布

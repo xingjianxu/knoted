@@ -1,7 +1,7 @@
-import { Alert, Badge, Button, ConfirmDialog, Empty, FormField, List, ListItem, Select, Spinner } from "@bixlab/mtone";
+import { Alert, Button, ConfirmDialog, Empty, FilterBar, FormField, List, ListItem, Select, Spinner, Status } from "@bixlab/mtone";
 import { ApiRequestError } from "@knoted/api-client";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useReducer, useRef, useState } from "react";
+import { useReducer, useRef, useState, type ReactNode } from "react";
 import { createCursorState, cursorReducer } from "../../../lib/cursor-state";
 import { queryKeys, type QueryClientBundle } from "../../../lib/query";
 import { jobName, jobProblem, jobStage, jobStages, jobStates } from "./job-status";
@@ -14,7 +14,7 @@ const stateOptions = [
 ];
 const timeFormat = new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" });
 
-function kindActions(job: Job, pending: boolean, onAction: (action: JobAction) => Promise<void>) {
+function kindActions(job: Job, pending: boolean, error: string | undefined, onAction: (action: JobAction) => Promise<void>) {
   if (job.state === "failed" || job.state === "cancelled") {
     return (
       <ConfirmDialog
@@ -24,7 +24,7 @@ function kindActions(job: Job, pending: boolean, onAction: (action: JobAction) =
         cancelText="返回"
         trigger={<Button disabled={pending}>重试任务</Button>}
         onConfirm={() => onAction({ type: "retry", jobId: job.id })}
-      />
+      >{error && <Alert tone="error">{error}</Alert>}</ConfirmDialog>
     );
   }
   if (job.state === "queued" || job.state === "running" || job.state === "retry_wait") {
@@ -37,41 +37,35 @@ function kindActions(job: Job, pending: boolean, onAction: (action: JobAction) =
         danger
         trigger={<Button disabled={pending}>取消任务</Button>}
         onConfirm={() => onAction({ type: "cancel", jobId: job.id })}
-      />
+      >{error && <Alert tone="error">{error}</Alert>}</ConfirmDialog>
     );
   }
   return undefined;
 }
 
-function JobRow({ job, pending, onAction }: {
+function JobRow({ job, pending, error, onAction }: {
   job: Job;
   pending: boolean;
+  error?: string;
   onAction: (action: JobAction) => Promise<void>;
 }) {
   const problem = job.error ? jobProblem(job.error) : undefined;
   const updated = new Date(job.updated_at);
   return (
-    <ListItem
-      actions={kindActions(job, pending, onAction)}
-      description={(
-        <span className="block space-y-1">
-          <span className="flex flex-wrap gap-x-3 text-sm text-muted">
-            <span>尝试 {job.attempts}/{job.max_attempts}</span>
-            {Number.isFinite(updated.getTime()) && <time dateTime={job.updated_at}>{timeFormat.format(updated)}</time>}
-          </span>
-          {problem && <span className="block wrap-anywhere"><code>{problem.code}</code> {problem.message}</span>}
-        </span>
-      )}
-    >
-      <span className="flex flex-wrap items-center gap-2">
-        <span className="font-medium">{jobName(job.kind)}</span>
-        <Badge tone={job.state === "failed" ? "red" : "neutral"}>{jobStates[job.state]}</Badge>
-      </span>
+    <ListItem>
+      <div className="grid min-w-0 gap-2 @min-[48rem]/workspace:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.5fr)_minmax(0,auto)] @min-[48rem]/workspace:items-center">
+        <span className="font-medium wrap-anywhere">{jobName(job.kind)}</span>
+        <span><Status tone={job.state === "failed" ? "red" : job.state === "succeeded" ? "green" : "neutral"}>{jobStates[job.state]}</Status></span>
+        <span className="text-sm text-muted">尝试 {job.attempts}/{job.max_attempts}</span>
+        {Number.isFinite(updated.getTime()) && <time dateTime={job.updated_at} className="text-sm text-muted"><span className="sr-only">更新时间 </span>{timeFormat.format(updated)}</time>}
+        <div>{kindActions(job, pending, error, onAction)}</div>
+        {problem && <p className="wrap-anywhere @min-[48rem]/workspace:col-span-full"><code>{problem.code}</code> {problem.message}</p>}
+      </div>
     </ListItem>
   );
 }
 
-export function JobsPage({ bundle }: { bundle: QueryClientBundle }) {
+export function JobsPage({ bundle, filesLink }: { bundle: QueryClientBundle; filesLink?: ReactNode }) {
   const [state, setState] = useState<JobState>();
   const [page, dispatch] = useReducer(cursorReducer, undefined, () => createCursorState());
   const scanKey = useRef<string | null>(null);
@@ -115,18 +109,16 @@ export function JobsPage({ bundle }: { bundle: QueryClientBundle }) {
   const items = list.data?.items ?? [];
   const busy = operation.isPending || list.isFetching;
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="space-y-5">
+      {filesLink}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-2xl font-semibold">索引任务</h2>
-        <div className="flex flex-wrap gap-2">
-          <Button disabled={operation.isPending} variant="solid" onClick={() => {
-            scanKey.current ??= crypto.randomUUID();
-            void run({ type: "scan", key: scanKey.current }).catch(() => {});
-          }}>扫描文件</Button>
-          <Button disabled={busy} onClick={() => void list.refetch()}>刷新任务</Button>
-        </div>
+        <h1>索引任务</h1>
+        <Button loading={operation.isPending && operation.variables?.type === "scan"} disabled={operation.isPending} variant="solid" onClick={() => {
+          scanKey.current ??= crypto.randomUUID();
+          void run({ type: "scan", key: scanKey.current }).catch(() => {});
+        }}>扫描文件</Button>
       </div>
-      <div className="max-w-xs">
+      <FilterBar className="flex flex-wrap items-end gap-3">
         <FormField label="任务状态">
           <Select
             options={stateOptions}
@@ -138,35 +130,36 @@ export function JobsPage({ bundle }: { bundle: QueryClientBundle }) {
             }}
           />
         </FormField>
-      </div>
+        <Button disabled={busy} onClick={() => void list.refetch()}>刷新任务</Button>
+      </FilterBar>
       {notice && <Alert tone="success">{notice}</Alert>}
       {operation.error && operation.variables?.type === "scan" && <Alert tone="error">{operation.error.message}</Alert>}
       {list.isPending && <Spinner label="正在读取任务" />}
       {list.isError && <Alert tone="error">无法读取任务记录。请刷新后重试。</Alert>}
 
       <div className="space-y-5" aria-busy={list.isFetching}>
-        {stageKeys.map((stage) => {
+        {list.data && items.length > 0 && stageKeys.map((stage) => {
           const jobs = items.filter((job) => jobStage(job.kind) === stage);
           if (stage === "other" && jobs.length === 0) return null;
           const title = jobStages[stage];
           return (
             <section aria-label={title} className="space-y-2" key={stage}>
-              <div className="flex items-center gap-2">
-                <h3 className="font-semibold">{title}</h3>
-                {stage === "vector" && jobs.length === 0 && <Badge>未启用</Badge>}
-              </div>
-              {jobs.length > 0 && <List aria-label={`${title}任务`}>
-                {jobs.map((job) => <JobRow key={job.id} job={job} pending={operation.isPending} onAction={run} />)}
+              <h2 className="section-title">{title}</h2>
+              {jobs.length === 0 ? <p className="text-sm text-muted">本页没有{title}任务</p> : <List aria-label={`${title}任务`}>
+                {jobs.map((job) => <JobRow key={job.id} job={job} pending={operation.isPending}
+                  error={operation.variables && "jobId" in operation.variables && operation.variables.jobId === job.id
+                    ? operation.error?.message : undefined}
+                  onAction={run} />)}
               </List>}
             </section>
           );
         })}
-        {list.data && items.length === 0 && <Empty title="没有匹配的任务记录" />}
+        {list.isSuccess && !list.isFetching && items.length === 0 && <Empty title="没有匹配的任务记录" />}
       </div>
       {(list.data || page.previous.length > 0) && (
         <nav aria-label="任务翻页" className="flex gap-2">
           <Button disabled={busy || page.previous.length === 0} onClick={() => dispatch({ type: "previous" })}>上一页</Button>
-          <Button disabled={busy || list.isError || !list.data?.next_cursor}
+          <Button disabled={busy || list.isError || !list.data?.next_cursor || list.data.next_cursor === page.cursor}
             onClick={() => dispatch({ type: "next", nextCursor: list.data?.next_cursor ?? null })}>下一页</Button>
         </nav>
       )}

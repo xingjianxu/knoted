@@ -1,5 +1,7 @@
 # 11 · 回收站
 
+实施 Issue [#261](https://github.com/xingjianxu/knoted/issues/261) · [验收与限制](evidence/03-12.md)
+
 **依赖与所有权** 01 后由一名页面 Agent 负责 `apps/web/src/features/trash/TrashPage.tsx`、T42 回归和 /trash 视图。输入为 TrashItem、can_restore、reason 与原有游标。
 
 ## 布局和恢复流程

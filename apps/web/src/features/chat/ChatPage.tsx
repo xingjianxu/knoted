@@ -88,17 +88,17 @@ export function ChatPage({ bundle, currentSession, children }: {
   const sessions = useInfiniteQuery(sessionsQuery(bundle));
   const rows = sessions.data?.pages.flatMap((page) => page.items) ?? [];
   return (
-    <div className="mx-auto grid max-w-6xl gap-5 md:grid-cols-[minmax(12rem,1fr)_3fr]">
-      <aside aria-label="问答会话" className="min-w-0 space-y-3">
+    <div className="mx-auto grid max-w-7xl gap-6 @min-[42rem]/workspace:grid-cols-[minmax(12rem,1fr)_minmax(0,3fr)]">
+      <nav aria-label="会话列表" className={`min-w-0 space-y-3 ${currentSession ? "hidden @min-[42rem]/workspace:block" : ""}`}>
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="font-semibold">问答</h2>
+          {currentSession ? <h2 className="section-title">会话</h2> : <h1 className="page-title">问答</h1>}
           <NewSession bundle={bundle} />
         </div>
         {sessions.isPending && <Spinner label="正在读取会话列表" />}
         {sessions.isError && <Alert tone="error">
           无法读取会话列表。{" "}<Button onClick={() => void sessions.refetch()}>重试</Button>
         </Alert>}
-        {rows.length > 0 && <List aria-label="会话列表">
+        {rows.length > 0 && <List>
           {rows.map((session) => (
             <ListItem key={session.id}>
               <Link
@@ -106,14 +106,22 @@ export function ChatPage({ bundle, currentSession, children }: {
                 params={{ chatSessionId: session.id }}
                 search={{ message: undefined }}
                 aria-current={currentSession === session.id ? "page" : undefined}
-                className={`block wrap-anywhere hover:underline ${currentSession === session.id ? "font-semibold text-accent" : ""}`}
+                className={`page-link block wrap-anywhere ${currentSession === session.id ? "font-semibold" : ""}`}
               >{session.title}</Link>
             </ListItem>
           ))}
         </List>}
+        {sessions.isSuccess && rows.length === 0 && <Empty title="暂无会话" />}
         {sessions.hasNextPage && <Button disabled={sessions.isFetching} onClick={() => void sessions.fetchNextPage()}>更多会话</Button>}
-      </aside>
-      {currentSession ? children : <Empty title={rows.length ? "请选择会话" : "暂无会话"} />}
+      </nav>
+      {currentSession ? (
+        <div className="min-w-0 space-y-3">
+          <Link className="page-link @min-[42rem]/workspace:hidden" to="/chat" activeOptions={{ exact: true }}>返回会话列表</Link>
+          {children}
+        </div>
+      ) : sessions.isSuccess && rows.length > 0 && (
+        <div className="hidden @min-[42rem]/workspace:block"><Empty title="请选择会话" /></div>
+      )}
     </div>
   );
 }

@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Button, Empty, List, ListItem } from "@bixlab/mtone";
+import { Alert, Button, Empty, List, ListItem, Menu } from "@bixlab/mtone";
 import { queryKeys, type QueryClientBundle } from "../../../lib/query";
 import { projectQuery } from "../../projects/queries";
-import { taskQuery, type Task } from "../queries";
+import { formatTaskDate, TaskLink } from "../TaskList";
+import { taskQuery, type Project, type Task } from "../queries";
 
 const columns = [
   { status: "todo", label: "待办" }, { status: "in_progress", label: "进行中" },
@@ -11,19 +12,31 @@ const columns = [
 ] as const;
 type Status = Task["status"];
 /** Fixed task status columns; native HTML drag/drop and keyboard commands share one CAS operation. */
-export function TaskBoard({ bundle, items, disabled, onSelectTask, onBusyChange, invalidate }: {
-  bundle: QueryClientBundle; items: Task[]; disabled: boolean;
+export function TaskBoard({ bundle, items, projects, disabled, onSelectTask, onBusyChange, invalidate }: {
+  bundle: QueryClientBundle; items: Task[]; projects: Project[]; disabled: boolean;
   onSelectTask: (id: string) => void; onBusyChange: (busy: boolean) => void; invalidate: () => Promise<void>;
 }) {
   const [pending, setPending] = useState<{ id: string; status: Status }>();
   const [error, setError] = useState("");
   const writing = useRef(false); const dragged = useRef<string | undefined>(undefined);
-  const [keyboardFocus, setKeyboardFocus] = useState<string>();
+  const board = useRef<HTMLElement>(null);
+  const focusRequest = useRef<{ id: string; origin: Element | null } | undefined>(undefined);
+  useLayoutEffect(() => {
+    const request = focusRequest.current;
+    if (!request) return;
+    if (!pending) focusRequest.current = undefined;
+    const active = document.activeElement;
+    if (active !== document.body && active !== request.origin) return;
+    const cards = board.current?.querySelectorAll<HTMLElement>("[data-task-card]");
+    if (!cards) return;
+    Array.from(cards).find((card) => card.dataset.taskCard === request.id)?.focus();
+  }, [pending]);
+
   const locked = disabled || !!pending;
   async function move(task: Task, status: Status, keyboard = false) {
     if (locked || writing.current || task.status === status || task.archived_at || task.deleted_at) return;
     writing.current = true; onBusyChange(true); setError("");
-    setKeyboardFocus(keyboard ? task.id : undefined);
+    focusRequest.current = keyboard ? { id: task.id, origin: document.activeElement } : undefined;
     setPending({ id: task.id, status });
     try {
       const { data } = await bundle.api.raw.PATCH("/tasks/{taskId}", {
@@ -42,27 +55,27 @@ export function TaskBoard({ bundle, items, disabled, onSelectTask, onBusyChange,
     } catch (cause) { setError(`状态修改失败，已回到原列：${cause instanceof Error ? cause.message : "请重试"}`); }
     finally { setPending(undefined); writing.current = false; onBusyChange(false); dragged.current = undefined; }
   }
-  return <section aria-label="事项看板" className="space-y-3">
-    <p id="task-board-help">拖动事项到目标列，或聚焦卡片后按 Alt + 左右方向键修改状态。状态操作受父事项完成门槛约束。</p>
+  return <section ref={board} aria-label="事项看板" className="@container space-y-3">
+    <p id="task-board-help" className="text-sm text-muted">拖动卡片、按 Alt + 左右方向键，或使用卡片菜单更改状态。</p>
     {error && <Alert tone="error">{error}</Alert>}
-    <div className="grid gap-4 md:grid-cols-4">{columns.map((column) => <section key={column.status} aria-label={column.label} className="space-y-2">
-      <h3>{column.label}</h3>
+    <div className="grid gap-4 @min-[60rem]:grid-cols-4">{columns.map((column) => <section key={column.status} aria-label={column.label} className="min-w-0 space-y-2">
+      <h2 className="section-title">{column.label}</h2>
       <List aria-label={`${column.label}事项`} className="min-h-24" onDragOver={(event) => { if (!locked && dragged.current) event.preventDefault(); }} onDrop={(event) => {
         event.preventDefault(); if (locked) return;
         const id = dragged.current;
         const row = items.find((item) => item.id === id);
         if (row) void move(row, column.status);
-      }}>{items.filter((task) => (pending?.id === task.id ? pending.status : task.status) === column.status).map((task) => <TaskCard key={task.id} bundle={bundle} task={task} disabled={locked}
-        focusOnMount={keyboardFocus === task.id} onSelectTask={onSelectTask}
+      }}>{items.filter((task) => (pending?.id === task.id ? pending.status : task.status) === column.status).map((task) => <TaskCard key={task.id} bundle={bundle} task={task} projectName={projects.find(({ id }) => id === task.project_id)?.title} disabled={locked}
+        onSelectTask={onSelectTask}
         onDragStart={() => { dragged.current = task.id; }} onDragEnd={() => { dragged.current = undefined; }}
-        onMove={(direction) => { const index = columns.findIndex((col) => col.status === task.status); const target = columns[index + direction]; if (target) void move(task, target.status, true); }} />)}</List>
+        onMove={(status) => void move(task, status, true)} />)}</List>
     </section>)}</div>
     {!items.length && <Empty title="暂无事项" />}
   </section>;
 }
-function TaskCard({ bundle, task, disabled, focusOnMount, onSelectTask, onDragStart, onDragEnd, onMove }: {
-  bundle: QueryClientBundle; task: Task; disabled: boolean; focusOnMount: boolean;
-  onSelectTask: (id: string) => void; onDragStart: () => void; onDragEnd: () => void; onMove: (direction: -1 | 1) => void;
+function TaskCard({ bundle, task, projectName, disabled, onSelectTask, onDragStart, onDragEnd, onMove }: {
+  bundle: QueryClientBundle; task: Task; projectName?: string; disabled: boolean;
+  onSelectTask: (id: string) => void; onDragStart: () => void; onDragEnd: () => void; onMove: (status: Status) => void;
 }) {
   const parent = useQuery({ ...taskQuery(bundle, task.parent_id ?? ""), enabled: !!task.parent_id });
   const project = useQuery({ ...projectQuery(bundle, task.project_id ?? ""), enabled: !!task.project_id });
@@ -70,19 +83,28 @@ function TaskCard({ bundle, task, disabled, focusOnMount, onSelectTask, onDragSt
     || !!task.parent_id && (!parent.data || parent.isError || !!parent.data.archived_at || !!parent.data.deleted_at)
     || !!task.project_id && (!project.data || project.isError || !!project.data.archived_at || !!project.data.deleted_at);
   const locked = disabled || readOnly;
-  const titleRef = useRef<HTMLSpanElement>(null);
-  useEffect(() => {
-    if (focusOnMount) titleRef.current?.closest("li")?.focus();
-  }, [focusOnMount]);
-  return <ListItem tabIndex={0} aria-describedby="task-board-help" aria-disabled={locked} draggable={!locked}
+  return <ListItem data-task-card={task.id} tabIndex={0} aria-describedby="task-board-help" aria-disabled={locked} draggable={!locked}
     onDragStart={(event) => { if (locked) { event.preventDefault(); return; } event.dataTransfer.setData("text/plain", task.id); onDragStart(); }}
     onDragEnd={onDragEnd}
     onKeyDown={(event) => {
       if (event.target !== event.currentTarget || !event.altKey || locked) return;
-      if (event.key === "ArrowRight" || event.key === "ArrowLeft") { event.preventDefault(); onMove(event.key === "ArrowRight" ? 1 : -1); }
+      if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
+      event.preventDefault();
+      const index = columns.findIndex(({ status }) => status === task.status);
+      const target = columns[index + (event.key === "ArrowRight" ? 1 : -1)];
+      if (target) onMove(target.status);
     }}
-    description={readOnly ? "只读事项" : undefined}
-    actions={<Button disabled={disabled} aria-label={`打开事项 ${task.title}`} onClick={() => onSelectTask(task.id)}>打开</Button>}>
-    <span ref={titleRef}>{task.title}</span>
+    className="flex-wrap items-start gap-2"
+    description={<span className="flex flex-wrap gap-x-2 gap-y-1">
+      <span className="wrap-anywhere">{project.data?.title ?? projectName ?? task.project_id ?? "独立事项"}</span>
+      {task.due && <span>截止 {formatTaskDate(task.due)}</span>}
+      {readOnly && <span>只读事项</span>}
+    </span>}
+    actions={!readOnly && <Menu
+      trigger={<Button size="sm" disabled={locked} aria-label={`更改状态 ${task.title}`}>更改状态</Button>}
+      items={columns.filter(({ status }) => status !== task.status).map(({ status, label }) => ({
+        key: status, label, onSelect: () => onMove(status),
+      }))} />}>
+    <TaskLink task={task} disabled={disabled} onSelectTask={onSelectTask} />
   </ListItem>;
 }

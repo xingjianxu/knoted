@@ -18,7 +18,7 @@
 ## 实施步骤
 
 1. 在独立 Worktree 执行 `npm view @bixlab/mtone dist-tags.latest`，比对 manifest、pnpm-lock 与发行包 dist/index.d.ts。本次基准 0.6.0。若 latest 有变，由本卡独占版本迁移，记录 peer、CSS 和关键交互差异并精确锁版，再释放下游卡。
-2. 调整 `src/lib/ui-provider.tsx`、`src/styles.css`（路径均相对 apps/web）与外壳。统一沿用暖白画布、白色操作面、深色正文、青绿链接及主操作，错误与警告用 mtone 语义色和文字。复用公开 tokens 使 portal 同步。用共同的布局约定控制宽度与间距，可直接使用语义标签及布局类。
+2. 调整 `src/lib/ui-provider.tsx`、`src/styles.css`（路径均相对 apps/web）与外壳。使用 mtone 默认画布、操作面、文字、链接与主操作配色；错误和警告保持 mtone 语义色与文字。应用布局与 portal 使用同一套公开 tokens。主题于 [03–12 集成](evidence/03-12.md) 采用发行版默认值。用共同的布局约定控制宽度与间距，可直接使用语义标签及布局类。
 3. 在 `src/routes/__root.tsx` 对齐全页反馈，并在 `_authenticated.tsx` 检查嵌套滚动、当前路由、高度和导航重置。保留 AuthGate、会话清理、笔记离开拦截。业务页 Agent 独占自己的标题与行为。
 4. 用首页、长回收站、带消息锚点的问答各验一遍内容宽度、导航后滚动及前进后退。记录窄屏折叠、桌面展开、404、加载失败的前后对照。
 

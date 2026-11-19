@@ -4,8 +4,8 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 // jsdom or just a class name. Positioners/viewport own menu/toast stacking.
 async function expectPortal(popup: Locator, layer: Locator, zIndex: string) {
   await expect(popup).toBeVisible();
-  await expect(popup).toHaveCSS("font-family", /system-ui/);
-  await expect(popup).toHaveCSS("color", "rgb(31, 41, 51)");
+  await expect(popup).toHaveCSS("font-family", /^Inter,/);
+  await expect(popup).toHaveCSS("color", "rgb(55, 53, 47)");
   await expect(popup).toHaveCSS("background-color", "rgb(255, 255, 255)");
   await expect(popup).toHaveCSS("border-top-width", "1px");
   await expect(layer).toHaveCSS("z-index", zIndex);

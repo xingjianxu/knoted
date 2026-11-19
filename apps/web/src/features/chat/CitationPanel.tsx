@@ -1,7 +1,7 @@
 import { Alert, Badge, Button, Empty, List, ListItem, Spinner } from "@bixlab/mtone";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import type { QueryClientBundle } from "../../lib/query";
 import { citationsQuery, type Citation } from "./queries";
 
@@ -14,7 +14,7 @@ const sourceStates = {
 
 function CitationTitle({ citation }: { citation: Citation }) {
   if (citation.source_state !== "current") return <span>{citation.title}</span>;
-  const className = "text-accent hover:underline";
+  const className = "page-link wrap-anywhere";
   switch (citation.source_type) {
     case "note":
       return <Link className={className} to="/notes/$noteId" params={{ noteId: citation.source_id }}>{citation.title}</Link>;
@@ -65,14 +65,24 @@ function SavedCitations({ bundle, messageId }: { bundle: QueryClientBundle; mess
   );
 }
 
-export function CitationPanel({ bundle, messageId }: { bundle: QueryClientBundle; messageId: string }) {
+export function CitationPanel({ bundle, messageId, children }: {
+  bundle: QueryClientBundle;
+  messageId: string;
+  children: ReactNode;
+}) {
   const [open, setOpen] = useState(false);
+  const citationsId = useId();
   return (
     <div className="space-y-2">
-      <Button aria-expanded={open} onClick={() => setOpen(!open)} variant="ghost">
-        {open ? "收起引用" : "查看引用"}
-      </Button>
-      {open && <SavedCitations bundle={bundle} messageId={messageId} />}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button aria-expanded={open} aria-controls={citationsId} onClick={() => setOpen(!open)} variant="ghost">
+          {open ? "收起引用" : "查看引用"}
+        </Button>
+        {children}
+      </div>
+      <div id={citationsId} hidden={!open}>
+        {open && <SavedCitations bundle={bundle} messageId={messageId} />}
+      </div>
     </div>
   );
 }
