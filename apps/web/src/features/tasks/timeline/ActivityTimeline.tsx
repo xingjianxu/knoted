@@ -1,4 +1,4 @@
-import { useReducer, useRef, useState } from "react";
+import { useEffect, useId, useReducer, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, Button, ConfirmDialog, Empty, FormField, Spinner, Textarea, Timeline } from "@bixlab/mtone";
 import { ApiRequestError } from "@knoted/api-client";
@@ -11,9 +11,16 @@ function validBody(body: string) { return !!body.trim() && Array.from(body).leng
 export function ActivityTimeline({ bundle, taskId, disabled }: { bundle: QueryClientBundle; taskId: string; disabled: boolean }) {
   const [page, dispatch] = useReducer(cursorReducer, undefined, () => createCursorState(taskId));
   const query = useQuery(activitiesQuery(bundle, taskId, page.cursor));
+  const composerId = useId();
+  const composer = useRef<HTMLTextAreaElement>(null);
+  const disclosure = useRef<HTMLButtonElement>(null);
+  const [composing, setComposing] = useState(false);
   const [body, setBody] = useState(""); const [error, setError] = useState("");
   const [busy, setBusy] = useState(false); const writing = useRef(false);
   const locked = disabled || busy;
+  useEffect(() => {
+    if (composing) composer.current?.focus();
+  }, [composing]);
   async function mutate(operation: () => Promise<unknown>) {
     if (disabled || writing.current) throw new Error("当前事项不可写或操作正在进行");
     writing.current = true; setBusy(true);
@@ -21,22 +28,21 @@ export function ActivityTimeline({ bundle, taskId, disabled }: { bundle: QueryCl
     finally { writing.current = false; setBusy(false); }
   }
   return <section aria-label="跟进时间线" className="space-y-3">
-    <h2>跟进时间线</h2>
-    <form onSubmit={(event) => { event.preventDefault(); if (locked || !validBody(body)) return; setError(""); void mutate(async () => {
+    <header className="flex flex-wrap items-center justify-between gap-2">
+      <h2 className="section-title">跟进时间线</h2>
+      <Button ref={disclosure} disabled={disabled} aria-disabled={locked} aria-expanded={composing} aria-controls={composerId}
+        onClick={() => { if (!locked) setComposing((open) => !open); }}>{composing ? "收起跟进输入" : "添加跟进"}</Button>
+    </header>
+    <form id={composerId} hidden={!composing} onSubmit={(event) => { event.preventDefault(); if (locked || !validBody(body)) return; setError(""); void mutate(async () => {
       const { data } = await bundle.api.raw.POST("/tasks/{taskId}/activities", { params: { path: { taskId } }, body: { body } });
       if (!data) throw new Error("无法读取新增跟进");
       bundle.queryClient.setQueryData(activitiesQuery(bundle, taskId, null).queryKey, (previous) => previous
         ? { ...previous, items: [data, ...previous.items.filter((item) => item.id !== data.id)] } : previous);
-    }).then(() => { setBody(""); dispatch({ type: "filter", filterKey: `${page.filterKey}:created` }); }).catch((cause: unknown) => setError(message(cause))); }} className="space-y-2">
-      <FormField label="新增跟进正文" description="1—10000个字符"><Textarea value={body} disabled={locked} onChange={(event) => setBody(event.target.value)} /></FormField>
-      <Button type="submit" disabled={locked || !validBody(body)}>添加跟进</Button>
+    }).then(() => { setBody(""); setComposing(false); disclosure.current?.focus(); dispatch({ type: "filter", filterKey: `${page.filterKey}:created` }); }).catch((cause: unknown) => setError(message(cause))); }} className="space-y-2">
+      <FormField label="新增跟进正文" description="1—10000个字符"><Textarea ref={composer} value={body} disabled={locked} onChange={(event) => setBody(event.target.value)} /></FormField>
+      <Button type="submit" disabled={locked || !validBody(body)} variant="blue">提交跟进</Button>
       {error && <Alert tone="error">{error}</Alert>}
     </form>
-    <div className="flex gap-2">
-      <Button disabled={query.isFetching || busy || !page.previous.length} onClick={() => dispatch({ type: "previous" })}>上一页跟进</Button>
-      <Button disabled={query.isFetching || busy || !query.data?.next_cursor} onClick={() => dispatch({ type: "next", nextCursor: query.data?.next_cursor ?? null })}>下一页跟进</Button>
-      <Button disabled={query.isFetching || busy} onClick={() => void query.refetch()}>刷新跟进</Button>
-    </div>
     {query.isFetching && <Spinner label="正在读取跟进" />}
     {query.error && <Alert tone="error">{query.error.message}<Button disabled={query.isFetching} onClick={() => void query.refetch()}>重试跟进列表</Button></Alert>}
     <Timeline aria-label="事项跟进记录" items={(query.data?.items ?? []).map((activity) => ({ key: activity.id,
@@ -47,7 +53,12 @@ export function ActivityTimeline({ bundle, taskId, disabled }: { bundle: QueryCl
         return result.data?.items.find((item) => item.id === activity.id);
       }} />,
     }))} />
-    {query.data?.items.length === 0 && <Empty title="暂无跟进记录" />}
+    {query.isSuccess && query.data.items.length === 0 && <Empty title="暂无跟进记录" />}
+    <div className="flex flex-wrap gap-2">
+      <Button disabled={query.isFetching || busy || !page.previous.length} onClick={() => dispatch({ type: "previous" })}>上一页跟进</Button>
+      <Button disabled={query.isFetching || busy || !query.data?.next_cursor || query.data.next_cursor === page.cursor} onClick={() => dispatch({ type: "next", nextCursor: query.data?.next_cursor ?? null })}>下一页跟进</Button>
+      <Button disabled={query.isFetching || busy} onClick={() => void query.refetch()}>刷新跟进</Button>
+    </div>
   </section>;
 }
 function ActivityEntry({ bundle, taskId, activity, disabled, mutate, refreshActivity }: {
@@ -73,7 +84,7 @@ function ActivityEntry({ bundle, taskId, activity, disabled, mutate, refreshActi
     finally { setRefreshing(false); }
   }
   return <div className="space-y-2">
-    <p className="whitespace-pre-wrap">{deleted ? "此跟进已删除" : activity.body}</p>
+    <p className="wrap-anywhere whitespace-pre-wrap">{deleted ? "此跟进已删除" : activity.body}</p>
     {manual && !deleted && (draft ? <form className="space-y-2" onSubmit={(event) => { event.preventDefault(); if (disabled || conflict || refreshing || !validBody(draft.body)) return; setError(""); void mutate(async () => {
       const { data } = await bundle.api.raw.PATCH("/tasks/{taskId}/activities/{activityId}", { params: { path: { taskId, activityId: activity.id } }, body: { body: draft.body, expected_version: draft.version } });
       if (!data) throw new Error("无法读取已保存跟进");
@@ -100,17 +111,20 @@ function ActivityEntry({ bundle, taskId, activity, disabled, mutate, refreshActi
 }
 function ActivityRevisions({ bundle, taskId, activity }: { bundle: QueryClientBundle; taskId: string; activity: Activity }) {
   const [open, setOpen] = useState(false);
+  const revisionId = useId();
   const [page, dispatch] = useReducer(cursorReducer, undefined, () => createCursorState(activity.id));
   const query = useQuery({ ...revisionsQuery(bundle, taskId, activity, page.cursor), enabled: open });
   return <div className="space-y-2">
-    <Button onClick={() => setOpen(!open)}>{open ? "收起修订" : "查看修订"}</Button>
-    {open && <>
-      {query.isFetching && <Spinner label="正在读取修订" />}
-      {query.error && <Alert tone="error">{query.error.message}<Button disabled={query.isFetching} onClick={() => void query.refetch()}>重试修订</Button></Alert>}
-      <Timeline aria-label="跟进修订历史" items={(query.data?.items ?? []).map((revision) => ({ key: revision.id, title: `版本 ${revision.version}`, content: <p className="whitespace-pre-wrap">{revision.body}</p> }))} />
-      {query.data?.items.length === 0 && <Empty title="暂无修订" />}
-      <Button disabled={query.isFetching || !page.previous.length} onClick={() => dispatch({ type: "previous" })}>上一页修订</Button>
-      <Button disabled={query.isFetching || !query.data?.next_cursor} onClick={() => dispatch({ type: "next", nextCursor: query.data?.next_cursor ?? null })}>下一页修订</Button>
-    </>}
+    <Button aria-expanded={open} aria-controls={revisionId} onClick={() => setOpen(!open)}>{open ? "收起修订" : "查看修订"}</Button>
+    <div id={revisionId} hidden={!open} className="space-y-2">
+      {open && <>
+        {query.isFetching && <Spinner label="正在读取修订" />}
+        {query.error && <Alert tone="error">{query.error.message}<Button disabled={query.isFetching} onClick={() => void query.refetch()}>重试修订</Button></Alert>}
+        <Timeline aria-label="跟进修订历史" items={(query.data?.items ?? []).map((revision) => ({ key: revision.id, title: `版本 ${revision.version}`, content: <p className="wrap-anywhere whitespace-pre-wrap">{revision.body}</p> }))} />
+        {query.isSuccess && query.data.items.length === 0 && <Empty title="暂无修订" />}
+        <Button disabled={query.isFetching || !page.previous.length} onClick={() => dispatch({ type: "previous" })}>上一页修订</Button>
+        <Button disabled={query.isFetching || !query.data?.next_cursor || query.data.next_cursor === page.cursor} onClick={() => dispatch({ type: "next", nextCursor: query.data?.next_cursor ?? null })}>下一页修订</Button>
+      </>}
+    </div>
   </div>;
 }

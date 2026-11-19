@@ -10,6 +10,10 @@ export const statusOptions = [
   { value: "todo", label: "待开始" }, { value: "in_progress", label: "进行中" },
   { value: "done", label: "已完成" }, { value: "cancelled", label: "已取消" },
 ];
+export const priorityOptions = [
+  { value: "none", label: "无" }, { value: "low", label: "低" },
+  { value: "medium", label: "中" }, { value: "high", label: "高" },
+];
 const schema = z.object({
   title: z.string().trim().min(1, "请输入事项标题").refine((value) => [...value].length <= 500 && !value.includes("\0"), "标题最多500字且不能含空字符"),
   description: z.string().refine((value) => !value.includes("\0"), "说明不能含空字符"),
@@ -37,10 +41,10 @@ type Draft = z.infer<typeof schema>;
 function initial(task?: Task, parent?: Task): Draft {
   return { title: task?.title ?? "", description: task?.description ?? "", status: task?.status ?? "todo", priority: task?.priority ?? "none", project_id: task?.project_id ?? parent?.project_id ?? "", parent_id: task?.parent_id ?? parent?.id ?? "", startDate: task?.start?.date ?? "", startTime: task?.start?.time ?? "", dueDate: task?.due?.date ?? "", dueTime: task?.due?.time ?? "" };
 }
-export function TaskForm({ task, parent, projects, parents, disabled = false, pending = false, conflict, rebaseTask, onSubmit, submitLabel }: {
+export function TaskForm({ task, parent, projects, parents, disabled = false, pending = false, conflict, rebaseTask, onSubmit, submitLabel, onCancel }: {
   task?: Task; parent?: Task; projects: Project[]; parents: Task[]; disabled?: boolean; pending?: boolean;
   conflict?: boolean; rebaseTask?: Task;
-  onSubmit: (input: components["schemas"]["TaskCreate"], expectedVersion?: number) => Promise<Task | void>; submitLabel: string;
+  onSubmit: (input: components["schemas"]["TaskCreate"], expectedVersion?: number) => Promise<Task | void>; submitLabel: string; onCancel?: () => void;
 }) {
   const { register, control, handleSubmit, setError, reset, formState: { errors, isSubmitting, isDirty } } = useForm<Draft>({ resolver: zodResolver(schema), defaultValues: initial(task, parent) });
   const [error, setMessage] = useState(""); const [copyMessage, setCopyMessage] = useState("");
@@ -88,23 +92,37 @@ export function TaskForm({ task, parent, projects, parents, disabled = false, pe
       setMessage(cause instanceof Error ? cause.message : "保存失败，请重试");
     }
   }
-  return <form noValidate onSubmit={(event) => void handleSubmit(submitDraft)(event)} className="space-y-3">
+  return <form noValidate onSubmit={(event) => void handleSubmit(submitDraft)(event)} className="space-y-3 pb-4">
     <FormField label="事项标题" error={errors.title?.message}><Input {...register("title")} disabled={locked} /></FormField>
     <FormField label="事项说明" error={errors.description?.message}><Textarea {...register("description")} rows={3} disabled={locked} /></FormField>
-    <div className="flex flex-wrap gap-3">
-      <Controller control={control} name="status" render={({ field }) => <FormField label="事项状态" error={errors.status?.message}><Select value={field.value} onValueChange={field.onChange} options={statusOptions} disabled={locked} /></FormField>} />
-      <Controller control={control} name="priority" render={({ field }) => <FormField label="优先级" error={errors.priority?.message}><Select value={field.value} onValueChange={field.onChange} options={[{ value: "none", label: "无" }, { value: "low", label: "低" }, { value: "medium", label: "中" }, { value: "high", label: "高" }]} disabled={locked} /></FormField>} />
-      <Controller control={control} name="parent_id" render={({ field }) => <FormField label="父事项" error={errors.parent_id?.message}><Select value={field.value} onValueChange={field.onChange} options={[{ value: "", label: "顶层事项" }, ...parents.filter((row) => row.id !== task?.id).map((row) => ({ value: row.id, label: row.title })), ...(parent && !parents.some((row) => row.id === parent.id) ? [{ value: parent.id, label: parent.title }] : [])]} disabled={locked || !!parent} /></FormField>} />
-      <Controller control={control} name="project_id" render={({ field }) => <FormField label="所属项目" error={errors.project_id?.message} description={parentId ? "子事项继承父事项所属项目" : undefined}><Select value={selectedParent ? selectedParent.project_id ?? "" : field.value} onValueChange={field.onChange} options={[{ value: "", label: "独立事项" }, ...projects.map((row) => ({ value: row.id, label: row.title, disabled: row.archived_at !== null }))]} disabled={locked || !!parentId} /></FormField>} />
+    <fieldset className="min-w-0 space-y-2">
+      <legend className="font-medium">状态与优先级</legend>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <Controller control={control} name="status" render={({ field }) => <FormField label="事项状态" error={errors.status?.message}><Select value={field.value} onValueChange={field.onChange} options={statusOptions} disabled={locked} /></FormField>} />
+        <Controller control={control} name="priority" render={({ field }) => <FormField label="优先级" error={errors.priority?.message}><Select value={field.value} onValueChange={field.onChange} options={priorityOptions} disabled={locked} /></FormField>} />
+      </div>
+    </fieldset>
+    <fieldset className="min-w-0 space-y-2">
+      <legend className="font-medium">项目与父事项</legend>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <Controller control={control} name="parent_id" render={({ field }) => <FormField label="父事项" error={errors.parent_id?.message}><Select value={field.value} onValueChange={field.onChange} options={[{ value: "", label: "顶层事项" }, ...parents.filter((row) => row.id !== task?.id).map((row) => ({ value: row.id, label: row.title })), ...(parent && !parents.some((row) => row.id === parent.id) ? [{ value: parent.id, label: parent.title }] : [])]} disabled={locked || !!parent} /></FormField>} />
+        <Controller control={control} name="project_id" render={({ field }) => <FormField label="所属项目" error={errors.project_id?.message} description={parentId ? "子事项继承父事项所属项目" : undefined}><Select value={selectedParent ? selectedParent.project_id ?? "" : field.value} onValueChange={field.onChange} options={[{ value: "", label: "独立事项" }, ...projects.map((row) => ({ value: row.id, label: row.title, disabled: row.archived_at !== null }))]} disabled={locked || !!parentId} /></FormField>} />
+      </div>
+    </fieldset>
+    <fieldset className="min-w-0 space-y-2">
+      <legend className="font-medium">开始与截止（上海）</legend>
+      <p className="text-sm text-muted">时间可留空；纯日期的截止时间为次日零点。</p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <FormField label="开始日期" error={errors.startDate?.message}><Input type="date" {...register("startDate")} disabled={locked} /></FormField>
+        <FormField label="开始时间" error={errors.startTime?.message}><Input type="time" step={60} {...register("startTime")} disabled={locked} /></FormField>
+        <FormField label="截止日期" error={errors.dueDate?.message}><Input type="date" {...register("dueDate")} disabled={locked} /></FormField>
+        <FormField label="截止时间" error={errors.dueTime?.message}><Input type="time" step={60} {...register("dueTime")} disabled={locked} /></FormField>
+      </div>
+    </fieldset>
+    <div className="flex flex-wrap justify-end gap-2">
+      {onCancel && <Button type="button" disabled={busy} onClick={onCancel}>取消</Button>}
+      <Button type="submit" variant="blue" loading={busy} disabled={locked || conflict}>{submitLabel}</Button>
     </div>
-    <p className="text-sm text-muted">日期和时间均按 Asia/Shanghai；时间留空表示纯日期，截止于次日零点。</p>
-    <div className="flex flex-wrap gap-3">
-      <FormField label="开始日期" error={errors.startDate?.message}><Input type="date" {...register("startDate")} disabled={locked} /></FormField>
-      <FormField label="开始时间" error={errors.startTime?.message}><Input type="time" step={60} {...register("startTime")} disabled={locked} /></FormField>
-      <FormField label="截止日期" error={errors.dueDate?.message}><Input type="date" {...register("dueDate")} disabled={locked} /></FormField>
-      <FormField label="截止时间" error={errors.dueTime?.message}><Input type="time" step={60} {...register("dueTime")} disabled={locked} /></FormField>
-    </div>
-    <Button type="submit" disabled={locked || conflict}>{submitLabel}</Button>
     {error && <Alert tone="error">{error}</Alert>}
     {conflict && <div className="space-y-2">
       <FormField label="草稿副本" description="可选中复制全部内容"><Textarea value={copy} readOnly rows={8} /></FormField>
