@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createApiClient } from "@knoted/api-client";
 import { describe, expect, it } from "vitest";
@@ -23,15 +23,22 @@ function harness(fail=false,gate?:Promise<void>) {
  render(<UiProvider><QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><NoteAssociations noteId={noteId} api={api}/></QueryClientProvider></UiProvider>);
  return requests;
 }
+async function openAssociations() {
+ fireEvent.click(screen.getByRole("button",{name:"标签与关联"}));
+ return screen.findByRole("dialog",{name:"标签与关联"});
+}
 describe("T32 note associations",()=>{
  it("creates and removes tags and stable identity links using the generated client",async()=>{
  const requests=harness();
+ const drawer=await openAssociations();
+ fireEvent.click(within(drawer).getByRole("button",{name:"添加标签"}));
  await waitFor(()=>expect(screen.getByRole("button",{name:"创建并添加标签"})).toBeEnabled());
  fireEvent.change(screen.getByLabelText("新标签名称"),{target:{value:"研究"}});
  fireEvent.click(screen.getByRole("button",{name:"创建并添加标签"}));
  expect(await screen.findByRole("button",{name:"移除标签 研究"})).toBeInTheDocument();
  fireEvent.click(screen.getByRole("button",{name:"移除标签 研究"}));
  await waitFor(()=>expect(screen.queryByRole("button",{name:"移除标签 研究"})).not.toBeInTheDocument());
+ fireEvent.click(within(drawer).getByRole("button",{name:"新建关联"}));
  fireEvent.change(screen.getByLabelText("关联目标 ID"),{target:{value:targetId}});
  fireEvent.click(screen.getByRole("button",{name:"添加关联"}));
  expect(await screen.findByText(targetId)).toBeInTheDocument();
@@ -43,6 +50,8 @@ describe("T32 note associations",()=>{
  });
  it("disables mutations while loading and preserves the input on server error",async()=>{
  let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve});harness(true,gate);
+ const drawer=await openAssociations();
+ fireEvent.click(within(drawer).getByRole("button",{name:"新建关联"}));
  expect(screen.getByRole("button",{name:"添加关联"})).toBeDisabled();release();
  await waitFor(()=>expect(screen.getByRole("button",{name:"添加关联"})).toBeEnabled());
  fireEvent.change(screen.getByLabelText("关联目标 ID"),{target:{value:targetId}});
