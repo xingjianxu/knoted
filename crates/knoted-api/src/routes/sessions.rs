@@ -79,6 +79,9 @@ async fn current_session(
     let (csrf_token, recovered) = if let Some(token) = csrf {
         (token, false)
     } else {
+        if !current.write_admitted {
+            return crate::middleware::auth::maintenance_response(request_id);
+        }
         let mut connection = match ctx.pool().acquire().await {
             Ok(c) => c,
             Err(_) => return unavailable(request_id),

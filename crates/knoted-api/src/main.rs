@@ -124,9 +124,19 @@ async fn run_server(args: Vec<String>) -> ExitCode {
     };
     tracing::info!(%bind, "knoted-api listening");
 
-    if let Err(error) =
-        axum::serve(listener, build_router_with_auth(ctx, config.auth().clone())).await
-    {
+    let admission = ctx.admission_pool().clone();
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("SIGTERM listener");
+    let server = axum::serve(listener, build_router_with_auth(ctx, config.auth().clone()));
+    let result = tokio::select! {
+        result = server.into_future() => result,
+        _ = terminate.recv() => Ok(()),
+        _ = tokio::signal::ctrl_c() => Ok(()),
+    };
+    // Stop new admissions and let detached request owners retire their durable
+    // operation markers before the Tokio runtime exits.
+    admission.close().await;
+    if let Err(error) = result {
         tracing::error!(error = %error, "the API server stopped with an error");
         return ExitCode::FAILURE;
     }

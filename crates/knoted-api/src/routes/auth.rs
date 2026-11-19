@@ -79,6 +79,10 @@ pub fn router(config: AuthConfig, ctx: AppContext) -> Router<AppContext> {
         .route("/auth/recovery/options", post(recovery_options))
         .route("/auth/recovery/finish", post(recovery_finish))
         .route_layer(from_fn_with_state(
+            ctx.clone(),
+            crate::middleware::auth::admit_anonymous,
+        ))
+        .route_layer(from_fn_with_state(
             config.clone(),
             crate::middleware::auth::require_origin,
         ));

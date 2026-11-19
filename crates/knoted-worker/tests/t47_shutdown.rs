@@ -55,5 +55,13 @@ async fn t47_shutdown_stops_claiming_and_waits_for_registered_work() {
         .await
         .unwrap();
     assert_eq!(queued, 1);
+    let unresolved: i64 = sqlx::query_scalar("SELECT count(*) FROM maintenance_operations")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        unresolved, 0,
+        "confirmed worker shutdown retires its active admission"
+    );
     db.drop().await;
 }

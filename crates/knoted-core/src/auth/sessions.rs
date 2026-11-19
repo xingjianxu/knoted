@@ -240,6 +240,27 @@ pub async fn resolve_session(
     token: &str,
     now: DateTime<Utc>,
 ) -> Result<Option<Session>, DbError> {
+    let Some(mut session) = lookup_session(executor, token, now).await? else {
+        return Ok(None);
+    };
+    let idle_expires_at = min(now + SESSION_IDLE_TTL, session.absolute_expires_at);
+    sqlx::query("UPDATE sessions SET last_seen_at = $2, idle_expires_at = $3 WHERE id = $1")
+        .bind(session.id)
+        .bind(now)
+        .bind(idle_expires_at)
+        .execute(&mut *executor)
+        .await?;
+    session.last_seen_at = now;
+    session.idle_expires_at = idle_expires_at;
+    Ok(Some(session))
+}
+
+/// Authenticate against existing expiry and revocation without extending a session.
+pub async fn lookup_session(
+    executor: &mut PgConnection,
+    token: &str,
+    now: DateTime<Utc>,
+) -> Result<Option<Session>, DbError> {
     let hash = hash_token(token);
     let row: Option<SessionRow> = sqlx::query_as(&format!(
         "SELECT {SESSION_COLUMNS} FROM sessions WHERE token_hash = $1"
@@ -257,7 +278,7 @@ pub async fn resolve_session(
         return Ok(None);
     };
 
-    let mut session = row_to_session(row);
+    let session = row_to_session(row);
     if let Some(reason) = rejection_reason(&session, now) {
         tracing::debug!(
             target: "knoted_core::auth",
@@ -267,16 +288,6 @@ pub async fn resolve_session(
         );
         return Ok(None);
     }
-
-    let idle_expires_at = min(now + SESSION_IDLE_TTL, session.absolute_expires_at);
-    sqlx::query("UPDATE sessions SET last_seen_at = $2, idle_expires_at = $3 WHERE id = $1")
-        .bind(session.id)
-        .bind(now)
-        .bind(idle_expires_at)
-        .execute(&mut *executor)
-        .await?;
-    session.last_seen_at = now;
-    session.idle_expires_at = idle_expires_at;
 
     Ok(Some(session))
 }

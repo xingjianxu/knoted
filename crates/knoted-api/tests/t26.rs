@@ -603,3 +603,52 @@ async fn t26_multipart_duplicate_fields_unknown_fields_and_hash_shape_rejected()
         0
     );
 }
+
+#[tokio::test]
+async fn t68_disconnected_http_upload_finishes_registration_before_backup() {
+    let h = Harness::new().await;
+    let mut barrier = h.db.pool.begin().await.unwrap();
+    sqlx::query("LOCK TABLE assets IN SHARE MODE")
+        .execute(&mut *barrier)
+        .await
+        .unwrap();
+    let bytes = png();
+    let mut client = Box::pin(h.upload(&bytes, "disconnect", None));
+    tokio::select! {
+        response = &mut client => panic!("registration passed the SQL barrier: {}", response.0),
+        ready = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if std::fs::read_dir(h.root.path()).unwrap().flatten().any(|entry| entry.file_type().unwrap().is_file()) { break; }
+                tokio::task::yield_now().await;
+            }
+        }) => ready.unwrap(),
+    }
+    drop(client);
+    let refused = knoted_core::maintenance::exclusive(
+        h.ctx.admission_pool(),
+        std::time::Duration::from_millis(100),
+    )
+    .await
+    .is_err();
+    barrier.rollback().await.unwrap();
+    assert!(
+        refused,
+        "the HTTP owner must still protect the asset registration"
+    );
+    let guard = knoted_core::maintenance::exclusive(
+        h.ctx.admission_pool(),
+        std::time::Duration::from_secs(3),
+    )
+    .await
+    .unwrap();
+    let asset: Uuid = sqlx::query_scalar("SELECT id FROM assets WHERE state='ready'")
+        .fetch_one(&h.db.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read(h.root.path().join(asset.to_string())).unwrap(),
+        bytes
+    );
+    drop(guard);
+    h.db.drop().await;
+}
