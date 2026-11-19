@@ -2,7 +2,7 @@
 
 截至 2026-11-19，主线包含 Rust 2024 workspace、pnpm workspace、浏览器与内部 OpenAPI 契约，以及 `migrations/0001—0027`。笔记、项目与事项、回收站、只读文件采集、下载和 PDF、图片、文本、Office 预览已验收。全文检索经 PostgreSQL 复核当前来源。问答消费词法和向量分块，保存引用快照并可将回答转存为笔记。CLI 提供一致性备份和隔离恢复。实际版本、场景和限制见 [v1 任务进展](../plans/knoted-v1/README.md) 与 [部署交接](../plans/knoted-v1/evidence/t72-deployment.md)。
 
-UI 目标已按 [ADR 0002](../decisions/0002-mtone-ui-ownership.md) 改为应用直接消费 npm `@bixlab/mtone`。**T17—T19 均已集成主线**（T17 PR #42/`e3e1db2`；T18 PR #46/`4425ab9`；T19 PR #48/`6de79a8`）：`apps/web` 当前精确消费 0.5.0 的公开 Provider/CSS（[升级记录](../development/ui-mtone.md#050-升级与当前消费约定)；T17—T19 原始验收为 0.2.0），`packages/ui` cn 占位包已移除；基础表单、弹层/菜单/通知、树/游标列表/反馈通过消费端验收；生产仅新增通知 Provider 注册与应用游标 reducer。证据见 [T17](../plans/knoted-v1/evidence/t17.md)、[T18](../plans/knoted-v1/evidence/t18.md)、[T19](../plans/knoted-v1/evidence/t19.md)。业务组合/数据适配留在 apps/web；证实上游能力缺口时存档提示词、告知用户并在上游 mtone 提 Issue，见 [UI 指南](../development/ui-mtone.md)。
+UI 目标已按 [ADR 0002](../decisions/0002-mtone-ui-ownership.md) 改为应用直接消费 npm `@bixlab/mtone`。**T17—T19 均已集成主线**（T17 PR #42/`e3e1db2`；T18 PR #46/`4425ab9`；T19 PR #48/`6de79a8`）：`apps/web` 使用锁定版本的公开 Provider/CSS（[当前版本](../development/ui-mtone.md#现状与目标)；T17—T19 原始验收为 0.2.0），`packages/ui` cn 占位包已移除；基础表单、弹层/菜单/通知、树/游标列表/反馈通过消费端验收；生产仅新增通知 Provider 注册与应用游标 reducer。证据见 [T17](../plans/knoted-v1/evidence/t17.md)、[T18](../plans/knoted-v1/evidence/t18.md)、[T19](../plans/knoted-v1/evidence/t19.md)。业务组合/数据适配留在 apps/web；证实上游能力缺口时存档提示词、告知用户并在上游 mtone 提 Issue，见 [UI 指南](../development/ui-mtone.md)。
 
 | 边界 | 责任 |
 |---|---|
