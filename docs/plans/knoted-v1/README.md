@@ -1,6 +1,6 @@
 # Knoted v1 文档与实施任务入口
 
-> 产品实施采用实际可用的 executing-plans 或 subagent-driven-development。当前 T01—T26 已完成、审查并集成到主线（T17 为 PR #42 / `e3e1db2`；T18 为 PR #46 / `4425ab9`；T19 为 PR #48 / `6de79a8`；T22 为 PR #58 / `8d4a472`）；T27—T38 也已完成并通过主线与适用实例验收（T36 为 PR #110 / `f26af66`；T37 为 PR #115 / `1b37e55`；T38 为 PR #118 / `25b22309`）；T39—T40 已完成（T39 PR #123，主线/dev `bbdef36`；T40 PR #136，主线/dev `aee7c2e`）；T41 也已完成（PR #139，主线/dev `f2423b4`）；T42 已完成（PR #141，主线/dev `d7c74ec`）；T43 已完成（PR #144，主线/dev `987ef07`）；T44 已完成（实现 PR #146、修复 PR #147，主线/dev `9160def`）；T45—T72 继续按卡推进。
+> 产品实施采用实际可用的 executing-plans 或 subagent-driven-development。当前 T01—T26 已完成、审查并集成到主线（T17 为 PR #42 / `e3e1db2`；T18 为 PR #46 / `4425ab9`；T19 为 PR #48 / `6de79a8`；T22 为 PR #58 / `8d4a472`）；T27—T38 也已完成并通过主线与适用实例验收（T36 为 PR #110 / `f26af66`；T37 为 PR #115 / `1b37e55`；T38 为 PR #118 / `25b22309`）；T39—T40 已完成（T39 PR #123，主线/dev `bbdef36`；T40 PR #136，主线/dev `aee7c2e`）；T41 也已完成（PR #139，主线/dev `f2423b4`）；T42 已完成（PR #141，主线/dev `d7c74ec`）；T43 已完成（PR #144，主线/dev `987ef07`）；T44 已完成（实现 PR #146、修复 PR #147，主线/dev `9160def`）；后续各卡状态和证据见下表。T70 主机已启用，公网入口待确认。T71 验收与 T72 dev 固定发布均已完成。
 
 ## 阅读顺序
 
@@ -98,7 +98,7 @@
 | [T69](tasks/T69.md) | 隔离恢复演练 | T68, T53, T59 | done（[PR #229](https://github.com/xingjianxu/knoted/pull/229)，主线/dev `5308378`，[证据](evidence/t69-isolated-restore.md)） |
 | [T70](tasks/T70.md) | 完整Nix模块与主机接入 | T21, T69 | wks-lab 已启用，公网 443 待确认（[PR #232](https://github.com/xingjianxu/knoted/pull/232)，宿主 `781aba6`，[证据](evidence/t70-deployment.md)） |
 | [T71](tasks/T71.md) | 功能与故障恢复集成验收 | T70 | done（[PR #235](https://github.com/xingjianxu/knoted/pull/235)，主线 `dbc5788`，[证据](evidence/t71-acceptance-matrix.md)） |
-| [T72](tasks/T72.md) | 最终测试部署和交接 | T71 | pending |
+| [T72](tasks/T72.md) | 最终测试部署和交接 | T71 | done（固定 dev 发布 `dbc5788`，[证据](evidence/t72-deployment.md)） |
 
 T39—T50 最终组合补修：done（PR [#177](https://github.com/xingjianxu/knoted/pull/177)，主线 `e9da413`，dev `e9da413`；[证据](evidence/t39-t50-integration.md)）。表内主线/dev保留各卡首次完整验收修订；最新运行及最终修复以本条为准。
 
