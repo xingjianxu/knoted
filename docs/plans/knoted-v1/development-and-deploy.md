@@ -76,13 +76,13 @@ T10/T11/T12 的历史 app/host 拆分规则仅适用于已完成的那些外部�
 
 ## T68之前的迁移备份
 
-T21起若后续任务需要迁移，而统一admin backup尚未实现，先用运维维护窗口完成最小一致备份：`pnpm pc process stop knoted-api`及 `pnpm pc process stop knoted-worker`（必要时连同 Python 执行进程），确认无应用写入，再对knoted_dev执行pg_dump，并复制本实例assets及生成摘要清单到service/backups/<timestamp>/。命令须明确数据库和实例路径，不能停止共享PostgreSQL或其他应用。新空实例无历史数据时记录“空库，无旧数据”；有数据但无法备份则不迁移。备份与迁移后恢复 API 和 Worker。T68完成后统一替换为管理命令。模型依赖和只读源目录不参与这个备份。
+T21起若后续任务需要迁移，而统一admin backup尚未实现，先用运维维护窗口完成最小一致备份：`pnpm pc process stop knoted-api`及 `pnpm pc process stop knoted-worker`（必要时连同 Python 执行进程），确认无应用写入，再对knoted_dev执行pg_dump，并复制本实例assets及生成摘要清单到service/backups/<timestamp>/。命令须明确数据库和实例路径，不能停止共享PostgreSQL或其他应用。新空实例无历史数据时记录“空库，无旧数据”；有数据但无法备份则不迁移。备份与迁移后恢复 API 和 Worker。T68 完成后，常规归档使用管理命令。原实例升级回退仍按照 [ADR 0007](../../decisions/0007-execution-exit-confirmation.md) 停写，并保留 SQLite 执行账本和退出凭证。模型依赖和只读源目录不参与归档。
 
 ## 一致备份和恢复
 
 管理命令规划为 `knoted-api admin backup --output <dir>` 和 `admin restore --input <dir> --target <isolated-config>`。backup进入维护模式拒绝写入、停止Worker领取和发布，等待/取消运行任务并确认安静，随后PG dump+assets清单/摘要，最后恢复服务。失败保持可诊断清单、不标完成；退出路径解除本次维护锁。
 
-备份包括笔记历史、回收站、聊天引用与依赖、全部仍被引用图片、迁移版本和非密配置摘要。不备份源目录，索引可重建，密钥另按主机安全配置管理。恢复仅向新数据库与隔离资产目录，校验清单后迁移/重建全文和向量，撤销sessions/challenges/bootstrap凭据，使用现有Passkey重新登录或管理命令恢复。禁止默认覆盖正在运行实例。
+备份包括笔记历史、回收站、聊天引用与依赖、全部登记为 `ready` 的图片、迁移版本和非密配置摘要。不备份源目录，索引可重建，密钥另按主机安全配置管理。恢复仅向新数据库与隔离资产目录，校验清单后迁移/重建全文和向量，撤销sessions/challenges/bootstrap凭据，使用现有Passkey重新登录或管理命令恢复。禁止默认覆盖正在运行实例。
 
 ## 回滚及健康
 
