@@ -67,6 +67,15 @@ async function mount(path = `/notes/${id(1)}`, browser = false) {
 }
 const calls = (method: string, suffix: string) => requests.filter(r => r.method === method && new URL(r.url).pathname.endsWith(suffix));
 async function title() { return screen.findByRole("textbox", { name: "笔记标题" }); }
+async function selectNoteAction(name: string) {
+  fireEvent.click(await screen.findByRole("button", { name: "更多笔记操作" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name }));
+}
+async function openAssociations() {
+  fireEvent.click(screen.getByRole("button", { name: "标签与关联" }));
+  return screen.findByRole("dialog", { name: "标签与关联" });
+}
+
 
 it("clipboard rejection keeps real editor, draft copy and navigation flush consistent", async () => {
   const { router } = await mount(); await title();
@@ -79,7 +88,7 @@ it("clipboard rejection keeps real editor, draft copy and navigation flush consi
   pasteHtml(editable, "<p>后续正文</p>", "后续正文");
   await waitFor(() => expect(editable).toHaveTextContent("后续正文"));
   expect(pane.querySelector('[contenteditable="true"]')).toBe(editable);
-  fireEvent.click(screen.getByRole("button", { name: "复制当前草稿" }));
+  await selectNoteAction("复制当前草稿");
   expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("后续正文"));
   expect(navigator.clipboard.writeText).not.toHaveBeenCalledWith(expect.stringContaining("中文链接"));
   fireEvent.click(screen.getByRole("treeitem", { name: "笔记2" }));
@@ -131,6 +140,39 @@ it("t31_clean_refetch_never_upgrades_old_editor_base and Query clear retains ini
   act(() => bundle.queryClient.clear()); expect(input).toHaveValue("笔记1");
   expect(screen.getByRole("region", { name: "当前笔记" }).querySelector('[contenteditable="true"]')).toBe(editor);
 });
+it("history replaces the writing area and gives focus back without remounting the draft editor", async () => {
+  notes[0]!.document = doc("长正文".repeat(500));
+  await mount();
+  const currentTitle = await title();
+  const pane = screen.getByRole("region", { name: "当前笔记" });
+  const editable = pane.querySelector('[contenteditable="true"]');
+  fireEvent.change(currentTitle, { target: { value: "还在编辑的标题" } });
+
+  const history = screen.getByRole("button", { name: "历史版本" });
+  fireEvent.click(history);
+  const versions = await screen.findByRole("region", { name: "笔记历史" });
+  expect(within(pane).queryByRole("region", { name: "笔记编辑器" })).not.toBeInTheDocument();
+  expect(editable).not.toBeVisible();
+  fireEvent.click(within(versions).getByRole("button", { name: "关闭历史" }));
+  expect(history).toHaveFocus();
+  expect(pane.querySelector('[contenteditable="true"]')).toBe(editable);
+  expect(currentTitle).toHaveValue("还在编辑的标题");
+});
+
+it("directory drawer stays open on a blocked note switch while the draft remains active", async () => {
+  intercept = r => r.method === "PATCH" ? failure(503) : undefined;
+  const { router } = await mount();
+  const input = await title();
+  fireEvent.change(input, { target: { value: "目录切换仍保留" } });
+
+  fireEvent.click(screen.getByRole("button", { name: "目录" }));
+  const directory = await screen.findByRole("dialog", { name: "笔记目录" });
+  fireEvent.click(await within(directory).findByRole("treeitem", { name: "笔记2" }));
+  expect(await within(directory).findByText(/无法离开/)).toBeInTheDocument();
+  expect(router.state.location.pathname).toBe(`/notes/${id(1)}`);
+  expect(input).toHaveValue("目录切换仍保留");
+});
+
 it("t31_history_readonly_and_pagination uses a genuinely noneditable NoteEditor", async () => {
   await mount(); await title(); fireEvent.click(screen.getByRole("button", { name: "历史版本" }));
   fireEvent.click(await screen.findByRole("button", { name: /预览.*历史标题/ }));
@@ -144,7 +186,7 @@ it.each([503, 409])("t31_1_failed_move_never_drifts (%i)", async status => {
   const pending = deferred(); intercept = (_r, url) => url.pathname.endsWith("/move") ? pending.promise : undefined;
   const { router } = await mount(); await title();
   const treeBefore = screen.getAllByRole("treeitem").map(item => item.textContent);
-  fireEvent.click(screen.getByRole("button", { name: "移动笔记" }));
+  await selectNoteAction("移动笔记");
   fireEvent.click(await screen.findByRole("button", { name: "确认移动" }));
   await waitFor(() => expect(calls("POST", "/move")).toHaveLength(1));
   expect(screen.getAllByRole("treeitem", { hidden: true }).map(item => item.textContent)).toEqual(treeBefore);
@@ -156,7 +198,7 @@ it.each([503, 409])("t31_1_failed_move_never_drifts (%i)", async status => {
 it("t31_current_move_advances_own_base_without_remount uses fresh save version and rereads tree", async () => {
   await mount(); const input = await title(); const editor = screen.getByRole("region", { name: "当前笔记" }).querySelector('[contenteditable="true"]');
   fireEvent.change(input, { target: { value: "移动前新稿" } });
-  fireEvent.click(screen.getByRole("button", { name: "移动笔记" })); fireEvent.click(await screen.findByRole("button", { name: "确认移动" }));
+  await selectNoteAction("移动笔记"); fireEvent.click(await screen.findByRole("button", { name: "确认移动" }));
   await waitFor(() => expect(calls("POST", "/move")).toHaveLength(1));
   expect(await calls("POST", "/move")[0]!.json()).toEqual({ expected_version: 2, parent_id: null, position: 1 });
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -179,6 +221,7 @@ it("t31_2_history_restore_new_document_and_version flushes then atomically repla
   const restored = { ...note(1), title: "恢复标题", document: doc("恢复正文"), content_version: 3 }; notes[0] = restored;
   await act(async () => pending.resolve(json(restored)));
   await waitFor(() => expect(input).toHaveValue("恢复标题")); expect(screen.getByText("恢复正文")).toBeInTheDocument();
+  await waitFor(() => expect(input).toHaveFocus());
   expect(screen.getByRole("region", { name: "当前笔记" }).querySelector('[contenteditable="true"]')).not.toBe(oldEditor);
   fireEvent.change(input, { target: { value: "恢复后编辑" } }); fireEvent.click(screen.getByRole("button", { name: "保存并记录历史" }));
   await waitFor(() => expect(calls("PATCH", id(1))).toHaveLength(2)); expect(await calls("PATCH", id(1))[1]!.json()).toMatchObject({ expected_version: 3 });
@@ -220,12 +263,12 @@ it("t31_3_parent_delete_gate_and_real_undo uses receipt CAS, root fallback and a
     });
     return undefined;
   };
-  const { router } = await mount(); await title(); fireEvent.click(screen.getByRole("button", { name: "删除笔记" }));
+  const { router } = await mount(); await title(); await selectNoteAction("删除笔记");
   expect(await screen.findByText(/仍有子页/)).toBeInTheDocument(); fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
   await waitFor(() => expect(calls("DELETE", id(1))).toHaveLength(1)); expect(router.state.location.pathname).toBe(`/notes/${id(1)}`);
   fireEvent.click(screen.getByRole("button", { name: "取消" }));
   await act(async () => { await router.navigate({ to: "/notes/$noteId", params: { noteId: id(2) } }); });
-  fireEvent.click(await screen.findByRole("button", { name: "删除笔记" })); fireEvent.click(await screen.findByRole("button", { name: "确认删除" }));
+  await selectNoteAction("删除笔记"); fireEvent.click(await screen.findByRole("button", { name: "确认删除" }));
   await waitFor(() => expect(router.state.location.pathname).toBe("/notes"));
   expect(calls("POST", `/notes/${id(2)}/snapshots`)).toHaveLength(1);
   fireEvent.click(await screen.findByRole("button", { name: "恢复本次删除 笔记2" }));
@@ -246,7 +289,7 @@ it("t31_notes_401_keeps_initialized_draft on associations and stops a pending di
   await new Promise(resolve => setTimeout(resolve, 1100));
   expect(calls("PATCH", id(1))).toHaveLength(0); expect(router.state.location.pathname).toBe(`/notes/${id(1)}`); expect(input).toHaveValue("过期也保留");
   expect(screen.getByRole("link", { name: "在新标签页重新登录" })).toHaveAttribute("target", "_blank");
-  fireEvent.click(screen.getByRole("button", { name: "复制当前草稿" })); expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("过期也保留"));
+  await selectNoteAction("复制当前草稿"); expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("过期也保留"));
   expect(bundle.queryClient.getQueryData(queryKeys.auth.session())).toBeUndefined();
 });
 it("orphaned complete-tree responses surface a retry error without unmounting the local editor", async () => {
@@ -311,7 +354,7 @@ it("blocked logout becomes retryable, then explicit save/history and safe locati
 it("snapshot401 while a structural command waits prevents MOVE and keeps the old session", async () => {
   const pending = deferred(); intercept = (r, u) => r.method === "POST" && u.pathname.endsWith("/snapshots") ? pending.promise : undefined;
   const { router } = await mount(); const input = await title(); fireEvent.change(input, { target: { value: "结构命令失效留稿" } });
-  fireEvent.click(screen.getByRole("button", { name: "移动笔记" })); fireEvent.click(await screen.findByRole("button", { name: "确认移动" }));
+  await selectNoteAction("移动笔记"); fireEvent.click(await screen.findByRole("button", { name: "确认移动" }));
   await waitFor(() => expect(calls("POST", "/snapshots")).toHaveLength(1)); await act(async () => pending.resolve(failure(401)));
   await screen.findByText("会话已失效，本地草稿已保留"); expect(calls("POST", "/move")).toHaveLength(0);
   expect(router.state.location.pathname).toBe(`/notes/${id(1)}`); expect(input).toHaveValue("结构命令失效留稿");
@@ -341,7 +384,7 @@ it("t31_editor_all_business_controls_mounted uses actual menus, upload, code and
   await mount(); await title();
   expect(await screen.findByRole("group", { name: "笔记图片上传" })).toBeInTheDocument();
   expect(screen.getByRole("combobox", { name: "代码语言" })).toBeInTheDocument();
-  expect(screen.getByRole("region", { name: "笔记标签与资料关联" })).toBeInTheDocument();
+  expect(within(await openAssociations()).getByRole("region", { name: "笔记标签与资料关联" })).toBeInTheDocument();
   expect(requests.some(r => new URL(r.url).pathname.endsWith(`/entities/note/${id(1)}/tags`))).toBe(true);
   expect(requests.some(r => new URL(r.url).pathname.endsWith("/links"))).toBe(true);
 });
@@ -358,7 +401,7 @@ it("association401 during a successful pending save prevents the later snapshot 
 });
 it("association401 during pending history prevents a subsequently queued MOVE", async () => {
   const links = deferred(); const history = deferred(); intercept = (r, u) => u.pathname.endsWith("/links") ? links.promise : r.method === "POST" && u.pathname.endsWith("/snapshots") ? history.promise : undefined;
-  await mount(); const input = await title(); fireEvent.click(screen.getByRole("button", { name: "移动笔记" })); fireEvent.click(await screen.findByRole("button", { name: "确认移动" }));
+  await mount(); const input = await title(); await selectNoteAction("移动笔记"); fireEvent.click(await screen.findByRole("button", { name: "确认移动" }));
   await waitFor(() => expect(calls("POST", "/snapshots")).toHaveLength(1)); await act(async () => links.resolve(failure(401)));
   await screen.findByText("会话已失效，本地草稿已保留"); await act(async () => history.resolve(json(snapshot(notes[0]!), 201)));
   await waitFor(() => expect(screen.getAllByText(/会话已失效，草稿已保留/).length).toBeGreaterThan(0));
@@ -366,7 +409,7 @@ it("association401 during pending history prevents a subsequently queued MOVE", 
 });
 it("association401 during pending history prevents a subsequently queued DELETE", async () => {
   const links = deferred(); const history = deferred(); intercept = (r, u) => u.pathname.endsWith("/links") ? links.promise : r.method === "POST" && u.pathname.endsWith("/snapshots") ? history.promise : undefined;
-  const { router } = await mount(); const input = await title(); fireEvent.click(screen.getByRole("button", { name: "删除笔记" })); fireEvent.click(await screen.findByRole("button", { name: "确认删除" }));
+  const { router } = await mount(); const input = await title(); await selectNoteAction("删除笔记"); fireEvent.click(await screen.findByRole("button", { name: "确认删除" }));
   await waitFor(() => expect(calls("POST", "/snapshots")).toHaveLength(1)); await act(async () => links.resolve(failure(401)));
   await screen.findByText("会话已失效，本地草稿已保留"); await act(async () => history.resolve(json(snapshot(notes[0]!), 201)));
   await waitFor(() => expect(screen.getByRole("button", { name: "确认删除" })).toBeEnabled());
@@ -375,14 +418,14 @@ it("association401 during pending history prevents a subsequently queued DELETE"
 
 it("removing a child allows its parent DELETE, and each confirmed deletion leaves an independent receipt", async () => {
   notes = [note(1), note(2, 1)]; intercept = (r, u) => r.method === "DELETE" && notes.some(n => n.parent_id === u.pathname.split("/").at(-1)) ? failure(409) : undefined;
-  const { router } = await mount(); await title(); fireEvent.click(screen.getByRole("button", { name: "删除笔记" })); fireEvent.click(await screen.findByRole("button", { name: "确认删除" }));
+  const { router } = await mount(); await title(); await selectNoteAction("删除笔记"); fireEvent.click(await screen.findByRole("button", { name: "确认删除" }));
   await waitFor(() => expect(calls("DELETE", id(1))).toHaveLength(1)); expect(notes).toHaveLength(2);
   fireEvent.click(screen.getByRole("button", { name: "取消" }));
   await act(async () => { await router.navigate({ to: "/notes/$noteId", params: { noteId: id(2) } }); });
-  fireEvent.click(await screen.findByRole("button", { name: "删除笔记" })); fireEvent.click(await screen.findByRole("button", { name: "确认删除" }));
+  await selectNoteAction("删除笔记"); fireEvent.click(await screen.findByRole("button", { name: "确认删除" }));
   await waitFor(() => expect(router.state.location.pathname).toBe("/notes")); expect(notes.map(n => n.id)).toEqual([id(1)]);
   fireEvent.click(await screen.findByRole("treeitem", { name: "笔记1" }));
-  fireEvent.click(await screen.findByRole("button", { name: "删除笔记" })); fireEvent.click(await screen.findByRole("button", { name: "确认删除" }));
+  await selectNoteAction("删除笔记"); fireEvent.click(await screen.findByRole("button", { name: "确认删除" }));
   await waitFor(() => expect(router.state.location.pathname).toBe("/notes")); expect(notes).toHaveLength(0);
   expect(screen.getByRole("button", { name: "恢复本次删除 笔记1" })).toBeInTheDocument(); expect(screen.getByRole("button", { name: "恢复本次删除 笔记2" })).toBeInTheDocument();
 });
@@ -405,6 +448,8 @@ it("association tag creation acknowledged after independent401 pauses assignment
     return undefined;
   };
   const { bundle, router } = await mount(); const input = await title();
+  const associations = await openAssociations();
+  fireEvent.click(within(associations).getByRole("button", { name: "添加标签" }));
   const create = await screen.findByRole("button", { name: "创建并添加标签" }); await waitFor(() => expect(create).toBeEnabled());
   fireEvent.change(screen.getByRole("textbox", { name: "新标签名称" }), { target: { value: "失效后保留标签" } }); fireEvent.click(create);
   await waitFor(() => expect(calls("POST", "/tags")).toHaveLength(1));
@@ -414,9 +459,10 @@ it("association tag creation acknowledged after independent401 pauses assignment
   expect(calls("PUT", `/tags/${id(98)}`)).toHaveLength(0); expect(assigned).toBe(false);
   expect(input).toHaveValue("笔记1"); expect(router.state.location.pathname).toBe(`/notes/${id(1)}`);
   expect(screen.getByRole("button", { name: "添加已有标签" })).toBeDisabled();
-  expired = false; fireEvent.click(screen.getByRole("button", { name: "已重新登录，重试原版本" }));
+  fireEvent.click(within(associations).getByRole("button", { name: "关闭" }));
+  expired = false; fireEvent.click(await screen.findByRole("button", { name: "已重新登录，重试原版本" }));
   await waitFor(() => expect(screen.queryByText("会话已失效，本地草稿已保留")).not.toBeInTheDocument());
-  const retryRead = screen.queryByRole("button", { name: "重试读取" }); if (retryRead) fireEvent.click(retryRead);
+  await openAssociations();
   await waitFor(() => expect(screen.getByRole("button", { name: "添加已有标签" })).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "添加已有标签" }));
   await screen.findByRole("button", { name: "移除标签 失效后保留标签" });
@@ -513,7 +559,7 @@ it("uppercase UUID retains the initialized draft after401 and a failed reauthent
   expect(screen.getByRole("region", { name: "当前笔记" }).querySelector('[contenteditable="false"]')).toBe(editor);
   expect(screen.getByText(/当前基础版本 1/)).toBeInTheDocument(); expect(router.state.location.pathname).toBe(path);
   expect(calls("PATCH", canonical)).toHaveLength(1);
-  fireEvent.click(screen.getByRole("button", { name: "复制当前草稿" }));
+  await selectNoteAction("复制当前草稿");
   expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("大写路径失效后保留草稿"));
   expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("认证失败仍保留的正文"));
   expired = false; fireEvent.click(screen.getByRole("button", { name: "已重新登录，重试原版本" }));
