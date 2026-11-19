@@ -278,7 +278,14 @@ pub async fn retry_failed(ctx: &AppContext, job_id: Uuid) -> Result<Job, DomainJ
 
     let state = JobState::parse(&original.state)
         .ok_or_else(|| DbError::UnknownJobState(original.state.clone()))?;
-    if !matches!(state, JobState::Failed | JobState::Cancelled) {
+    let retired: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT FROM outbox WHERE topic='restore.retired_job' AND job_id=$1)",
+    )
+    .bind(job_id)
+    .fetch_one(ctx.pool())
+    .await
+    .map_err(DbError::from)?;
+    if retired || !matches!(state, JobState::Failed | JobState::Cancelled) {
         return Err(DomainJobError::NotRetryable {
             job_id,
             state: original.state,

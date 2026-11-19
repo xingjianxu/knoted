@@ -100,7 +100,8 @@ pub async fn enqueue(
     // omitted these two fields; their fixed v1 identities must not silently
     // change when a future parser/options revision changes the current values.
     let failed: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM jobs WHERE kind=$1 AND state='failed' \
+        "SELECT EXISTS(SELECT 1 FROM jobs j WHERE kind=$1 AND state='failed' \
+         AND NOT EXISTS(SELECT FROM outbox o WHERE o.job_id=j.id AND o.topic='restore.retired_job') \
          AND payload->>'source_id'=$2 AND payload->>'content_version'=$3 \
          AND COALESCE(payload->>'parser_revision','rust-text-v1')=$4 \
          AND COALESCE(payload->>'options_hash','6541278e7ee4c2460f494c6f29778d64d8fb1f81d5fe19a1ae7e4d914b60272f')=$5)",

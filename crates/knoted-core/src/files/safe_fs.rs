@@ -236,7 +236,7 @@ fn mounted_paths_overlap(
 
 /// An explicitly configured parent can live on a mounted volume. A collection
 /// root and its children must be ordinary directories within that volume.
-pub(crate) fn open_collection_directory(dir: impl AsFd, name: &Path) -> std::io::Result<OwnedFd> {
+pub fn open_collection_directory(dir: impl AsFd, name: &Path) -> std::io::Result<OwnedFd> {
     Ok(fs::openat2(
         dir,
         name,
