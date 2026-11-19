@@ -52,6 +52,7 @@ pub struct CreateOutcome {
 /// Typed client for the Python service.
 #[derive(Debug, Clone)]
 pub struct IntelligenceClient {
+    submissions: Option<sqlx::PgPool>,
     base_url: String,
     http: reqwest::Client,
     cancel_timeout: Duration,
@@ -61,10 +62,19 @@ impl IntelligenceClient {
     /// Builds a client with the default timeout and rustls TLS.
     pub fn new(base_url: impl Into<String>) -> Result<IntelligenceClient, IntelligenceError> {
         let http = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(DEFAULT_TIMEOUT)
             .user_agent(USER_AGENT)
             .build()?;
         IntelligenceClient::with_client(base_url, http)
+    }
+
+    /// Application clients register every outbound create, including idempotent
+    /// resends, before dispatch. Standalone protocol probes have no database.
+    pub fn from_context(ctx: &crate::context::AppContext) -> Result<Self, IntelligenceError> {
+        let mut client = Self::new(&ctx.intelligence().base_url)?;
+        client.submissions = Some(ctx.pool().clone());
+        Ok(client)
     }
 
     /// Builds a client around an existing `reqwest::Client`.
@@ -87,6 +97,7 @@ impl IntelligenceClient {
             });
         }
         Ok(IntelligenceClient {
+            submissions: None,
             base_url: trimmed.to_owned(),
             http,
             cancel_timeout: CANCEL_TIMEOUT,
@@ -114,6 +125,21 @@ impl IntelligenceClient {
         &self,
         request: &ExecutionRequest,
     ) -> Result<CreateOutcome, IntelligenceError> {
+        let submission = Uuid::new_v4();
+        if let Some(pool) = &self.submissions {
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(|_| IntelligenceError::SubmissionLedger)?;
+            sqlx::query("INSERT INTO maintenance_external_targets VALUES ('python',$1,'') ON CONFLICT DO NOTHING")
+                .bind(&self.base_url).execute(&mut *tx).await.map_err(|_| IntelligenceError::SubmissionLedger)?;
+            sqlx::query("INSERT INTO maintenance_external_submissions (id,service,execution_request) VALUES ($1,'python',$2)")
+                .bind(submission).bind(sqlx::types::Json(request)).execute(&mut *tx).await
+                .map_err(|_| IntelligenceError::SubmissionLedger)?;
+            tx.commit()
+                .await
+                .map_err(|_| IntelligenceError::SubmissionLedger)?;
+        }
         let response = self
             .http
             .post(format!("{}{EXECUTIONS_PATH}", self.base_url))
@@ -123,11 +149,39 @@ impl IntelligenceClient {
         let created = match response.status() {
             StatusCode::CREATED => true,
             StatusCode::OK => false,
-            _ => return Err(self.rejection("create_execution", response).await),
+            _ => {
+                let error = self.rejection("create_execution", response).await;
+                let rejected = matches!(&error, IntelligenceError::Status {status, code:Some(code), ..}
+                    if matches!((*status,code.as_str()), (409,"execution_conflict") | (422,"validation_failed") | (404,"not_found") | (405,"method_not_allowed")));
+                if let Some(pool) = &self.submissions
+                    && rejected
+                {
+                    sqlx::query("DELETE FROM maintenance_external_submissions WHERE id=$1")
+                        .bind(submission)
+                        .execute(pool)
+                        .await
+                        .map_err(|_| IntelligenceError::SubmissionLedger)?;
+                }
+                return Err(error);
+            }
         };
         let record: ExecutionRecord = decode(response, "create_execution").await?;
         record.verify_echo(request)?;
+        self.acknowledge_registration(request).await?;
         Ok(CreateOutcome { record, created })
+    }
+
+    async fn acknowledge_registration(
+        &self,
+        request: &ExecutionRequest,
+    ) -> Result<(), IntelligenceError> {
+        if let Some(pool) = &self.submissions {
+            // Python durably registers the id before returning a matching echo.
+            // A delayed duplicate of this exact request cannot start a second job.
+            sqlx::query("DELETE FROM maintenance_external_submissions WHERE service='python' AND execution_request=$1")
+                .bind(sqlx::types::Json(request)).execute(pool).await.map_err(|_| IntelligenceError::SubmissionLedger)?;
+        }
+        Ok(())
     }
 
     /// Reads the current record.
@@ -245,6 +299,7 @@ impl IntelligenceClient {
             Err(error) => return Err(error),
         };
         record.verify_echo(request)?;
+        self.acknowledge_registration(request).await?;
         if record.verify_resource_exit(request).is_ok() {
             return Ok(());
         }

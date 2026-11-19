@@ -97,7 +97,7 @@ async fn execute_python(
         files::pdf,
         intelligence::{ExecutionKind, ExecutionRequest, ExecutionState, IntelligenceClient},
     };
-    let client = match IntelligenceClient::new(&ctx.intelligence().base_url) {
+    let client = match IntelligenceClient::from_context(ctx) {
         Ok(client) => client,
         Err(_) => return temporary("intelligence configuration unavailable"),
     };
@@ -235,7 +235,7 @@ async fn cancel_registered(ctx: &AppContext, lease: &Lease) -> bool {
     let Ok(attempts) = extraction::load_attempts(ctx.pool(), lease.job_id).await else {
         return false;
     };
-    let Ok(client) = IntelligenceClient::new(&ctx.intelligence().base_url) else {
+    let Ok(client) = IntelligenceClient::from_context(ctx) else {
         return false;
     };
     let current: Option<uuid::Uuid> =

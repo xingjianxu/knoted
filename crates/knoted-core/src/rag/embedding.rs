@@ -168,7 +168,7 @@ pub async fn embed_chunks(
         verify_request(set, chunks, request)?;
     }
 
-    let client = IntelligenceClient::new(&ctx.intelligence().base_url)?;
+    let client = IntelligenceClient::from_context(ctx)?;
     let mut rows = Vec::with_capacity(set.chunks.len());
     for (chunks, request) in batches.zip(requests) {
         let body = complete_batch(ctx, &client, request).await?;
@@ -200,7 +200,7 @@ pub async fn embed_chunk_batch(
         .nth(batch_index)
         .ok_or(DomainError::InvalidRequest)?;
     verify_request(set, chunks, request)?;
-    let client = IntelligenceClient::new(&ctx.intelligence().base_url)?;
+    let client = IntelligenceClient::from_context(ctx)?;
     let body = complete_batch(ctx, &client, request).await?;
     decode_artifact(set.id, chunks.iter().map(|chunk| chunk.id), &body)
 }
@@ -240,7 +240,7 @@ pub async fn embed_query(ctx: &AppContext, text: &str) -> Result<Vec<f32>, Domai
         ctx.now() + chrono::Duration::seconds(30),
         &bytes,
     )?;
-    let client = IntelligenceClient::new(&ctx.intelligence().base_url)?;
+    let client = IntelligenceClient::from_context(ctx)?;
     let result = complete_batch(ctx, &client, &request).await;
     if (result.is_ok() || client.settle_execution(&request).await.is_ok())
         && let Some(root) = &ctx.files().staging_root
@@ -292,7 +292,7 @@ pub async fn cancel_embedding(
     ctx: &AppContext,
     request: &ExecutionRequest,
 ) -> Result<(), DomainError> {
-    let client = IntelligenceClient::new(&ctx.intelligence().base_url)?;
+    let client = IntelligenceClient::from_context(ctx)?;
     client.settle_execution(request).await?;
     Ok(())
 }

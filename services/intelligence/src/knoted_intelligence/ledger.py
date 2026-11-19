@@ -193,26 +193,22 @@ class Ledger:
             )
         return _row(row) if row is not None else None
 
-    def active_count(self) -> int:
-        return self._count_states(IN_FLIGHT_STATES)
-
-    def stuck_cancel_count(self) -> int:
-        """Executions whose child has not confirmed the cancellation yet."""
-
-        return self._count_states(("cancel_requested",))
-
-    def _count_states(self, states: Iterable[str]) -> int:
-        placeholders = ", ".join("?" for _ in states)
+    def health_counts(self) -> tuple[bool, int]:
+        """Read occupancy and unresolved terminal exits in one SQLite snapshot."""
         with self._lock:
             row = (
                 self._connection_or_raise()
                 .execute(
-                    f"SELECT COUNT(*) AS total FROM executions WHERE state IN ({placeholders})",
-                    tuple(states),
+                    """
+                SELECT count(*) FILTER (WHERE state IN ('queued','running','cancel_requested')),
+                       count(*) FILTER (WHERE state='cancel_requested'
+                          OR (state NOT IN ('queued','running') AND NOT compute_exit_confirmed))
+                FROM executions
+                """
                 )
                 .fetchone()
             )
-        return int(row["total"])
+        return bool(row[1]), int(row[0])
 
     # -- writes --------------------------------------------------------------
 

@@ -240,10 +240,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def get_health() -> HealthStatus:
         # Degraded means at least one cancellation has not been confirmed: a
         # child is still alive after the supervisor signalled its group.
-        degraded = scheduler.degraded() or ledger.stuck_cancel_count() > 0
+        degraded, active = scheduler.health()
         return HealthStatus(
             status=HealthState.DEGRADED if degraded else HealthState.OK,
-            active_executions=ledger.active_count(),
+            active_executions=active,
         )
 
     return app
