@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use knoted_api::admin::{self, TokenCommand};
+use knoted_api::admin::{self, TokenCommand, backup};
 use knoted_api::build_router_with_auth;
 use knoted_api::logging;
 use knoted_core::config::{AppConfig, ProcessKind};
@@ -18,7 +18,8 @@ use knoted_core::context::AppContext;
 use knoted_core::db;
 
 const USAGE: &str = "usage: knoted-api [--config <PATH>]\n       \
-     knoted-api admin token --purpose <bootstrap|recovery> --config <PATH>";
+     knoted-api admin token --purpose <bootstrap|recovery> --config <PATH>\n       \
+     knoted-api admin backup --output <new-directory> [--config <PATH>]";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -152,6 +153,7 @@ async fn run_admin(args: &[String]) -> ExitCode {
 
     match subcommand.as_str() {
         "token" => run_admin_token(&args[1..]).await,
+        "backup" => run_admin_backup(&args[1..]).await,
         "--help" | "help" => {
             println!("{USAGE}");
             ExitCode::SUCCESS
@@ -195,6 +197,35 @@ async fn run_admin_token(args: &[String]) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             tracing::error!(error = %error, "admin token command failed");
+            eprintln!("knoted-api: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run_admin_backup(args: &[String]) -> ExitCode {
+    if args == ["--help"] {
+        println!("{}", backup::USAGE);
+        return ExitCode::SUCCESS;
+    }
+    let command = match backup::BackupCommand::parse(args) {
+        Ok(command) => command,
+        Err(error) => {
+            eprintln!("knoted-api: {error}");
+            eprintln!("{}", backup::USAGE);
+            return ExitCode::from(2);
+        }
+    };
+    let Ok(config) = AppConfig::load_for_process(&command.config, ProcessKind::Api) else {
+        eprintln!("knoted-api: backup configuration could not be loaded");
+        return ExitCode::FAILURE;
+    };
+    match backup::run(&command, &config).await {
+        Ok(manifest) => {
+            println!("backup complete ({} images)", manifest.assets.len());
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
             eprintln!("knoted-api: {error}");
             ExitCode::FAILURE
         }

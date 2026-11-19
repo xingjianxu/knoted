@@ -77,6 +77,57 @@ pub(crate) fn open_collection_root(
     Ok(directory)
 }
 
+/// Create one new private archive leaf without following links or writing into
+/// configured data directories, including their bind-mount aliases.
+pub fn create_backup_directory(path: &Path, protected: &[&Path]) -> io::Result<OwnedFd> {
+    let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
+    let name = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;
+    let parent_fd = open_root(parent)?;
+    let absolute = parent.canonicalize()?.join(name);
+    let mounts = std::fs::read("/proc/self/mountinfo")?;
+    let parent_mount = mount_id(&parent_fd)?;
+    for root in protected {
+        let (resolved, ancestor) = resolved_location(root)?;
+        if absolute.starts_with(&resolved)
+            || resolved.starts_with(&absolute)
+            || mounted_paths_overlap(
+                &mounts,
+                &absolute,
+                parent_mount,
+                &resolved,
+                mount_id(open_root(&ancestor)?)?,
+            )?
+        {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+    }
+    fs::mkdirat(&parent_fd, name, Mode::RWXU)?;
+    let directory = open_collection_directory(&parent_fd, Path::new(name))?;
+    fs::fsync(&parent_fd)?;
+    Ok(directory)
+}
+
+// A configured asset or staging root may still be absent on an empty
+// instance. Its deepest existing ancestor identifies the prospective mount.
+fn resolved_location(path: &Path) -> io::Result<(PathBuf, PathBuf)> {
+    let mut ancestor = path;
+    loop {
+        match ancestor.symlink_metadata() {
+            Ok(_) => {
+                let canonical = ancestor.canonicalize()?;
+                let suffix = path
+                    .strip_prefix(ancestor)
+                    .map_err(|_| io::ErrorKind::InvalidInput)?;
+                return Ok((canonical.join(suffix), canonical));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                ancestor = ancestor.parent().ok_or(io::ErrorKind::InvalidInput)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 fn mount_id(dir: impl AsFd) -> io::Result<u64> {
     let stat = fs::statx(dir, "", AtFlags::EMPTY_PATH, StatxFlags::MNT_ID)?;
     if !StatxFlags::from_bits_retain(stat.stx_mask).contains(StatxFlags::MNT_ID) {

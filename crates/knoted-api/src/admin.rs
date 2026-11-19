@@ -1,13 +1,14 @@
 //! The `knoted-api admin ...` commands.
 //!
 //! The API process also serves as the operator's administrative entry point, so
-//! the deployment needs no second binary. The only command is `token`, which
-//! issues the one-time credential token used by the browser's bootstrap or
-//! recovery ceremony.
+//! the deployment needs no second binary. The `token` command issues a
+//! one-time browser credential. The `backup` command writes a local archive.
 //!
 //! The token is printed to stdout exactly once and never logged: stdout is the
 //! operator's channel (a shell, an SSH session), while logs are collected and
 //! retained. Error messages are fixed strings for the same reason.
+
+pub mod backup;
 
 use std::io::{self, Write};
 use std::path::PathBuf;
