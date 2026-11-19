@@ -43,7 +43,23 @@ createdb -h 127.0.0.1 knoted_dev        # 开发/测试；生产用另一个库�
 
 schema 由编排里的 `migrate` 进程管理（`sqlx migrate run`）；库不存在时迁移失败并打印上面这条命令。Python 15603、Strata 15604、Meilisearch 15605 端口保持预留，暂不纳入编排。端口启动前检查，占用时失败并报告，不杀其他进程或自动漂移。生产端口不在本计划内。
 
-重启语义：`process restart knoted-api` 或 `process restart knoted-worker` 不重跑迁移；改模板、编排或环境变量后需 `down` 再 `up`（`prepare` 才会重跑）。
+重启语义：`process restart knoted-api` 或 `process restart knoted-worker` 不重跑迁移。手动改模板、编排或渲染配置所用变量后，需 `pnpm pc down` 再 `pnpm pc up -D`（`prepare` 才会重跑）。
+
+### 本地问答配置
+
+`pnpm pc up -D` 与 `pnpm deploy:dev` 共用 `/data/knoted-dev/service/deploy.env`。启动时，非空的显式环境变量覆盖文件，其余从文件加载。不执行文件内容：每行只写一个 `KEY=VALUE`（不加 Shell 引号、不写 `export`），允许空行及以 `#` 开头的注释，忽略不在白名单内的键。文件仅存设置和凭据**路径**，不要放密钥本身。
+
+本机 Strata 的三个变量需要一起配置；隔离实例可不配置本地模型：
+
+```dotenv
+KNOTED_CHAT_LOCAL_BASE_URL=http://127.0.0.1:15604
+KNOTED_CHAT_LOCAL_MODEL=qwen3.8-flash-next-iq3_s
+KNOTED_CHAT_LOCAL_CREDENTIAL_FILE=/run/strata/api-key
+```
+
+如需关闭本地模型，同时移除文件中的这三个键，并确保启动会话中没有相应覆盖值。已有 `deploy.env` 时，部署不会从旧进程回填这三个键。
+
+执行启动或部署的会话需已继承 `strata-clients` 组权限。用 `id -nG` 和 `test -r /run/strata/api-key` 核对；若用户已入组但旧会话未继承，重新登录（或 `sg strata-clients` 开启新会话）。已经运行的 process-compose 需要完整 `down` / `up -D`，只重启 Worker 不会更新继承的组。启动与部署会拒绝不完整或凭据文件不可读的模型配置，不打印凭据。此检查不依赖 Strata 网络健康；问答端到端验收仍需实际发起问题。
 
 证书来源参考receiptd；不是复用其Next/Bun启动器。缺证书/过期/名称不符拒绝HTTPS入口启动；ACME续期reload测试入口。API readiness只检查阶段所需依赖；模型不可用时基本笔记业务仍可用并显示能力不可用。
 
@@ -61,9 +77,9 @@ schema 由编排里的 `migrate` 进程管理（`sqlx migrate run`）；库不�
 | 构建 | 在运行变量就绪之后执行——Vite 用 `KNOTED_OFFICE_ORIGIN` 决定是否编入 Office，变量必须在构建前确定 |
 | 判迁移 | 比对旧 `current` 与新产物 `share/knoted/migrations/*.sql` 文件名集合 |
 | 切换 | `current` 用 `ln` + `mv -Tf` 原子替换；共享 Caddy 静态根随即指向新产物 |
-| 重启 | 集合有变：先 `pnpm pc down`（停止失败则指针不切、实例仍旧版本）再 `up -D`（重跑 prepare/migrate）；无变：依次 `process restart` api / worker / intelligence（intelligence 也来自产物目录，不能漏），单个 restart 失败则退回到 `down` + `up -D` |
-| 验证 | `REVISION` 匹配、完整 `SHA256SUMS` 校验、API `/health/ready`、intelligence health、三个进程 `/proc/<pid>/exe` 落在新目录、`https://$domain:$HTTPS_PORT/` 200。readiness 与进程映像在同一个收敛等待里重试（worker 要等 process-compose 自己观察到 intelligence 健康后才被拉起，探针一过就扫 `/proc` 会误报） |
-| 失败 | 切换前失败：不改指针、不重启（运行变量文件可能已写入，不影响业务）。切换后失败且**迁移集合未变**：复位 `current` 并重启回旧版本。切换后失败且**包含迁移**：保留新产物（只回退指针会与已应用的 schema 冲突）、打印 `process logs` 入口、退出非 0 |
+| 重启 | 迁移集合或 `[chat.local]` 有变：先 `pnpm pc down`（停止失败则指针不切、实例仍旧版本），再 `up -D` 重跑 prepare/migrate。模型配置即使在同 SHA 部署也会检查；若不变且实例在运行，同 SHA 只做验证，不同 SHA 依次 `process restart` api / worker / intelligence（失败则退回完整启动）。 |
+| 验证 | `REVISION` 匹配、完整 `SHA256SUMS` 校验、API `/health/ready`、intelligence health、三个进程 `/proc/<pid>/exe` 落在目标目录、`https://$domain:$HTTPS_PORT/` 200、实际渲染的 `[chat.local]` 以及 API/Worker 启动时记录的配置摘要与预期一致。readiness 与进程映像在同一个收敛等待里重试（worker 要等 process-compose 自己观察到 intelligence 健康后才被拉起）。 |
+| 失败 | 运行配置预检或发布运行变量文件失败：不停止实例、不切指针。切换或同 SHA 重载后失败且**迁移集合未变**：尝试复位 `current` 和上次运行设置，再启动旧实例。切换后失败且**包含迁移**：保留新产物（只回退指针会与已应用的 schema 冲突）、打印 `process logs` 入口、退出非 0。 |
 
 运行变量白名单（只存路径与开关，不存密钥）：`KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR`、`KNOTED_INTELLIGENCE_BGE_M3_DIR`（这两个缺失时脚本在切换前拒绝）、`KNOTED_SEARCH_ENABLED`、`KNOTED_SEARCH_CREDENTIAL_FILE`、`KNOTED_VECTORS_ENABLED`、`KNOTED_OFFICE_ORIGIN`、`KNOTED_OFFICE_JWT_SECRET_FILE`、`KNOTED_CHAT_LOCAL_BASE_URL`、`KNOTED_CHAT_LOCAL_MODEL`、`KNOTED_CHAT_LOCAL_CREDENTIAL_FILE`。
 

@@ -78,7 +78,7 @@ function writeManifest(root) {
   assert.equal(result.status, 0, `manifest fixture failed: ${result.stderr}`);
 }
 
-// build-artifact.sh 的产物形状：只提供部署脚本实际校验的条目。
+// 固定产物最小形状，供部署脚本及真实 prepare 验证。
 function createArtifact(parent, revision, migrations = ["0001_registry.sql"]) {
   const root = join(parent, revision);
   mkdirSync(join(root, "bin"), { recursive: true });
@@ -86,12 +86,24 @@ function createArtifact(parent, revision, migrations = ["0001_registry.sql"]) {
   mkdirSync(join(root, "share/knoted/migrations"), { recursive: true });
   mkdirSync(join(root, "share/knoted/intelligence/python/bin"), { recursive: true });
   for (const name of ["knoted-api", "knoted-worker", "knoted-intelligence"]) {
-    writeExecutable(join(root, `bin/${name}`), "#!/usr/bin/env bash\nexit 0\n");
+    writeExecutable(join(root, `bin/${name}`), '#!/usr/bin/env bash\nprintf "%s" "${KNOTED_DEV_CHAT_CONFIG_DIGEST:-}"\n');
   }
   writeExecutable(
     join(root, "share/knoted/intelligence/python/bin/python3.12"),
     '#!/usr/bin/env bash\nexec python3 "$@"\n',
   );
+  for (const required of [
+    "BUILD.json", "requirements.txt", "uv.lock", "python/lib/python3.12/os.py",
+    ...[
+      "knoted_intelligence/app.py", "knoted_intelligence/guardian.py", "knoted_intelligence/supervision.py",
+      "knoted_intelligence/parsing/pdf.py", "docling/document_converter.py",
+      "torch/__init__.py", "onnxruntime/__init__.py",
+    ].map(name => `python/lib/python3.12/site-packages/${name}`),
+  ]) {
+    const path = join(root, "share/knoted/intelligence", required);
+    mkdirSync(resolve(path, ".."), { recursive: true });
+    writeFileSync(path, "fixture\n");
+  }
   writeFileSync(join(root, "share/knoted/web/index.html"), "<!doctype html><title>knoted</title>\n");
   for (const migration of migrations) {
     writeFileSync(join(root, `share/knoted/migrations/${migration}`), "select 1;\n");
@@ -113,6 +125,7 @@ function createProcFixture(procRoot, artifactRoot) {
   Object.values(processImages).forEach((image, index) => {
     mkdirSync(join(procRoot, String(1000 + index)), { recursive: true });
     symlinkSync(join(artifactRoot, image), join(procRoot, String(1000 + index), "exe"));
+    if (index < 2) writeFileSync(join(procRoot, String(1000 + index), "environ"), "KNOTED_DEV_CHAT_CONFIG_DIGEST=none\0");
   });
   // 生产实例跑在 Nix store 里，必须不被 dev 部署的进程校验误伤。
   mkdirSync(join(procRoot, "2000"), { recursive: true });
@@ -140,7 +153,10 @@ relink() {
   done
 }
 case "$*" in
-"pc process list") exit 0 ;;
+"pc process list")
+  [[ \${STUB_INSTANCE_STOPPED:-0} != 1 ]] || exit 1
+  exit 0
+  ;;
 esac
 printf '%s|%s\\n' "$PWD" "$*" >>"\${STUB_LOG:?}"
 case "$*" in
@@ -155,6 +171,16 @@ case "$*" in
   ;;
 "pc up -D")
   relink
+  if [[ \${STUB_SKIP_CHAT_CONFIG:-0} != 1 ]]; then
+    export KNOTED_RUNTIME_ROOT="\${STUB_RUNTIME_PARENT:?}/current"
+    bash "\${STUB_SERVICE_SCRIPT:?}" prepare
+    if [[ \${STUB_SKIP_CHAT_MARKER:-0} != 1 ]]; then
+      marker=$(bash "$STUB_SERVICE_SCRIPT" api)
+      printf 'KNOTED_DEV_CHAT_CONFIG_DIGEST=%s\\0' "$marker" > "$STUB_PROC/1000/environ"
+      marker=$(bash "$STUB_SERVICE_SCRIPT" worker)
+      printf 'KNOTED_DEV_CHAT_CONFIG_DIGEST=%s\\0' "$marker" > "$STUB_PROC/1001/environ"
+    fi
+  fi
   exit 0
   ;;
 esac
@@ -257,6 +283,8 @@ function fixture({
     STUB_RUNTIME_PARENT: runtimeParentDir,
     STUB_PROC: procRoot,
     STUB_ARTIFACT_TEMPLATE: templateRoot,
+    STUB_SERVICE_SCRIPT: join(repoRoot, "tools/dev/pc/service.sh"),
+    KNOTED_ALLOW_BUSY_PORTS: "1",
     KNOTED_BUILD_ROOT: join(base, "build"),
     // 运行变量必须由 deploy.env 或活动进程提供，不能从测试宿主环境串味。
     KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR: "",
@@ -265,6 +293,9 @@ function fixture({
     KNOTED_VECTORS_ENABLED: "",
     KNOTED_OFFICE_ORIGIN: "",
     KNOTED_OFFICE_JWT_SECRET_FILE: "",
+    KNOTED_CHAT_LOCAL_BASE_URL: "",
+    KNOTED_CHAT_LOCAL_MODEL: "",
+    KNOTED_CHAT_LOCAL_CREDENTIAL_FILE: "",
   };
   return { base, instanceRoot, runtimeParentDir, procRoot, logFile, env, templateRoot };
 }
@@ -314,6 +345,25 @@ const runtimeVariables = {
   KNOTED_OFFICE_JWT_SECRET_FILE: "/var/lib/onlyoffice-secrets/jwt",
 };
 
+function useCurrentRevision(context) {
+  const target = join(context.runtimeParentDir, targetRevision);
+  rmSync(join(context.runtimeParentDir, "current"));
+  symlinkSync(target, join(context.runtimeParentDir, "current"));
+  rmSync(context.procRoot, { recursive: true, force: true });
+  mkdirSync(context.procRoot, { recursive: true });
+  createProcFixture(context.procRoot, target);
+}
+
+function modelVariables(context) {
+  const credential = join(context.instanceRoot, "model-credential=");
+  writeFileSync(credential, "synthetic\n", { mode: 0o600 });
+  return {
+    KNOTED_CHAT_LOCAL_BASE_URL: "http://127.0.0.1:15604",
+    KNOTED_CHAT_LOCAL_MODEL: "fixture-model",
+    KNOTED_CHAT_LOCAL_CREDENTIAL_FILE: credential,
+  };
+}
+
 describe("deploy-dev.sh", () => {
   it("新迁移触发 down + up -D 并切换指针", () => {
     const context = fixture({ targetMigrations: ["0001_registry.sql", "0002_notes.sql"] });
@@ -355,17 +405,189 @@ describe("deploy-dev.sh", () => {
 
   it("已是最新提交时不构建不重启", () => {
     const context = fixture({ targetMigrations: ["0001_registry.sql"] });
-    rmSync(join(context.runtimeParentDir, previousRevision), { recursive: true, force: true });
-    rmSync(join(context.runtimeParentDir, "current"));
-    symlinkSync(join(context.runtimeParentDir, targetRevision), join(context.runtimeParentDir, "current"));
-    rmSync(context.procRoot, { recursive: true, force: true });
-    mkdirSync(context.procRoot, { recursive: true });
-    createProcFixture(context.procRoot, join(context.runtimeParentDir, targetRevision));
+    useCurrentRevision(context);
+    writeDeployEnv(context.instanceRoot, runtimeVariables);
 
     const result = deploy(context);
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(pcArgs(context.logFile), []);
     assert.match(result.stderr, /已是最新/);
+  });
+
+  it("同 SHA 部署重载模型，重复部署不重启", () => {
+    const context = fixture();
+    useCurrentRevision(context);
+    writeDeployEnv(context.instanceRoot, { ...runtimeVariables, ...modelVariables(context) });
+    const first = deploy(context);
+    assert.equal(first.status, 0, first.stderr);
+    assert.deepEqual(pcArgs(context.logFile), ["pc down", "pc up -D"]);
+    const conf = join(context.instanceRoot, "config/knoted.toml");
+    assert.match(readFileSync(conf, "utf8"), /^model = "fixture-model"$/m);
+
+    writeFileSync(context.logFile, "");
+    const second = deploy(context);
+    assert.equal(second.status, 0, second.stderr);
+    assert.deepEqual(pcArgs(context.logFile), []);
+  });
+
+  it("迁移不变但模型变更时仍重新运行 prepare", () => {
+    const context = fixture();
+    writeDeployEnv(context.instanceRoot, { ...runtimeVariables, ...modelVariables(context) });
+    const result = deploy(context);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, targetRevision));
+    assert.deepEqual(pcArgs(context.logFile), ["pc down", "pc up -D"]);
+  });
+
+  it("凭据无法读取时在写 deploy.env 或停止实例前失败", () => {
+    const context = fixture();
+    useCurrentRevision(context);
+    writeDeployEnv(context.instanceRoot, runtimeVariables);
+    Object.assign(context.env, modelVariables(context));
+    rmSync(context.env.KNOTED_CHAT_LOCAL_CREDENTIAL_FILE);
+    const result = deploy(context);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /KNOTED_CHAT_LOCAL_CREDENTIAL_FILE.*读取/);
+    assert.doesNotMatch(readFileSync(join(context.instanceRoot, "deploy.env"), "utf8"), /KNOTED_CHAT_LOCAL_/);
+    assert.deepEqual(pcArgs(context.logFile), []);
+  });
+
+  it("健康端点通过但本地模型配置未应用时不报告部署成功", () => {
+    const context = fixture();
+    useCurrentRevision(context);
+    writeDeployEnv(context.instanceRoot, { ...runtimeVariables, ...modelVariables(context) });
+    context.env.STUB_SKIP_CHAT_CONFIG = "1";
+    const result = deploy(context);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /chat\.local.*未应用/);
+  });
+
+  it("磁盘配置已更新但 Worker 未加载时也重新启动", () => {
+    const context = fixture();
+    useCurrentRevision(context);
+    const vars = modelVariables(context);
+    writeDeployEnv(context.instanceRoot, { ...runtimeVariables, ...vars });
+    mkdirSync(join(context.instanceRoot, "config"));
+    writeFileSync(join(context.instanceRoot, "config/knoted.toml"),
+      `[chat.local]\nbase_url = "${vars.KNOTED_CHAT_LOCAL_BASE_URL}"\nmodel = "fixture-model"\ncredential_file = "${vars.KNOTED_CHAT_LOCAL_CREDENTIAL_FILE}"\n`);
+    writeFileSync(join(context.procRoot, "1001/environ"), "KNOTED_DEV_CHAT_CONFIG_DIGEST=none\0");
+    const result = deploy(context);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(pcArgs(context.logFile), ["pc down", "pc up -D"]);
+  });
+
+  it("禁用聊天时也不把无摘要的旧进程误认为已应用", () => {
+    const context = fixture();
+    useCurrentRevision(context);
+    writeDeployEnv(context.instanceRoot, runtimeVariables);
+    writeFileSync(join(context.procRoot, "1000/environ"), "KNOTED_CHAT_LOCAL_MODEL=previous-model\0");
+    const result = deploy(context);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(pcArgs(context.logFile), ["pc down", "pc up -D"]);
+  });
+
+  it("无效的非聊天设置也在停止实例之前拒绝", () => {
+    const context = fixture();
+    useCurrentRevision(context);
+    writeDeployEnv(context.instanceRoot, { ...runtimeVariables, ...modelVariables(context) });
+    context.env.KNOTED_SEARCH_ENABLED = "oops";
+    const result = deploy(context);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /KNOTED_SEARCH_ENABLED/);
+    assert.deepEqual(pcArgs(context.logFile), []);
+    assert.match(readFileSync(join(context.instanceRoot, "deploy.env"), "utf8"), /^KNOTED_SEARCH_ENABLED=1$/m);
+  });
+
+  it("模板渲染会拒绝的设置在停止实例前失败", () => {
+    const context = fixture();
+    useCurrentRevision(context);
+    writeDeployEnv(context.instanceRoot, { ...runtimeVariables, ...modelVariables(context) });
+    context.env.KNOTED_CHAT_LOCAL_MODEL = "fixture@MODEL@";
+    const result = deploy(context);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /未替换占位符/);
+    assert.deepEqual(pcArgs(context.logFile), []);
+  });
+
+  it("无法发布配置文件时不停止现有实例", () => {
+    const context = fixture();
+    useCurrentRevision(context);
+    writeDeployEnv(context.instanceRoot, runtimeVariables);
+    Object.assign(context.env, modelVariables(context));
+    writeExecutable(join(context.base, "stubs/mv"), '#!/usr/bin/env bash\n[[ ${!#} != */deploy.env ]] || exit 1\nexec ' + run("which", ["mv"]).stdout.trim() + ' "$@"\n');
+    const result = deploy(context);
+    assert.notEqual(result.status, 0);
+    assert.deepEqual(pcArgs(context.logFile), []);
+  });
+
+  it("删去文件中的模型配置时不从旧进程恢复", () => {
+    const context = fixture();
+    useCurrentRevision(context);
+    const vars = modelVariables(context);
+    writeDeployEnv(context.instanceRoot, { ...runtimeVariables, ...vars });
+    const first = deploy(context);
+    assert.equal(first.status, 0, first.stderr);
+    appendFileSync(join(context.procRoot, "1000/environ"), Object.entries(vars).map(([k,v]) => `${k}=${v}\0`).join(""));
+    writeFileSync(context.logFile, "");
+    writeDeployEnv(context.instanceRoot, runtimeVariables);
+    const result = deploy(context);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(pcArgs(context.logFile), ["pc down", "pc up -D"]);
+    assert.doesNotMatch(readFileSync(join(context.instanceRoot, "deploy.env"), "utf8"), /KNOTED_CHAT_LOCAL_/);
+    assert.doesNotMatch(readFileSync(join(context.instanceRoot, "config/knoted.toml"), "utf8"), /chat\.local/);
+  });
+
+  for (const sameRevision of [true, false]) {
+    it(`${sameRevision ? "同 SHA" : "不同 SHA 无迁移"}重载验证失败时恢复此前配置`, () => {
+      const context = fixture();
+      if (sameRevision) useCurrentRevision(context);
+      const previous = currentTarget(context);
+      const vars = modelVariables(context);
+      writeDeployEnv(context.instanceRoot, { ...runtimeVariables, ...vars });
+      if (sameRevision) {
+        const first = deploy(context);
+        assert.equal(first.status, 0, first.stderr);
+      } else {
+        const prepared = run("bash", [context.env.STUB_SERVICE_SCRIPT, "prepare"], {
+          env: { ...context.env, ...runtimeVariables, ...vars, KNOTED_RUNTIME_ROOT: previous },
+        });
+        assert.equal(prepared.status, 0, prepared.stderr);
+      }
+      writeFileSync(context.logFile, "");
+      writeDeployEnv(context.instanceRoot, {
+        ...runtimeVariables, ...vars, KNOTED_CHAT_LOCAL_MODEL: "candidate-model", KNOTED_VECTORS_ENABLED: "0",
+      });
+      context.env.STUB_HTTPS_FAIL = "1";
+      const result = deploy(context);
+      assert.notEqual(result.status, 0);
+      assert.equal(currentTarget(context), previous);
+      assert.deepEqual(pcArgs(context.logFile), ["pc down", "pc up -D", "pc down", "pc up -D"]);
+      const saved = readFileSync(join(context.instanceRoot, "deploy.env"), "utf8");
+      assert.match(saved, /^KNOTED_CHAT_LOCAL_MODEL=fixture-model$/m);
+      assert.match(saved, /^KNOTED_VECTORS_ENABLED=1$/m);
+      assert.ok(saved.includes(`KNOTED_CHAT_LOCAL_CREDENTIAL_FILE=${vars.KNOTED_CHAT_LOCAL_CREDENTIAL_FILE}\n`));
+      assert.match(readFileSync(join(context.instanceRoot, "config/knoted.toml"), "utf8"), /^model = "fixture-model"$/m);
+    });
+  }
+
+  it("同 SHA 部署可以从持久配置启动已停止实例", () => {
+    const context = fixture();
+    useCurrentRevision(context);
+    writeDeployEnv(context.instanceRoot, { ...runtimeVariables, ...modelVariables(context) });
+    context.env.STUB_INSTANCE_STOPPED = "1";
+    const result = deploy(context);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(pcArgs(context.logFile), ["pc up -D"]);
+  });
+
+  it("启动后模型配置未被 Worker 加载则报告失败", () => {
+    const context = fixture();
+    useCurrentRevision(context);
+    writeDeployEnv(context.instanceRoot, { ...runtimeVariables, ...modelVariables(context) });
+    context.env.STUB_SKIP_CHAT_MARKER = "1";
+    const result = deploy(context);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /未加载.*chat\.local/);
   });
 
   it("构建失败时指针不动", () => {
@@ -493,6 +715,7 @@ describe("deploy-dev.sh", () => {
       KNOTED_INTELLIGENCE_BGE_M3_DIR: runtimeVariables.KNOTED_INTELLIGENCE_BGE_M3_DIR,
     });
     writeEnviron("1000", {
+      KNOTED_DEV_CHAT_CONFIG_DIGEST: "none",
       KNOTED_SEARCH_ENABLED: runtimeVariables.KNOTED_SEARCH_ENABLED,
       KNOTED_VECTORS_ENABLED: runtimeVariables.KNOTED_VECTORS_ENABLED,
       KNOTED_OFFICE_ORIGIN: runtimeVariables.KNOTED_OFFICE_ORIGIN,

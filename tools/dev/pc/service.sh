@@ -41,6 +41,7 @@ done
 export PATH
 
 script_dir=$(cd "${BASH_SOURCE[0]%/*}" && pwd)
+source "$script_dir/runtime-env.sh"
 
 instance_root=${KNOTED_INSTANCE_ROOT:-/data/knoted-dev/service}
 runtime_root=${KNOTED_RUNTIME_ROOT:-/data/knoted-dev/runtime/current}
@@ -142,11 +143,11 @@ verify_runtime() {
 }
 
 render_template() {
-  # render_template <template> <output> <placeholder> <value> [<placeholder> <value> …]
-  local template=$1 output=$2
-  shift 2
+  # render_template <template> <placeholder> <value> [<placeholder> <value> …]
+  local template=$1
+  shift
   local content
-  content=$(cat "$template")
+  content=$(cat "$template") || return 1
   while [ $# -ge 2 ]; do
     content=${content//"$1"/$2}
     shift 2
@@ -154,6 +155,11 @@ render_template() {
   if [[ $content =~ @[A-Z_]+@ ]]; then
     die "模板渲染后仍有未替换占位符：$template"
   fi
+  printf '%s\n' "$content"
+}
+
+publish_config() {
+  local output=$1 content=$2
   (
     umask 077
     local tmp
@@ -242,35 +248,79 @@ JS
     die "KNOTED_CHAT_LOCAL_BASE_URL 必须是无凭据、查询和片段的 HTTP(S) 回环地址，KNOTED_CHAT_LOCAL_MODEL 不得含控制字符或首尾空白"
   fi
 
+  if [[ ! -f $path || ! -r $path ]]; then
+    die "KNOTED_CHAT_LOCAL_CREDENTIAL_FILE 指定的普通文件无法读取（Strata 请在已继承 strata-clients 组的会话中启动）"
+  fi
   printf '\n[chat.local]\nbase_url = "%s"\nmodel = "%s"\ncredential_file = "%s"\n' "$base_url" "$model" "$path"
 }
 
-command_prepare() {
-  # 顺序：守卫 → 验产物 → 验依赖 → 建目录 → 渲染，失败时不留半个实例。
-  guard_worktree
-  local revision
-  revision=$(verify_runtime)
-  log "固定产物 revision=$revision"
-  require_tools
-  local office search chat_local vectors=''
-  office=$(office_config_block)
-  search=$(search_config_block)
-  chat_local=$(chat_local_config_block)
+active_chat_config() {
+  if [[ -e $config_file ]]; then
+    awk '/^\[/ { chat = ($0 == "[chat.local]") } chat && NF { print }' "$config_file"
+  fi
+}
+
+chat_config_digest() {
+  local hash
+  if [[ -z $1 ]]; then
+    printf 'none\n'
+  else
+    hash=$(printf '%s\n' "$1" | sha256sum) || return 1
+    printf '%s\n' "${hash%% *}"
+  fi
+}
+
+# 0: 与已渲染配置相符；3: 需重新 prepare；其他非零：配置无效或无法检查。
+# stdout 仅含预期配置摘要（不含凭据）。部署还会核对 API 和 Worker 启动时加载的摘要。
+command_check_chat_config() {
+  local desired active office search chat_local vectors=''
+  resolve_config_blocks || return 1
+  render_config >/dev/null || return 1
+  desired=${chat_local#$'\n'}
+  active=$(active_chat_config) || return 1
+  chat_config_digest "$desired" || return 1
+  [[ $active == "$desired" ]] || return 3
+}
+
+# 只逆向读取本脚本生成的配置项，避免把待部署的 deploy.env 当作已应用值。
+command_active_runtime_env() {
+  [[ -e $config_file ]] || return 0
+  awk '
+    function setting(key, value) {
+      sub(/^[^"]*"/, "", value); sub(/"$/, "", value)
+      print key "=" value
+    }
+    /^\[/ { section = $0 }
+    section == "[office]" && /^document_server_origin = ".*"$/ { setting("KNOTED_OFFICE_ORIGIN", $0) }
+    section == "[office]" && /^jwt_secret_file = ".*"$/ { setting("KNOTED_OFFICE_JWT_SECRET_FILE", $0) }
+    section == "[credentials]" && /^credential_file = ".*"$/ { search_path = $0 }
+    section == "[search]" && /^enabled = true$/ { search = 1 }
+    section == "[vectors]" && /^enabled = true$/ { vectors = 1 }
+    section == "[chat.local]" && /^base_url = ".*"$/ { setting("KNOTED_CHAT_LOCAL_BASE_URL", $0) }
+    section == "[chat.local]" && /^model = ".*"$/ { setting("KNOTED_CHAT_LOCAL_MODEL", $0) }
+    section == "[chat.local]" && /^credential_file = ".*"$/ { setting("KNOTED_CHAT_LOCAL_CREDENTIAL_FILE", $0) }
+    END {
+      print "KNOTED_SEARCH_ENABLED=" (search + 0)
+      if (search && search_path) setting("KNOTED_SEARCH_CREDENTIAL_FILE", search_path)
+      print "KNOTED_VECTORS_ENABLED=" (vectors + 0)
+    }
+  ' "$config_file"
+}
+
+# 准备和发布前检查用同一套验证；通过调用方的局部变量返回 TOML 片段。
+resolve_config_blocks() {
+  office=$(office_config_block) || return 1
+  search=$(search_config_block) || return 1
+  chat_local=$(chat_local_config_block) || return 1
   case "${KNOTED_VECTORS_ENABLED:-0}" in
     0) ;;
     1) vectors=$'\n[vectors]\nenabled = true' ;;
     *) die "KNOTED_VECTORS_ENABLED 必须是 0 或 1" ;;
   esac
-  prepare_instance_root
-  install -d -m 0700 "$config_dir" "$state_dir" \
-    "$logs_dir" "$assets_dir" "$staging_dir" "$backups_dir" \
-    "$state_dir/intelligence" "$instance_root/cache/intelligence" "$instance_root/tmp/intelligence"
+}
 
-  if [ -L "$config_file" ]; then
-    log "替换旧的 Nix store 配置链接：$config_file"
-  fi
-
-  render_template "$script_dir/knoted.toml.tmpl" "$config_file" \
+render_config() {
+  render_template "$script_dir/knoted.toml.tmpl" \
     @API_PORT@ "$api_port" \
     @INTELLIGENCE_PORT@ "$intelligence_port" \
     @DATABASE_URL@ "$database_url" \
@@ -283,8 +333,25 @@ command_prepare() {
     @SEARCH_CONFIG@ "$search" \
     @VECTORS_CONFIG@ "$vectors" \
     @CHAT_LOCAL_CONFIG@ "$chat_local"
+}
 
+command_prepare() {
+  guard_worktree
+  local revision rendered office search chat_local vectors=''
+  revision=$(verify_runtime)
+  log "固定产物 revision=$revision"
+  require_tools
+  resolve_config_blocks
+  rendered=$(render_config)
   check_ports
+  prepare_instance_root
+  install -d -m 0700 "$config_dir" "$state_dir" \
+    "$logs_dir" "$assets_dir" "$staging_dir" "$backups_dir" \
+    "$state_dir/intelligence" "$instance_root/cache/intelligence" "$instance_root/tmp/intelligence"
+  if [ -L "$config_file" ]; then
+    log "替换旧的 Nix store 配置链接：$config_file"
+  fi
+  publish_config "$config_file" "$rendered"
   log "prepare 完成：配置 $config_file；HTTPS 由宿主 Caddy 管理"
 }
 
@@ -302,14 +369,13 @@ command_migrate() {
   fi
 }
 
-command_api() {
+start_rust_service() {
+  local block
   test -r "$config_file" || die "缺少运行配置 $config_file；先完成 prepare"
-  exec "$runtime_root/bin/knoted-api" --config "$config_file"
-}
-
-command_worker() {
-  test -r "$config_file" || die "缺少运行配置 $config_file；先完成 prepare"
-  exec "$runtime_root/bin/knoted-worker" --config "$config_file"
+  block=$(active_chat_config) || die "无法读取已渲染的问答配置"
+  KNOTED_DEV_CHAT_CONFIG_DIGEST=$(chat_config_digest "$block") || die "无法计算已渲染的问答配置摘要"
+  export KNOTED_DEV_CHAT_CONFIG_DIGEST
+  exec "$runtime_root/bin/$1" --config "$config_file"
 }
 
 command_intelligence() {
@@ -356,16 +422,23 @@ command_paths() {
 
 command=${1:-}
 case "$command" in
+prepare | intelligence | check-chat-config)
+  load_deploy_env "$instance_root/deploy.env" || exit 1
+  ;;
+esac
+case "$command" in
 prepare) command_prepare ;;
+check-chat-config) command_check_chat_config ;;
+active-runtime-env) command_active_runtime_env ;;
 migrate) command_migrate ;;
-api) command_api ;;
-worker) command_worker ;;
+api) start_rust_service knoted-api ;;
+worker) start_rust_service knoted-worker ;;
 intelligence) command_intelligence ;;
 probe-intelligence) command_probe_intelligence ;;
 probe-api) command_probe_api ;;
 paths) command_paths ;;
 *)
-  echo "usage: service.sh {prepare|migrate|api|worker|intelligence|probe-api|probe-intelligence|paths}" >&2
+  echo "usage: service.sh {prepare|check-chat-config|active-runtime-env|migrate|api|worker|intelligence|probe-api|probe-intelligence|paths}" >&2
   exit 2
   ;;
 esac

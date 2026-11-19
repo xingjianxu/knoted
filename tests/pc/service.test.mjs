@@ -313,7 +313,8 @@ describe("prepare", () => {
 
   it("显式配置回环模型并只记录绝对凭据路径", async () => {
     const fixture = await fullFixture();
-    const path = join(fixture.base, "not-created model credential");
+    const path = join(fixture.base, "model credential");
+    writeFileSync(path, "synthetic-fixture\n", { mode: 0o600 });
     for (const url of ["http://127.42.0.2:15604/v1", "https://[0:0:0:0:0:0:0:1]:15604/models"]) {
       const result = run("bash", [serviceScript, "prepare"], {
         env: prepareEnv(fixture, {
@@ -325,8 +326,73 @@ describe("prepare", () => {
       assert.equal(result.status, 0, result.stderr);
       const config = readFileSync(join(fixture.instanceRoot, "config/knoted.toml"), "utf8");
       assert.ok(config.includes(`[chat.local]\nbase_url = "${url}"\nmodel = "strata/model&variant"\ncredential_file = "${path}"\n`));
-      assert.equal(existsSync(path), false);
+      assert.doesNotMatch(config + result.stdout + result.stderr, /synthetic-fixture/);
     }
+  });
+
+  it("从 deploy.env 安全加载配置，显式环境覆盖文件", async () => {
+    const fixture = await fullFixture();
+    mkdirSync(fixture.instanceRoot);
+    const guard = join(fixture.base, "must-not-run");
+    const path = join(fixture.base, "model credential");
+    writeFileSync(path, "fixture-only\n", { mode: 0o600 });
+    writeFileSync(join(fixture.instanceRoot, "deploy.env"), [
+      "# 数据，不是 Shell 脚本",
+      "KNOTED_CHAT_LOCAL_BASE_URL=http://127.0.0.1:15604",
+      "KNOTED_CHAT_LOCAL_MODEL=from-file",
+      `KNOTED_CHAT_LOCAL_CREDENTIAL_FILE=${path}`,
+      `IGNORED=$(touch ${guard})`,
+      "KNOTED_SEARCH_ENABLED=1",
+    ].join("\n"), { mode: 0o600 });
+    const result = run("bash", [serviceScript, "prepare"], {
+      env: prepareEnv(fixture, { KNOTED_CHAT_LOCAL_MODEL: "from-shell" }),
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const config = readFileSync(join(fixture.instanceRoot, "config/knoted.toml"), "utf8");
+    assert.ok(config.includes(`[chat.local]\nbase_url = "http://127.0.0.1:15604"\nmodel = "from-shell"\ncredential_file = "${path}"`));
+    assert.match(config, /\[search\]\nenabled = true/);
+    assert.equal(existsSync(guard), false);
+  });
+
+  it("启动 intelligence 时从 deploy.env 加载共享模型根", async () => {
+    const fixture = await fullFixture();
+    const env = prepareEnv(fixture, {
+      KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR: "",
+      KNOTED_INTELLIGENCE_BGE_M3_DIR: "",
+    });
+    const prepared = run("bash", [serviceScript, "prepare"], { env });
+    assert.equal(prepared.status, 0, prepared.stderr);
+    const bge = join(fixture.base, "bge");
+    const docling = join(fixture.base, "docling");
+    mkdirSync(bge);
+    mkdirSync(docling);
+    writeFileSync(join(fixture.instanceRoot, "deploy.env"),
+      `KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR=${docling}\nKNOTED_INTELLIGENCE_BGE_M3_DIR=${bge}\n`, { mode: 0o600 });
+    const started = run("bash", [serviceScript, "intelligence"], { env });
+    assert.equal(started.status, 0, started.stderr);
+  });
+
+  it("拒绝 deploy.env 非赋值行且不回显内容", async () => {
+    const fixture = await fullFixture();
+    mkdirSync(fixture.instanceRoot);
+    writeFileSync(join(fixture.instanceRoot, "deploy.env"), "not-an-assignment must-not-appear\n", { mode: 0o600 });
+    const result = run("bash", [serviceScript, "prepare"], { env: prepareEnv(fixture) });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /deploy\.env.*1/);
+    assert.doesNotMatch(result.stdout + result.stderr, /must-not-appear/);
+    assert.equal(existsSync(join(fixture.instanceRoot, "config/knoted.toml")), false);
+  });
+
+  it("配置模型但凭据文件缺失时不生成运行配置", async () => {
+    const fixture = await fullFixture();
+    const result = run("bash", [serviceScript, "prepare"], { env: prepareEnv(fixture, {
+      KNOTED_CHAT_LOCAL_BASE_URL: "http://127.0.0.1:15604",
+      KNOTED_CHAT_LOCAL_MODEL: "test-model",
+      KNOTED_CHAT_LOCAL_CREDENTIAL_FILE: join(fixture.base, "missing-credential"),
+    }) });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /KNOTED_CHAT_LOCAL_CREDENTIAL_FILE.*读取/);
+    assert.equal(existsSync(join(fixture.instanceRoot, "config/knoted.toml")), false);
   });
 
   it("拒绝缺项、非回环端点和不安全的 TOML 值，错误不回显配置值", async () => {
@@ -395,14 +461,19 @@ describe("prepare", () => {
     }
   });
 
-  it("端口被占用时拒绝启动", async () => {
+  it("端口被占用时拒绝启动且保留上次的运行配置", async () => {
     const fixture = await fullFixture();
+    const prepared = run("bash", [serviceScript, "prepare"], { env: prepareEnv(fixture) });
+    assert.equal(prepared.status, 0, prepared.stderr);
+    const config = join(fixture.instanceRoot, "config/knoted.toml");
+    const previous = readFileSync(config, "utf8");
     const blocker = createServer();
     await new Promise((resolveListen) => blocker.listen(fixture.apiPort, "127.0.0.1", resolveListen));
     try {
-      const result = run("bash", [serviceScript, "prepare"], { env: prepareEnv(fixture) });
+      const result = run("bash", [serviceScript, "prepare"], { env: prepareEnv(fixture, { KNOTED_SEARCH_ENABLED: "1" }) });
       assert.equal(result.status, 1);
       assert.match(result.stderr, new RegExp(`端口 ${fixture.apiPort} 已被占用`));
+      assert.equal(readFileSync(config, "utf8"), previous);
     } finally {
       await new Promise((resolveClose) => blocker.close(resolveClose));
     }
