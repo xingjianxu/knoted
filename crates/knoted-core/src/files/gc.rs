@@ -82,7 +82,7 @@ pub async fn collect_staging(ctx: &AppContext) -> Result<usize, CollectionError>
         return Ok(0);
     }
 
-    let client = IntelligenceClient::new(&ctx.intelligence().base_url)?;
+    let client = IntelligenceClient::from_context(ctx)?;
     let cutoff = ctx.now() - Duration::hours(24);
     let mut removed = 0;
     let mut failure = None;

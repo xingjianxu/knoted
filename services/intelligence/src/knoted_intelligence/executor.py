@@ -180,6 +180,14 @@ class Scheduler:
                 for entry in self._entries.values()
             )
 
+    def health(self) -> tuple[bool, int]:
+        # Submit and reconciliation use this same reentrant lock. Terminal ledger
+        # transitions carry their exit bit in the same UPDATE as the final state.
+        with self._lock:
+            uncertain = self.degraded()
+            unresolved, active = self._ledger.health_counts()
+            return uncertain or unresolved, active
+
     # -- public API ----------------------------------------------------------
 
     def submit(self, spec: ExecutionSpec) -> tuple[ExecutionRow, bool]:

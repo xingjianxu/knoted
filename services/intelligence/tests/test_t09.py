@@ -611,3 +611,21 @@ def test_t09_10_object_id_limit_matches_rust() -> None:
     assert staging.ensure_object_id("a" * staging.MAX_OBJECT_ID_LEN)
     with pytest.raises(staging.StagingError):
         staging.ensure_object_id("a" * (staging.MAX_OBJECT_ID_LEN + 1))
+
+
+def test_terminal_row_without_exit_proof_degrades_maintenance_health(tmp_path: Path) -> None:
+    import sqlite3
+
+    with start_service(tmp_path) as service:
+        execution_id = str(uuid.uuid4())
+        response = service.create(
+            execution_id=execution_id, deadline=datetime.now(UTC) - timedelta(seconds=1)
+        )
+        assert response.status_code == 201
+        with sqlite3.connect(service.settings.state_dir / "executions.db") as db:
+            db.execute(
+                "UPDATE executions SET compute_exit_confirmed=0 WHERE execution_id=?",
+                (execution_id,),
+            )
+            db.execute("UPDATE supervision SET receipt=NULL WHERE execution_id=?", (execution_id,))
+        assert service.health().json() == {"status": "degraded", "active_executions": 0}
