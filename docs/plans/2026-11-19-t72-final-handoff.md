@@ -1,6 +1,6 @@
 # T72 固定部署与交接执行计划
 
-依据 [T72](knoted-v1/tasks/T72.md)、[测试实例部署](knoted-v1/development-and-deploy.md) 和 T70 已验收的主机侧交付及 T71 的功能验收。T70 的公网 443 路径单独跟踪。生产与 dev 分别记录已批准的版本和对应运行状态。
+依据 [T72](knoted-v1/tasks/T72.md)、[测试实例部署](knoted-v1/development-and-deploy.md) 和 T70 的生产主机验收及 T71 的功能验收。生产验收以域名映射到 wks-lab 本机为准。生产与 dev 分别记录已批准的版本和对应运行状态。
 
 ## 工作与验收
 
