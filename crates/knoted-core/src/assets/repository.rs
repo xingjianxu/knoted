@@ -34,7 +34,7 @@ pub(super) async fn find(
     id: Uuid,
     owner: Uuid,
 ) -> Result<Option<Asset>, sqlx::Error> {
-    sqlx::query_as("SELECT * FROM assets WHERE id=$1 AND owner_id=$2 AND state='ready'")
+    sqlx::query_as("SELECT * FROM assets WHERE id=$1 AND owner_id=$2")
         .bind(id)
         .bind(owner)
         .fetch_optional(c)

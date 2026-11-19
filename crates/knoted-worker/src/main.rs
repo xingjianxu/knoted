@@ -60,6 +60,7 @@ async fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             };
             let ctx = AppContext::new(pool)
+                .with_asset_root(config.assets.root)
                 .with_files(config.files)
                 .with_intelligence(config.intelligence)
                 .with_chat_providers(std::sync::Arc::new(chat_providers))
@@ -70,6 +71,7 @@ async fn main() -> ExitCode {
                 _ = knoted_worker::handlers::fulltext::project(ctx.clone()), if ctx.search().enabled => unreachable!(),
                 _ = knoted_worker::handlers::note_history::run(ctx.clone()) => unreachable!(),
                 _ = knoted_worker::handlers::trash::run(ctx.clone()) => unreachable!(),
+                _ = knoted_worker::handlers::gc::run(ctx.clone()) => unreachable!(),
                 _ = knoted_worker::handlers::scan::run(ctx) => ExitCode::SUCCESS,
             }
         }

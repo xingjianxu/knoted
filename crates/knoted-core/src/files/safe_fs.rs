@@ -1,11 +1,13 @@
 //! Linux FD-relative, no-follow read access. Paths never authorize a read on
 //! their own: each component is opened relative to an already held directory.
-use rustix::fs::{self, Mode, OFlags};
+use rustix::fs::{self, AtFlags, FileType, Mode, OFlags, ResolveFlags, StatxFlags};
 use serde::{Deserialize, Serialize};
 use std::{
-    ffi::CString,
+    ffi::{CString, OsString},
+    io,
     os::fd::{AsFd, AsRawFd, OwnedFd},
-    path::{Component, Path},
+    os::unix::ffi::OsStringExt,
+    path::{Component, Path, PathBuf},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,6 +48,170 @@ pub fn open_root(path: &Path) -> std::io::Result<OwnedFd> {
     }
     Ok(fd)
 }
+/// Refuse storage roots that overlap the external, read-only source tree.
+pub(crate) fn open_collection_root(
+    ctx: &crate::context::AppContext,
+    root: &Path,
+) -> std::io::Result<OwnedFd> {
+    let parent = root.parent().ok_or(std::io::ErrorKind::InvalidInput)?;
+    let name = root.file_name().ok_or(std::io::ErrorKind::InvalidInput)?;
+    let directory = open_collection_directory(&open_root(parent)?, Path::new(name))?;
+    if let Some(source) = ctx.files().root.as_deref() {
+        let source = source.canonicalize()?;
+        let root = root.canonicalize()?;
+        if root.starts_with(&source) || source.starts_with(&root) {
+            return Err(std::io::ErrorKind::PermissionDenied.into());
+        }
+        let source_fd = open_root(&source)?;
+        let mounts = std::fs::read("/proc/self/mountinfo")?;
+        if mounted_paths_overlap(
+            &mounts,
+            &root,
+            mount_id(&directory)?,
+            &source,
+            mount_id(&source_fd)?,
+        )? {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+    }
+    Ok(directory)
+}
+
+fn mount_id(dir: impl AsFd) -> io::Result<u64> {
+    let stat = fs::statx(dir, "", AtFlags::EMPTY_PATH, StatxFlags::MNT_ID)?;
+    if !StatxFlags::from_bits_retain(stat.stx_mask).contains(StatxFlags::MNT_ID) {
+        return Err(io::ErrorKind::Unsupported.into());
+    }
+    Ok(stat.stx_mnt_id)
+}
+
+struct MountRoot<'a> {
+    id: &'a [u8],
+    device: &'a [u8],
+    root: PathBuf,
+    target: PathBuf,
+}
+
+fn decode_mount_path(mut value: &[u8]) -> io::Result<PathBuf> {
+    let mut path = Vec::with_capacity(value.len());
+    while let Some((&byte, rest)) = value.split_first() {
+        value = rest;
+        if byte != b'\\' {
+            path.push(byte);
+            continue;
+        }
+        let (escape, tail) = value
+            .split_at_checked(3)
+            .ok_or(io::ErrorKind::InvalidData)?;
+        path.push(match escape {
+            b"040" => b' ',
+            b"011" => b'\t',
+            b"012" => b'\n',
+            b"134" => b'\\',
+            _ => return Err(io::ErrorKind::InvalidData.into()),
+        });
+        value = tail;
+    }
+    let decoded = PathBuf::from(OsString::from_vec(path));
+    if !decoded.is_absolute() {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    Ok(decoded)
+}
+
+fn mounted_paths_overlap(
+    info: &[u8],
+    storage: &Path,
+    storage_id: u64,
+    source: &Path,
+    source_id: u64,
+) -> io::Result<bool> {
+    let mounts = info
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let mut fields = line.split(|byte| *byte == b' ');
+            let mut field = || fields.next().ok_or(io::ErrorKind::InvalidData);
+            let id = field()?;
+            field()?; // Parent mount ID.
+            let device = field()?;
+            let root = field()?;
+            // nsfs entries mounted as files can have roots like net:[123].
+            // A selected directory must still resolve to an absolute mount root.
+            if !root.starts_with(b"/") {
+                return Ok(None);
+            }
+            Ok(Some(MountRoot {
+                id,
+                device,
+                root: decode_mount_path(root)?,
+                target: decode_mount_path(field()?)?,
+            }))
+        })
+        .filter_map(Result::transpose)
+        .collect::<io::Result<Vec<_>>>()?;
+    let by_id = |id: u64| {
+        let id = id.to_string();
+        mounts
+            .iter()
+            .find(|entry| entry.id == id.as_bytes())
+            .ok_or(io::ErrorKind::InvalidData)
+    };
+    let storage_mount = by_id(storage_id)?;
+    let source_mount = by_id(source_id)?;
+    let storage_path = storage_mount.root.join(
+        storage
+            .strip_prefix(&storage_mount.target)
+            .map_err(|_| io::ErrorKind::InvalidData)?,
+    );
+    let source_path = source_mount.root.join(
+        source
+            .strip_prefix(&source_mount.target)
+            .map_err(|_| io::ErrorKind::InvalidData)?,
+    );
+    let overlaps = |entry: &MountRoot<'_>, path: &Path| {
+        entry.device == storage_mount.device
+            && (storage_path.starts_with(path) || path.starts_with(&storage_path))
+    };
+    // A different spelling can address the same device subtree via a bind
+    // mount. Include volumes mounted below the configured read-only root.
+    Ok(overlaps(source_mount, &source_path)
+        || mounts.iter().any(|entry| {
+            entry.target != source
+                && entry.target.starts_with(source)
+                && overlaps(entry, &entry.root)
+        }))
+}
+
+/// An explicitly configured parent can live on a mounted volume. A collection
+/// root and its children must be ordinary directories within that volume.
+pub(crate) fn open_collection_directory(dir: impl AsFd, name: &Path) -> std::io::Result<OwnedFd> {
+    Ok(fs::openat2(
+        dir,
+        name,
+        DIRECTORY,
+        Mode::empty(),
+        ResolveFlags::BENEATH | ResolveFlags::NO_XDEV | ResolveFlags::NO_SYMLINKS,
+    )?)
+}
+
+pub(crate) fn unlink_regular(dir: impl AsFd, name: &str) -> std::io::Result<bool> {
+    let metadata = match fs::statat(&dir, name, fs::AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(metadata) => metadata,
+        Err(rustix::io::Errno::NOENT) => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    if FileType::from_raw_mode(metadata.st_mode) != FileType::RegularFile || metadata.st_nlink != 1
+    {
+        return Err(std::io::ErrorKind::InvalidData.into());
+    }
+    match fs::unlinkat(dir, name, fs::AtFlags::empty()) {
+        Ok(()) => Ok(true),
+        Err(rustix::io::Errno::NOENT) => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
 pub fn open_directory(root: impl AsFd, path: &Path) -> std::io::Result<OwnedFd> {
     let mut fd = fs::openat(root, ".", DIRECTORY, Mode::empty())?;
     for component in path.components() {
@@ -120,4 +286,63 @@ fn opaque_handle(fd: impl AsFd) -> Option<OpaqueHandle> {
         kind: handle.kind,
         bytes: handle.bytes[..handle.len as usize].to_vec(),
     })
+}
+
+#[cfg(test)]
+mod collection_tests {
+    use super::*;
+
+    #[test]
+    fn t67_8_mount_roots_detect_a_bound_source_descendant() {
+        let info = b"41 0 0:35 /@ / rw - btrfs /dev/root rw\n60 41 0:35 /@/source/nested /storage rw - btrfs /dev/root rw\n61 41 0:35 /@/unrelated /other rw - btrfs /dev/root rw\n";
+        assert!(
+            mounted_paths_overlap(
+                info,
+                Path::new("/storage/stage"),
+                60,
+                Path::new("/source"),
+                41
+            )
+            .unwrap()
+        );
+        assert!(
+            !mounted_paths_overlap(
+                info,
+                Path::new("/other/stage"),
+                61,
+                Path::new("/source"),
+                41
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn t67_9_mount_roots_detect_an_alias_of_a_volume_inside_sources() {
+        let info = b"41 0 0:35 /@ / rw - btrfs /dev/root rw\n60 41 0:60 / /source/my\\040volume rw - ext4 /dev/other rw\n61 41 0:60 /folder /storage rw - ext4 /dev/other rw\n";
+        assert!(
+            mounted_paths_overlap(
+                info,
+                Path::new("/storage/stage"),
+                61,
+                Path::new("/source"),
+                41
+            )
+            .unwrap()
+        );
+    }
+    #[test]
+    fn t67_10_non_path_namespace_mount_does_not_block_directory_collection() {
+        let info = b"41 0 0:35 /@ / rw - btrfs /dev/root rw\n68 41 0:54 /@data /data rw - btrfs /dev/data rw\n481 41 0:7 net:[1234] /run/netns/fixture rw - nsfs nsfs rw\n";
+        assert!(
+            !mounted_paths_overlap(
+                info,
+                Path::new("/data/dev/assets"),
+                68,
+                Path::new("/data/source"),
+                68
+            )
+            .unwrap()
+        );
+    }
 }
