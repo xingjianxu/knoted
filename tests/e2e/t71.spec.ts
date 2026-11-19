@@ -10,6 +10,13 @@ const origin = "https://t71.knoted.test:17820";
 const oldTerm = "violetamber";
 const newTerm = "glaciercobalt";
 
+async function queryPrivateDatabase(run: string, sql: string) {
+  const result = await execute("psql", [
+    "-XAt", "-h", path.join(run, "socket"), "-p", "17828", "-d", "t71", "-c", sql,
+  ]);
+  return result.stdout.trim();
+}
+
 async function api(page: Page, method: string, route: string, body?: object) {
   return page.evaluate(async ({ method, route, body }) => {
     const csrf = document.cookie.split("; ").find(item => item.startsWith("knoted_csrf="))?.slice(12);
@@ -31,7 +38,7 @@ async function search(page: Page, term: string): Promise<string[]> {
   return response.data.items.map((item: { id: string }) => item.id);
 }
 
-test("t71_1 file citation, saved note and linked task; t71_2 stale source and recovery", async ({ playwright }) => {
+test("t71_1 file citation, saved note and linked task; t71_2 stale source recovery and visible vector failure", async ({ playwright }) => {
   test.setTimeout(540_000);
   const run = process.env.T71_RUN;
   const artifact = process.env.T71_ARTIFACT;
@@ -75,9 +82,7 @@ test("t71_1 file citation, saved note and linked task; t71_2 stale source and re
     expect(fileId).toMatch(/^[a-f\d-]{36}$/);
     const sql = "SELECT count(*) FROM rag_vectors v JOIN rag_embedding_sets e ON e.id=v.embedding_set_id " +
       "JOIN rag_chunk_sets s ON s.id=e.chunk_set_id WHERE vector_dims(v.embedding)=1024 AND s.source_id='" + fileId + "'";
-    await expect.poll(async () => Number((await execute("psql", [
-      "-XAt", "-h", path.join(run, "socket"), "-p", "17828", "-d", "t71", "-c", sql,
-    ])).stdout), { timeout: 240_000 }).toBeGreaterThan(0);
+    await expect.poll(async () => Number(await queryPrivateDatabase(run, sql)), { timeout: 240_000 }).toBeGreaterThan(0);
 
     await test.step("t71_1 ask about the file, save the cited answer, link the task", async () => {
       await page.goto(origin + "/chat");
@@ -133,6 +138,7 @@ test("t71_1 file citation, saved note and linked task; t71_2 stale source and re
       const updatedText = "更新记录：冰川钻芯的复验词为 " + newTerm + "，已复核。\n";
       expect(await readFile(sample, "utf8")).toBe("观测记录：紫檀标本的识别词为 violetamber。\n");
       const gate = path.join(run, "hold-writes");
+      await writeFile(path.join(run, "fail-embedding-term"), newTerm);
       await writeFile(gate, "");
       try {
         // Only the fixture owner changes the synthetic original, as an external editor would.
@@ -157,6 +163,44 @@ test("t71_1 file citation, saved note and linked task; t71_2 stale source and re
       await expect.poll(() => search(page, newTerm), { timeout: 120_000 }).toHaveLength(1);
       expect(await search(page, oldTerm)).toHaveLength(0);
       expect(await readFile(sample, "utf8")).toBe(updatedText);
+    });
+
+    await test.step("latest full text remains searchable while its vector job shows failure", async () => {
+      const [currentId] = await search(page, newTerm);
+      expect(currentId).toMatch(/^[a-f\d-]{36}$/);
+      const witness = path.join(run, "invalid-result-id");
+      await expect.poll(() => access(witness).then(() => true, () => false), { timeout: 180_000 }).toBe(true);
+      const execution = await readFile(witness, "utf8");
+      expect(execution).toMatch(/^[a-f\d-]{36}$/);
+      const sql = `
+        SELECT j.id FROM jobs j
+        JOIN rag_chunk_sets s ON s.id::text = j.payload->>'chunk_set_id'
+        JOIN rag_embedding_executions x ON x.job_id=j.id
+        JOIN current_rag_sources live USING (source_type, source_id, source_version, extraction_id)
+        WHERE s.source_type='file' AND s.source_id='${currentId}' AND j.kind='rag_vectors.embed'
+          AND x.request->>'execution_id'='${execution}'
+          AND j.last_error='embedding data or artifact is invalid' AND j.state='failed' AND NOT EXISTS (
+            SELECT FROM rag_embedding_sets e WHERE e.chunk_set_id=s.id
+          )`;
+      const failedJob = () => queryPrivateDatabase(run, sql);
+      await expect.poll(failedJob, { timeout: 30_000 }).toMatch(/^[a-f\d-]{36}$/);
+      const id = await failedJob();
+      await page.goto(origin + "/files/jobs");
+      await page.getByRole("combobox", { name: "任务状态" }).click();
+      const response = page.waitForResponse(res => {
+        const url = new URL(res.url());
+        return url.pathname === "/api/v1/jobs" && url.searchParams.get("state") === "failed";
+      });
+      await page.getByRole("option", { name: "失败", exact: true }).click();
+      const failed = await response;
+      expect(failed.status()).toBe(200);
+      const vectors = (await failed.json()).items.filter((job: { kind: string }) => job.kind === "rag_vectors.embed");
+      expect(vectors.map((job: { id: string }) => job.id)).toEqual([id]);
+      const stage = page.getByRole("region", { name: "向量索引" });
+      await expect(stage.getByText("嵌入与发布向量", { exact: true })).toBeVisible();
+      await expect(stage.getByText("失败", { exact: true })).toBeVisible();
+      await expect(stage.getByRole("button", { name: "重试任务" })).toBeVisible();
+      expect(await search(page, newTerm)).toEqual([currentId]);
     });
   } finally {
     await browser.close();

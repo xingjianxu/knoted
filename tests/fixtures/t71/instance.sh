@@ -75,7 +75,7 @@ index_uid = "t71_documents"
 rag_chunk_index_uid = "t71_chunks"
 api_key_credential = "meilisearch"
 [intelligence]
-base_url = "http://127.0.0.1:17826"
+base_url = "http://127.0.0.1:17827"
 [vectors]
 enabled = true
 [chat.local]
@@ -88,6 +88,8 @@ MEILI_MASTER_KEY=$(cat "$run/meili.key") "$meili" --http-addr 127.0.0.1:17824 --
 pids+=("$!")
 node "$fixtures/search-gate.mjs" > "$run/gate.log" 2>&1 &
 pids+=("$!")
+node "$fixtures/embedding-gate.mjs" > "$run/embedding-gate.log" 2>&1 &
+pids+=("$!")
 python3 -B "$fixtures/provider.py" "$run/model.key" 17825 > "$run/provider.log" 2>&1 &
 pids+=("$!")
 export KNOTED_INTELLIGENCE_BGE_M3_DIR=${KNOTED_INTELLIGENCE_BGE_M3_DIR:?set the fixed BGE-M3 model directory}
@@ -97,7 +99,7 @@ env KNOTED_INTELLIGENCE_HOST=127.0.0.1 KNOTED_INTELLIGENCE_PORT=17826 \
   KNOTED_INTELLIGENCE_GPU_SLOTS=1 KNOTED_EMBED_GPU_UUID= CUDA_VISIBLE_DEVICES= \
   "$artifact/bin/knoted-intelligence" > "$run/python.log" 2>&1 &
 pids+=("$!")
-for url in http://127.0.0.1:17826/internal/v1/health http://127.0.0.1:17823/health; do
+for url in http://127.0.0.1:17826/internal/v1/health http://127.0.0.1:17827/internal/v1/health http://127.0.0.1:17823/health; do
   curl -fsS --retry 30 --retry-connrefused --retry-delay 1 --max-time 3 "$url" >/dev/null
 done
 "$artifact/bin/knoted-api" --config "$run/app.toml" > "$run/api.log" 2>&1 &
