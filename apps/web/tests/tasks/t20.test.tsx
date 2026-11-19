@@ -202,6 +202,8 @@ describe("t20 auth routes", () => {
       "/recovery",
       "/%2F%2Fevil.example",
       "/unknown",
+      "/projects",
+      "/projects/00000000-0000-4000-8000-000000000001",
     ])
       expect(safeReturnTo(path)).toBe("/");
     expect(safeReturnTo("/settings/security")).toBe("/settings/security");
@@ -254,6 +256,116 @@ describe("t20 auth routes", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("重试");
     expect(router.state.location.pathname).toBe("/settings/security");
     bundle.queryClient.clear();
+  });
+});
+
+describe("account page layout and feedback", () => {
+  it.each([
+    ["/login", ["首次注册", "恢复账号"]],
+    ["/bootstrap", ["返回登录"]],
+    ["/recovery", ["返回登录"]],
+  ])("%s only presents links out of the current flow", async (path, names) => {
+    await mount(path);
+    const nav = await screen.findByRole("navigation", { name: "认证方式" });
+    expect(within(nav).getAllByRole("link")).toHaveLength(names.length);
+    for (const name of names) expect(within(nav).getByRole("link", { name })).toBeInTheDocument();
+    if (path === "/recovery") expect(screen.getByRole("status")).toHaveTextContent("撤销所有旧凭据与会话");
+  });
+
+  it("opens the named add form on demand and returns focus after cancel", async () => {
+    loggedIn = true;
+    await mount("/settings/security");
+    const add = await screen.findByRole("button", { name: "添加 Passkey" });
+    expect(screen.queryByLabelText("新凭据名称")).not.toBeInTheDocument();
+    fireEvent.click(add);
+    const form = screen.getByRole("form", { name: "添加 Passkey" });
+    expect(within(form).getByRole("textbox", { name: "新凭据名称" })).toHaveFocus();
+    expect(within(form).getByRole("link", { name: "重新验证" })).toHaveAttribute("href", "/login?redirect=%2Fsettings%2Fsecurity");
+    fireEvent.click(within(form).getByRole("button", { name: "取消" }));
+    expect(form).not.toBeInTheDocument();
+    expect(add).toHaveFocus();
+  });
+
+  it("leaving the security page aborts an unfinished registration", async () => {
+    loggedIn = true;
+    const baseFetch = globalThis.fetch;
+    let finishCalls = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const pathname = new URL((input as Request).url).pathname;
+      if (pathname.endsWith("/auth/passkeys/options")) return json({
+        ceremony_id: "c1",
+        options: { publicKey: {
+          challenge: "AQID",
+          user: { id: "BAUG", name: "fixture", displayName: "Fixture" },
+          rp: { name: "Knoted" }, pubKeyCredParams: [{ alg: -7, type: "public-key" }],
+        } },
+      });
+      if (pathname.endsWith("/auth/passkeys/finish")) {
+        finishCalls++;
+        return json({}, 201);
+      }
+      return baseFetch(input);
+    }));
+    let finishCeremony: (credential: Credential | null) => void = () => {};
+    const create = vi.fn<(options: CredentialCreationOptions) => Promise<Credential | null>>(
+      () => new Promise<Credential | null>((resolve) => { finishCeremony = resolve; }),
+    );
+    Object.defineProperty(navigator, "credentials", { configurable: true, value: { create } });
+    const { router } = await mount("/settings/security");
+    fireEvent.click(await screen.findByRole("button", { name: "添加 Passkey" }));
+    fireEvent.click(screen.getByRole("button", { name: "注册 Passkey" }));
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    const signal = create.mock.calls[0]?.[0].signal;
+    expect(signal?.aborted).toBe(false);
+    await act(async () => { await router.navigate({ to: "/" }); });
+    expect(signal?.aborted).toBe(true);
+    await act(async () => {
+      finishCeremony({
+        id: "late", rawId: new Uint8Array([1]).buffer, type: "public-key",
+        response: { clientDataJSON: new Uint8Array([2]).buffer, attestationObject: new Uint8Array([3]).buffer },
+      } as unknown as Credential);
+    });
+    expect(finishCalls).toBe(0);
+    expect(router.state.location.pathname).toBe("/");
+  });
+
+  it("retries only the failed passkeys while the next session page is loading", async () => {
+    loggedIn = true;
+    let passkeyReads = 0;
+    let releaseSessions: () => void = () => {};
+    const pendingSessions = new Promise<void>((resolve) => { releaseSessions = resolve; });
+    const baseFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL((input as Request).url);
+      if (url.pathname.endsWith("/auth/passkeys")) {
+        if (++passkeyReads === 1) return json({ code: "unavailable", message: "不可用" }, 503);
+        return json({ items: [], next_cursor: null });
+      }
+      if (url.pathname.endsWith("/auth/sessions")) {
+        if (url.searchParams.get("cursor") === "sessions+next") {
+          await pendingSessions;
+          return json({ items: [{ ...session.session, id: "s2", current: false }], next_cursor: null });
+        }
+        return json({ items: [session.session], next_cursor: "sessions+next" });
+      }
+      return baseFetch(input);
+    }));
+    await mount("/settings/security");
+    const retry = await screen.findByRole("button", { name: "重试凭据" });
+    const next = await screen.findByRole("button", { name: "下一页会话" });
+    fireEvent.click(next);
+    try {
+      expect(await screen.findByLabelText("正在加载会话")).toBeInTheDocument();
+      expect(next).toBeDisabled();
+      expect(screen.getByRole("button", { name: "上一页会话" })).toBeDisabled();
+      fireEvent.click(retry);
+      expect(await screen.findByText("没有凭据")).toBeVisible();
+      expect(next).toBeDisabled();
+    } finally {
+      releaseSessions();
+    }
+    expect(await screen.findByText("其他会话", { exact: true })).toBeVisible();
+    expect(screen.getByRole("button", { name: "上一页会话" })).toBeEnabled();
   });
 });
 
@@ -581,6 +693,37 @@ describe("t20 ceremony lifecycle", () => {
 });
 
 describe("t20 protected mutation errors", () => {
+  it.each([
+    ["recent_verification_required", /需要重新登录验证/, true],
+    ["csrf_failed", /刷新页面后重试/, false],
+  ])("distinguishes %s in the credential confirmation", async (code, message, reverify) => {
+    loggedIn = true;
+    const baseFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const request = input as Request;
+      const pathname = new URL(request.url).pathname;
+      if (pathname.endsWith("/auth/passkeys")) return json({
+        items: ["Device A", "Device B"].map((name, i) => ({
+          id: `p${i}`, name, created_at: "2026-11-16T00:00:00Z",
+          last_used_at: null, credential_id: "synthetic", transports: [],
+        })), next_cursor: null,
+      });
+      if (request.method === "DELETE" && pathname.endsWith("/auth/passkeys/p0")) {
+        return json({ code, message: "合成拒绝响应" }, 403);
+      }
+      return baseFetch(input);
+    }));
+    await mount("/settings/security");
+    fireEvent.click(await screen.findByRole("button", { name: "删除 Device A" }));
+    const dialog = within(screen.getByRole("alertdialog", { name: "删除凭据 Device A" }));
+    fireEvent.click(dialog.getByRole("button", { name: "确认删除" }));
+    expect(await dialog.findByText(message)).toBeVisible();
+    expect(dialog.getAllByRole("alert")).toHaveLength(1);
+    const link = dialog.queryByRole("link", { name: "重新验证" });
+    if (reverify) expect(link).toHaveAttribute("href", "/login?redirect=%2Fsettings%2Fsecurity");
+    else expect(link).not.toBeInTheDocument();
+  });
+
   it("server rejection keeps the credential visible and explains the conflict", async () => {
     loggedIn = true;
     const baseFetch = globalThis.fetch;
