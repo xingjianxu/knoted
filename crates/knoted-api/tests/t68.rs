@@ -401,3 +401,63 @@ exec pg_dump "$@"
     assert!(!result.status.success() && incomplete && reopened);
     assert!(String::from_utf8_lossy(&result.stderr).contains("maintenance admission unavailable"));
 }
+
+#[tokio::test]
+async fn disabled_search_preserves_source_coordinates_after_a_historic_index_probe() {
+    use axum::{Json, Router, extract::Query, routing::get};
+    use serde_json::json;
+    use std::collections::HashMap;
+    use std::io::Write;
+
+    let fixture = Fixture::create().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let (probes, mut observed) = tokio::sync::mpsc::unbounded_channel();
+    let engine = Router::new()
+        .route(
+            "/indexes/previous",
+            get(|| async { Json(json!({"uid":"previous"})) }),
+        )
+        .route(
+            "/tasks",
+            get(
+                move |Query(query): Query<HashMap<String, String>>| async move {
+                    probes.send(query).unwrap();
+                    Json(json!({"results":[],"total":0,"limit":1,"from":null,"next":null}))
+                },
+            ),
+        );
+    let server = tokio::spawn(async move { axum::serve(listener, engine).await.unwrap() });
+    let mut config = fs::OpenOptions::new()
+        .append(true)
+        .open(&fixture.config)
+        .unwrap();
+    writeln!(config, "[search]\nenabled=false\nbase_url={origin:?}\nindex_uid=\"source_documents\"\nrag_chunk_index_uid=\"source_chunks\"").unwrap();
+    drop(config);
+    sqlx::query("INSERT INTO maintenance_external_targets VALUES ('meili',$1,'previous')")
+        .bind(&origin)
+        .execute(fixture.context.pool())
+        .await
+        .unwrap();
+    let output = fixture.directory.path().join("backup");
+    let result = fixture.backup(&output).output().await.unwrap();
+    let manifest = fs::read(output.join(MANIFEST));
+    server.abort();
+    fixture.close().await;
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let query = observed.try_recv().expect("historic queue was probed");
+    assert_eq!(query["indexUids"], "previous");
+    assert_eq!(query["statuses"], "enqueued,processing");
+    assert_eq!(query["limit"], "1");
+    let manifest: serde_json::Value = serde_json::from_slice(&manifest.unwrap()).unwrap();
+    assert_eq!(
+        manifest["source"]["search"],
+        json!({
+            "enabled":false,"origin":origin,"document_index":"source_documents","chunk_index":"source_chunks"
+        })
+    );
+}

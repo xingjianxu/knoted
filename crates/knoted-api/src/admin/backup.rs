@@ -110,12 +110,13 @@ pub struct BackupSource {
     pub staging_root: Option<PathBuf>,
     pub file_root: Option<PathBuf>,
     pub intelligence_origin: String,
-    pub search: Option<BackupSearch>,
+    pub search: BackupSearch,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BackupSearch {
+    pub enabled: bool,
     pub origin: String,
     pub document_index: String,
     pub chunk_index: String,
@@ -189,11 +190,12 @@ pub async fn run(
         staging_root: config.files.staging_root.clone(),
         file_root: config.files.root.clone(),
         intelligence_origin: config.intelligence.base_url.clone(),
-        search: config.search.enabled.then(|| BackupSearch {
+        search: BackupSearch {
+            enabled: config.search.enabled,
             origin: config.search.base_url.clone(),
             document_index: config.search.index_uid.clone(),
             chunk_index: config.search.rag_chunk_index_uid.clone(),
-        }),
+        },
     };
     let migrations = snapshot
         .migrations
