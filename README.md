@@ -2,7 +2,7 @@
 
 Knoted 提供 Passkey 单账号登录、带版本历史的笔记、项目与事项、只读文件采集和预览、中文全文检索及带引用的问答。应用由 Rust API 与 Worker、React/TypeScript Web、Python intelligence 组成，使用 PostgreSQL 和 Meilisearch。具体能力、验证版本和限制见 [Knoted v1 任务](docs/plans/knoted-v1/README.md) 与 [架构现状](docs/architecture/README.md)。
 
-UI 方向已确认：通用组件直接消费 npm `@bixlab/mtone`，本项目只做业务组合与适配。T17—T19 已全部完成并集成主线：T17 精确接入 `@bixlab/mtone@0.2.0`、公开 Provider/CSS 并移除 `packages/ui` 占位包（PR #42 / `e3e1db2`）；T18 注册应用通知 Provider 并验收弹层菜单（PR #46 / `4425ab9`）；T19 交付应用游标 reducer 并验收树/列表/反馈（PR #48 / `6de79a8`）。当前精确消费版本为 **`@bixlab/mtone@0.5.0`**，消费复验见 [0.5.0 升级记录](docs/development/ui-mtone.md#050-升级与当前消费约定)；上述 0.2.0 为 T17—T19 历史接入版本。详见 [T17](docs/plans/knoted-v1/evidence/t17.md)、[T18](docs/plans/knoted-v1/evidence/t18.md)、[T19](docs/plans/knoted-v1/evidence/t19.md) 证据。见 [UI 指南](docs/development/ui-mtone.md) 与 [ADR 0002](docs/decisions/0002-mtone-ui-ownership.md)。
+UI 方向已确认：通用组件直接消费 npm `@bixlab/mtone`，本项目只做业务组合与适配。T17—T19 已全部完成并集成主线：T17 精确接入 `@bixlab/mtone@0.2.0`、公开 Provider/CSS 并移除 `packages/ui` 占位包（PR #42 / `e3e1db2`）；T18 注册应用通知 Provider 并验收弹层菜单（PR #46 / `4425ab9`）；T19 交付应用游标 reducer 并验收树/列表/反馈（PR #48 / `6de79a8`）。当前锁定版本及升级记录见 [UI 指南](docs/development/ui-mtone.md#现状与目标)；上述 0.2.0 为 T17—T19 历史接入版本。详见 [T17](docs/plans/knoted-v1/evidence/t17.md)、[T18](docs/plans/knoted-v1/evidence/t18.md)、[T19](docs/plans/knoted-v1/evidence/t19.md) 证据。见 [UI 指南](docs/development/ui-mtone.md) 与 [ADR 0002](docs/decisions/0002-mtone-ui-ownership.md)。
 
 ## 开始使用
 
