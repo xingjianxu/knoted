@@ -7,3 +7,5 @@
 当前计划：[管理体系初始化](2026-11-14-agent-workflow.md)。
 
 产品第一版：[Knoted v1 设计与任务入口](knoted-v1/README.md)（文档交付，产品实现未开始）。
+
+Web 改版：[全站 UI 重设计方案与逐页任务卡](web-ui-redesign/README.md)。
