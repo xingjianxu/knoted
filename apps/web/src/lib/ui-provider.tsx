@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 
 export function UiProvider({ children }: { children: ReactNode }) {
   return (
-    <MtoneProvider locale="zh" density="compact">
+    <MtoneProvider locale="zh">
       <ToastProvider>{children}</ToastProvider>
     </MtoneProvider>
   );
