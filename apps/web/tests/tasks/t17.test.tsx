@@ -74,7 +74,7 @@ describe("t17 mtone consumption", () => {
 
   it("t17_4 removes placeholder sources and directly loads published CSS", () => {
     const pkg = JSON.parse(readFileSync(path.join(webRoot, "package.json"), "utf8"));
-    expect(pkg.dependencies["@bixlab/mtone"]).toBe("0.7.0");
+    expect(pkg.dependencies["@bixlab/mtone"]).toBe("0.8.0");
     expect(pkg.dependencies).not.toHaveProperty("@knoted/ui");
     // Old installs may leave ignored node_modules behind. The removal contract
     // concerns the workspace manifest and sources, not package-manager caches.

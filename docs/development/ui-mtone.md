@@ -13,9 +13,9 @@
 
 ## 现状与目标
 
-当前精确依赖为 **`@bixlab/mtone@0.7.0`**（`apps/web/package.json` / `pnpm-lock.yaml`）。下文保留 T17—T19 的原始接入与各版本升级记录。
+当前精确依赖为 **`@bixlab/mtone@0.8.0`**（`apps/web/package.json` / `pnpm-lock.yaml`）。下文保留 T17—T19 的原始接入与各版本升级记录。
 
-T17 已精确接入 npm `@bixlab/mtone@0.2.0`，迁移 App 静态类并移除 `packages/ui`；**PR #42 已普通 merge 至主线 `e3e1db2`，独立审查/主线验证/任务清理完成**。生产入口使用应用层 `UiProvider` 配置公开 `MtoneProvider` 的 locale/density/tokens，不转发控件 API；CSS 从应用样式入口导入。基础表单组合仅在测试夹具中，不建立生产演示路由或通用包装库。证据见 [T17](../plans/knoted-v1/evidence/t17.md)。
+T17 已精确接入 npm `@bixlab/mtone@0.2.0`，迁移 App 静态类并移除 `packages/ui`；**PR #42 已普通 merge 至主线 `e3e1db2`，独立审查/主线验证/任务清理完成**。T17 接入时，生产入口使用应用层 `UiProvider` 配置公开 `MtoneProvider`，不转发控件 API；CSS 从应用样式入口导入。基础表单组合仅在测试夹具中，不建立生产演示路由或通用包装库。证据见 [T17](../plans/knoted-v1/evidence/t17.md)。
 
 T18 实施在同一 `UiProvider` 内注册公开 `ToastProvider`，不增加通知总线或统一弹层 API；**PR #46 已普通 merge 至主线 `4425ab9`，独立审查/主线验证/任务清理完成**。Modal/ConfirmDialog/DropdownMenu/ContextMenu/Popover 与通知组合只在测试夹具，测试服务 `?task=t18` 选择本卡，默认仍为 T17。真实 Chromium 验证焦点、异步失败重试与 Portal 字体/主题/层级，见 [T18 证据](../plans/knoted-v1/evidence/t18.md)。
 
@@ -50,6 +50,10 @@ T17 实测：旧 `cn('p-2', 'p-4')` 返回 `p-4`，mtone 的 `cn` 返回 `p-2 p-
 0.2.0 在实施时距发布不足 pnpm 默认最小等待时间；`pnpm-workspace.yaml` 仅为已明确选择、检查过的精确版本添加 minimumReleaseAgeExclude，其他依赖策略保持不变。不改 workspace 通配范围。
 
 只使用 npm 已发布版本作为正式依赖；不以浮动 latest、Git、file/link、未发布 tarball 交付。不修改 API 或业务语义来迁就组件。
+
+## 0.8.0 升级记录
+
+`MtoneProvider` 不再支持 `density`；应用移除 `density="compact"`，保留中文 locale 与默认浅色主题。普通单行控件和侧栏导航项采用新版默认 34px 高度，不补写旧版紧凑模式样式。公开包入口和 `styles.css` 导出路径不变，直接依赖和 React peers 也不变。仅更新 mtone 的锁定版本、完整性摘要与发布等待期例外。[npm 元数据](https://registry.npmjs.org/@bixlab%2fmtone/0.8.0) · [发布说明](https://github.com/xingjianxu/mtone/releases/tag/v0.8.0) · [迁移指南](https://github.com/xingjianxu/mtone/blob/v0.8.0/docs/MIGRATION.md)
 
 ## 0.7.0 升级记录
 
