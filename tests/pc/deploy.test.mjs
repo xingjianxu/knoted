@@ -16,11 +16,13 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolve } from "node:path";
@@ -109,14 +111,58 @@ const processImages = {
   "knoted-intelligence": "share/knoted/intelligence/python/bin/python3.12",
 };
 
+// 真实的 /proc/<pid> 同时有世界可读的 cmdline/status 与受 ptrace 校验的 exe。
+// service.sh 在 exec 前把运行根解析成具体产物目录，所以 cmdline 的 argv[0] 里带 <sha>。
 function createProcFixture(procRoot, artifactRoot) {
   Object.values(processImages).forEach((image, index) => {
-    mkdirSync(join(procRoot, String(1000 + index)), { recursive: true });
-    symlinkSync(join(artifactRoot, image), join(procRoot, String(1000 + index), "exe"));
+    const pidDir = join(procRoot, String(1000 + index));
+    mkdirSync(pidDir, { recursive: true });
+    symlinkSync(join(artifactRoot, image), join(pidDir, "exe"));
+    writeFileSync(join(pidDir, "cmdline"), `${join(artifactRoot, image)}\0`);
+    writeFileSync(
+      join(pidDir, "status"),
+      `Name:\tknoted\nUid:\t${process.getuid()}\t${process.getuid()}\t${process.getuid()}\t${process.getuid()}\n` +
+        `Gid:\t${process.getgid()}\t${process.getgid()}\t${process.getgid()}\t${process.getgid()}\n`,
+    );
   });
   // 生产实例跑在 Nix store 里，必须不被 dev 部署的进程校验误伤。
   mkdirSync(join(procRoot, "2000"), { recursive: true });
   symlinkSync("/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-knoted/bin/knoted-api", join(procRoot, "2000", "exe"));
+  writeFileSync(
+    join(procRoot, "2000", "cmdline"),
+    "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-knoted/bin/knoted-api\0--config\0/run/knoted-prod-config/app.toml\0",
+  );
+}
+
+// 内核解析 /proc/<pid>/exe 要求调用者与目标 uid+gid 一致（PTRACE_MODE_READ_FSCREDS）。
+// 删掉 exe 模拟跨组：只有 cmdline 可用。
+function removeProcImages(procRoot) {
+  for (const entry of readdirSync(procRoot)) {
+    rmSync(join(procRoot, entry, "exe"), { force: true });
+  }
+}
+
+// 让假进程的主组与测试运行者不同，触发 gid 诊断。
+function setProcGid(procRoot, gid) {
+  for (const entry of readdirSync(procRoot)) {
+    const statusFile = join(procRoot, entry, "status");
+    if (!existsSync(statusFile)) continue;
+    writeFileSync(statusFile, `Name:\tknoted\nUid:\t${process.getuid()}\t${process.getuid()}\t${process.getuid()}\t${process.getuid()}\nGid:\t${gid}\t${gid}\t${gid}\t${gid}\n`);
+  }
+}
+
+// 未解析运行根的布局：cmdline 只剩 <runtime_parent>/current/<image>，判定不到具体产物。
+// 只改这实例运行根下的进程；/nix/store 里的生产实例同理要以 bin/knoted-api 结尾，不能误伤。
+function unresolveProcCmdlines(procRoot, runtimeParentDir) {
+  for (const entry of readdirSync(procRoot)) {
+    const cmdlineFile = join(procRoot, entry, "cmdline");
+    if (!existsSync(cmdlineFile)) continue;
+    const argv0 = readFileSync(cmdlineFile, "utf8").replace(/\0.*$/s, "");
+    if (!argv0.startsWith(`${runtimeParentDir}/`)) continue;
+    const image = Object.values(processImages).find((candidate) => argv0.endsWith(candidate));
+    if (!image) continue;
+    writeFileSync(cmdlineFile, `${join(runtimeParentDir, "current", image)}\0`);
+  }
 }
 
 // stub 的 pnpm 记录调用顺序，并在"重启"时把假 /proc 的可执行文件指向当前
@@ -128,14 +174,24 @@ function writePnpmStub(path) {
     `#!/usr/bin/env bash
 set -euo pipefail
 relink() {
-  local target index pid image
+  local target index pid image argv0
   [ "\${STUB_NO_RELINK:-0}" = 1 ] && return 0
   target=$(readlink -f "\${STUB_RUNTIME_PARENT:?}/current")
   index=0
   for image in bin/knoted-api bin/knoted-worker share/knoted/intelligence/python/bin/python3.12; do
     pid=$((1000 + index))
-    rm -f "\${STUB_PROC:?}/$pid/exe"
-    ln -s "$target/$image" "\${STUB_PROC:?}/$pid/exe"
+    # STUB_EXE=0 模拟跨组：/proc/<pid>/exe 读不到，只剩 cmdline。
+    if [ "\${STUB_EXE:-1}" = 1 ]; then
+      rm -f "\${STUB_PROC:?}/$pid/exe"
+      ln -s "$target/$image" "\${STUB_PROC:?}/$pid/exe"
+    fi
+    # STUB_CMD_ALIAS 模拟未解析运行根的 service.sh：cmdline 使用别名。
+    if [ -n "\${STUB_CMD_ALIAS:-}" ]; then
+      argv0="\${STUB_RUNTIME_PARENT:?}/$STUB_CMD_ALIAS/$image"
+    else
+      argv0="$target/$image"
+    fi
+    printf '%s\\0' "$argv0" >"\${STUB_PROC:?}/$pid/cmdline"
     index=$((index + 1))
   done
 }
@@ -270,7 +326,29 @@ function fixture({
 }
 
 function deploy(context, args = [targetRevision]) {
-  return run("bash", [deployScript, ...args], { cwd: repoRoot, env: context.env });
+  return run("bash", [context.script ?? deployScript, ...args], { cwd: repoRoot, env: context.env });
+}
+
+// 让部署脚本通过实际 Git common-dir 找到隔离的主检出，既可执行真实 launcher，
+// 也能模拟任务 worktree 已更新、主检出的 launcher 仍旧的情况。
+function attachLauncher(context, { legacy = false } = {}) {
+  const checkout = join(context.base, "main-checkout");
+  const linked = join(context.base, "linked-checkout");
+  const clone = run("git", ["clone", "--quiet", "--shared", "--no-checkout", repoRoot, checkout]);
+  assert.equal(clone.status, 0, clone.stderr);
+  const worktree = run("git", ["-C", checkout, "worktree", "add", "--quiet", "--detach", linked, targetRevision]);
+  assert.equal(worktree.status, 0, worktree.stderr);
+  cpSync(join(repoRoot, "process-compose.yaml"), join(checkout, "process-compose.yaml"));
+  const launcher = join(checkout, "tools/dev/pc/service.sh");
+  mkdirSync(resolve(launcher, ".."), { recursive: true });
+  if (legacy) {
+    writeExecutable(launcher, '#!/usr/bin/env bash\nprintf "runtime_root=%s\\n" "$KNOTED_RUNTIME_ROOT"\n');
+  } else {
+    cpSync(join(repoRoot, "tools/dev/pc/service.sh"), launcher);
+  }
+  context.script = join(linked, "tools/dev/deploy-dev.sh");
+  cpSync(deployScript, context.script);
+  return checkout;
 }
 
 function pcCalls(logFile) {
@@ -416,13 +494,116 @@ describe("deploy-dev.sh", () => {
   it("进程仍在旧目录时收敛等待会等满超时并复位", () => {
     const context = fixture({ targetMigrations: ["0001_registry.sql"] });
     writeDeployEnv(context.instanceRoot, runtimeVariables);
-    // 重启“成功”但进程映像没换：只有 check_processes 能发现。
-    context.env.STUB_NO_RELINK = "1";
+    // 重启“成功”，argv 已指向目标，但可读的 exe 仍表明映像没换。
+    context.env.STUB_EXE = "0";
 
     const result = deploy(context);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /仍运行在/);
     assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
+  });
+
+  it("exe 不可读时用 cmdline 判定进程映像并部署成功", () => {
+    const context = fixture({ targetMigrations: ["0001_registry.sql"] });
+    writeDeployEnv(context.instanceRoot, runtimeVariables);
+    // 跨组：/proc/<pid>/exe 一律 EPERM，只剩世界可读的 cmdline。
+    removeProcImages(context.procRoot);
+    context.env.STUB_EXE = "0";
+
+    const result = deploy(context);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, targetRevision));
+    assert.match(result.stderr, /cmdline/);
+    assert.doesNotMatch(result.stderr, /没有找到运行中的 knoted-api/);
+  });
+
+  it("从历史短 SHA 目录升级时由主检出的 launcher 固定新产物路径", () => {
+    const context = fixture({ targetMigrations: ["0001_registry.sql"] });
+    const shortRoot = join(context.runtimeParentDir, "4a546b2f0efd");
+    renameSync(currentTarget(context), shortRoot);
+    const current = join(context.runtimeParentDir, "current");
+    rmSync(current);
+    symlinkSync(shortRoot, current);
+    writeDeployEnv(context.instanceRoot, runtimeVariables);
+    // 旧进程由未解析运行根的 service.sh 启动：exe 不可读，cmdline 只有 current。
+    // 重启后会由本次的 service.sh 重新拉起，所以这不应该阻止部署。
+    removeProcImages(context.procRoot);
+    unresolveProcCmdlines(context.procRoot, context.runtimeParentDir);
+    setProcGid(context.procRoot, 980);
+    const checkout = attachLauncher(context);
+
+    const result = deploy(context);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, targetRevision));
+    assert.deepEqual(pcCwd(context.logFile), [checkout]);
+    assert.match(result.stderr, /主检出的 launcher 能为新进程固定产物路径/);
+  });
+
+  it("主检出仍用旧 launcher 时不切换产物也不重启", () => {
+    const context = fixture();
+    writeDeployEnv(context.instanceRoot, runtimeVariables);
+    removeProcImages(context.procRoot);
+    unresolveProcCmdlines(context.procRoot, context.runtimeParentDir);
+    setProcGid(context.procRoot, 980);
+    attachLauncher(context, { legacy: true });
+
+    const result = deploy(context);
+    assert.equal(result.status, 2, result.stderr);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
+    assert.deepEqual(pcArgs(context.logFile), []);
+    assert.match(result.stderr, /先更新主检出.*sg .*未切换指针/);
+  });
+
+  it("有可读但不匹配的 exe 时不使用指向目标的 argv", () => {
+    const context = fixture();
+    writeDeployEnv(context.instanceRoot, runtimeVariables);
+    removeProcImages(context.procRoot);
+    symlinkSync("/usr/bin/bash", join(context.procRoot, "1000", "exe"));
+    context.env.STUB_EXE = "0";
+
+    const result = deploy(context);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /没有找到运行中的 knoted-api/);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
+  });
+
+  it("仅有 cmdline 但指向旧 SHA 时仍复位", () => {
+    const context = fixture();
+    writeDeployEnv(context.instanceRoot, runtimeVariables);
+    removeProcImages(context.procRoot);
+    context.env.STUB_NO_RELINK = "1";
+
+    const result = deploy(context);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /仍运行在/);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
+  });
+
+  it("切换后无法判定进程映像时立即失败且不回滚", () => {
+    const context = fixture({ targetMigrations: ["0001_registry.sql"] });
+    writeDeployEnv(context.instanceRoot, runtimeVariables);
+    removeProcImages(context.procRoot);
+    // 切换前 cmdline 有具体产物目录；重启后仅引用自定义别名，不能当成旧 SHA。
+    context.env.STUB_EXE = "0";
+    context.env.STUB_CMD_ALIAS = "configured-alias";
+    symlinkSync(join(context.runtimeParentDir, "current"), join(context.runtimeParentDir, "configured-alias"));
+    context.env.KNOTED_DEPLOY_READY_TIMEOUT = "60";
+
+    const started = Date.now();
+    const result = deploy(context);
+    const elapsed = Date.now() - started;
+
+    assert.notEqual(result.status, 0);
+    // 判不出来时回滚只会扩大空窗，所以指针留在新产物，也不重复重启。
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, targetRevision));
+    assert.deepEqual(pcArgs(context.logFile), [
+      "pc process restart knoted-api",
+      "pc process restart knoted-worker",
+      "pc process restart knoted-intelligence",
+    ]);
+    assert.ok(elapsed < 20_000, `必须快速失败，实际 ${elapsed}ms`);
+    assert.match(result.stderr, /不回滚/);
   });
 
   it("带迁移的部署 readiness 超时时保留新产物而不是回退指针", () => {
@@ -508,13 +689,39 @@ describe("deploy-dev.sh", () => {
     }
   });
 
-  it("既没有 deploy.env 也抓不到活动进程时在切换前退出", () => {
-    const context = fixture({ targetMigrations: ["0001_registry.sql"] });
-    rmSync(join(context.procRoot, "1002"), { recursive: true, force: true });
+  it("只有 cmdline 的候选进程不能提供部署环境变量", () => {
+    const context = fixture();
+    removeProcImages(context.procRoot);
+    const input = Object.entries(runtimeVariables).map(([key, value]) => `${key}=${value}\0`).join("");
+    writeFileSync(join(context.procRoot, "1000", "environ"), input);
 
     const result = deploy(context);
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /environ 不可读或无法确认来源/);
+    assert.equal(existsSync(join(context.instanceRoot, "deploy.env")), false);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
+    assert.deepEqual(pcArgs(context.logFile), []);
+  });
+
+  it("environ 存在且有读权限但实际打不开时给出诊断并在切换前退出", async () => {
+    const context = fixture();
+    // 用 Unix socket 模拟 stat/-r 通过、实际打开失败（不依赖测试用户权限）。
+    const environ = join(context.procRoot, "1002", "environ");
+    const server = createServer();
+    await new Promise((resolve, reject) => server.once("error", reject).listen(environ, resolve));
+    let result;
+    try {
+      chmodSync(environ, 0o600);
+      assert.equal(run("test", ["-r", environ]).status, 0);
+      result = deploy(context);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR/);
+    // 有活动进程但 environ 读不到（如跨组）时不能只说“缺少变量”。
+    assert.match(result.stderr, /environ 不可读/);
+    assert.match(result.stderr, /sg /);
     assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
     assert.deepEqual(
       pcArgs(context.logFile).filter((line) => line.startsWith("pc ")),

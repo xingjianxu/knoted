@@ -513,6 +513,29 @@ describe("migrate", () => {
   });
 });
 
+describe("服务启动路径", () => {
+  for (const role of ["api", "worker"]) {
+    it(`${role} 以版本化路径 exec，不把 current 别名留在 argv`, () => {
+      const root = makeTempDir("launch");
+      const artifact = join(root, revision);
+      const current = join(root, "current");
+      const instance = join(root, "instance");
+      const executable = join(artifact, "bin", `knoted-${role}`);
+      mkdirSync(join(artifact, "bin"), { recursive: true });
+      mkdirSync(join(instance, "config"), { recursive: true });
+      symlinkSync(artifact, current);
+      writeFileSync(join(instance, "config", "knoted.toml"), "");
+      writeExecutable(executable, '#!/usr/bin/env bash\nprintf "%s\\n" "$0"\n');
+
+      const result = run("bash", [serviceScript, role], {
+        env: { ...process.env, KNOTED_INSTANCE_ROOT: instance, KNOTED_RUNTIME_ROOT: current },
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout.trim(), executable);
+    });
+  }
+});
+
 describe("paths", () => {
   it("默认指向本机测试实例", () => {
     const env = { ...process.env };
