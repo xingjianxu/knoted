@@ -13,7 +13,7 @@
 #   1. 迁移文件集合与当前运行的产物不同 → pnpm pc down + pnpm pc up -D（重跑 prepare/migrate）
 #   2. 集合相同 → 只 process restart api / worker / intelligence
 #   3. 目标提交已是 current → 不构建不重启，只做验证
-#   4. 切换后任一验证失败 → 指针复位到上一个产物并按同样方式重启，退出非 0
+#   4. 切换后验证失败 → 非迁移部署复位指针并重启；若只缺少进程版本证据则不回滚
 #
 # 运行变量：dev 实例需要一组只存在于「启动它的 shell」里的变量（两个模型根、search/vectors
 # 开关、Office origin 与凭据路径、可选的本机聊天模型）。脚本把它们持久化到
@@ -170,31 +170,45 @@ read_deploy_env() {
 # api/worker 直接跑 Rust 二进制，intelligence 的包装器 exec 固定解释器（exe 是产物里的
 # python3.12），且 service.sh 用 `env -i` 只给 intelligence 留模型根与端口。所以不能只看
 # 一个进程：按 api → worker → intelligence 并集取值，先到先得。
+# 只从 exe 已确认的进程读取环境；跨组时 cmdline 仅用于诊断。
+capture_problem=""
 capture_running_variables() {
-  local exe_link exe env_file key value found=0
+  local pid status env_file env_fd entry key value found=0 unreadable_pid=""
   local -a candidates=()
-  for exe_link in "$proc_root"/[0-9]*/exe; do
-    exe=$(readlink -- "$exe_link" 2>/dev/null) || continue
-    exe=${exe% (deleted)}
-    case "$exe" in
-    "$runtime_parent"/*/bin/knoted-api | "$runtime_parent"/*/bin/knoted-worker)
-      candidates+=("${exe_link%/exe}/environ")
-      ;;
-    "$runtime_parent"/*/share/knoted/intelligence/python/bin/python3.12 | "$runtime_parent"/*/bin/knoted-intelligence)
-      candidates+=("${exe_link%/exe}/environ")
-      ;;
-    *) continue ;;
-    esac
+  capture_problem=""
+  for pid in "$proc_root"/[0-9]*; do
+    [ -d "$pid" ] || continue
+    status=0
+    identify_process "$pid" || status=$?
+    [ "$status" -eq 1 ] && continue
+    # argv 只用于诊断权限，不能让未经 exe 确认的进程提供运行变量。
+    if [ "$image_source" != exe ]; then
+      unreadable_pid=${unreadable_pid:-$pid}
+      continue
+    fi
+    candidates+=("$pid/environ")
   done
   for env_file in "${candidates[@]}"; do
-    [ -r "$env_file" ] || continue
+    # -r 只检查文件权限；内核会在实际打开 environ 时再检查进程访问权限。
+    if ! { exec {env_fd}<"$env_file"; } 2>/dev/null; then
+      unreadable_pid=${unreadable_pid:-${env_file%/environ}}
+      continue
+    fi
     found=1
-    while IFS='=' read -r key value; do
+    while IFS= read -r -d '' entry <&"$env_fd"; do
+      [[ $entry == *=* ]] || continue
+      key=${entry%%=*}
+      value=${entry#*=}
+      [[ $value != *$'\n'* && $value != *$'\r'* ]] || continue
       case " ${runtime_variable_keys[*]} " in
       *" $key "*) [ -n "$value" ] && [ -z "${resolved[$key]:-}" ] && resolved[$key]=$value ;;
       esac
-    done < <(tr '\0' '\n' <"$env_file")
+    done
+    exec {env_fd}<&-
   done
+  if [ -n "$unreadable_pid" ]; then
+    capture_problem="活动进程的 /proc/<pid>/environ 不可读或无法确认来源（$(describe_process_gid "$unreadable_pid")）；$(sg_hint)，或先 export 再重跑"
+  fi
   test "$found" = 1
 }
 
@@ -228,12 +242,17 @@ resolve_runtime_variables() {
   for key in "${runtime_variable_keys[@]}"; do
     [ -n "${resolved[$key]:-}" ] || missing="$missing $key"
   done
-  if [ -n "$missing" ] && capture_running_variables; then
-    captured=1
-    missing=""
-    for key in "${runtime_variable_keys[@]}"; do
-      [ -n "${resolved[$key]:-}" ] || missing="$missing $key"
-    done
+  if [ -n "$missing" ]; then
+    if capture_running_variables; then
+      captured=1
+      missing=""
+      for key in "${runtime_variable_keys[@]}"; do
+        [ -n "${resolved[$key]:-}" ] || missing="$missing $key"
+      done
+    fi
+    if [ -n "$missing" ] && [ -n "$capture_problem" ]; then
+      log "$capture_problem"
+    fi
   fi
   for key in "${required_variable_keys[@]}"; do
     if [ -z "${resolved[$key]:-}" ]; then
@@ -383,10 +402,15 @@ wait_for_convergence() {
         log "readiness 与进程映像就位（$((SECONDS - start))s）"
         return 0
       fi
+      # 判不出新旧版本时再等也不会变：立即停，别把预算耗在不可能收敛的判据上。
+      [ "$process_unverifiable" = 1 ] && break
     fi
     sleep 1
   done
-  if [ "$ready" = 1 ]; then
+  if [ "$process_unverifiable" = 1 ]; then
+    # 不是超时：判据本身不成立，再等也不会变。
+    log "停止等待（$((SECONDS - start))s）：$process_problem"
+  elif [ "$ready" = 1 ]; then
     log "等待超时（${timeout}s）：${process_problem}"
   else
     log "等待超时（${timeout}s）：API 或 intelligence 未就绪（${process_problem:-进程未就绪}）"
@@ -397,34 +421,136 @@ wait_for_convergence() {
 # 进程映像必须已经来自新产物：/proc/<pid>/exe 会解析到具体 revision 目录。
 # knoted-intelligence 的入口是 bash 包装器，它 exec 固定解释器，所以真正看到的
 # exe 是 <产物>/share/knoted/intelligence/python/bin/python3.12。
-# 失败原因写进 process_problem，由调用方决定何时报告（收敛等待里不该每秒刷屏）。
+#
+# 但内核解析 /proc/<pid>/exe 走 PTRACE_MODE_READ_FSCREDS，要求调用者与目标的
+# uid **和 gid** 都匹配。dev 进程由 pcwrap 托管的 process-compose 拉起，主组
+# 可能是 strata-clients 而操作者是 users，此时 readlink 直接 EPERM——这不是
+# "进程不存在"。退路是世界可读的 /proc/<pid>/cmdline：service.sh 在 exec 前把
+# 运行根解析成具体产物目录，argv[0] 因此带着 <sha>。如果 argv[0] 只有别名，
+# 无法判定版本，属于"不可验证"，既不猜也不回滚。
+image_role=""
+image_dir=""
+image_source=""
+criterion_notice=0
 process_problem=""
+process_unverifiable=0
+
+# 从路径识别角色与产物目录：0 = 命中。
+image_of_path() {
+  case "$1" in
+  "$runtime_parent"/*/bin/knoted-api)
+    image_role=knoted-api
+    image_dir=${1%/bin/knoted-api}
+    ;;
+  "$runtime_parent"/*/bin/knoted-worker)
+    image_role=knoted-worker
+    image_dir=${1%/bin/knoted-worker}
+    ;;
+  "$runtime_parent"/*/share/knoted/intelligence/python/bin/python3.12)
+    image_role=knoted-intelligence
+    image_dir=${1%/share/knoted/intelligence/python/bin/python3.12}
+    ;;
+  # 包装器到 exec 解释器之间会有一瞬，旧判据也认它。
+  "$runtime_parent"/*/bin/knoted-intelligence)
+    image_role=knoted-intelligence
+    image_dir=${1%/bin/knoted-intelligence}
+    ;;
+  *) return 1 ;;
+  esac
+  return 0
+}
+
+# 0 = 命中本实例的 knoted 进程（image_* 已填）；1 = 无关进程；
+# 2 = 是本实例进程但定位不到具体产物目录（不可验证）。
+identify_process() {
+  local pid=$1 exe cmdline=""
+  image_role=""
+  image_dir=""
+  image_source=""
+  exe=$(readlink -- "$pid/exe" 2>/dev/null) || exe=""
+  exe=${exe% (deleted)}
+  if [ -n "$exe" ]; then
+    image_of_path "$exe" || return 1
+    image_source=exe
+    return 0
+  fi
+  if IFS= read -r -d '' cmdline 2>/dev/null <"$pid/cmdline" && image_of_path "$cmdline"; then
+    if [[ ${image_dir#"$runtime_parent/"} =~ ^[0-9a-f]{40}$ ]]; then
+      image_source=cmdline
+      return 0
+    fi
+    # 不能事后解析别名：链接可能在这次启动之后已被切换过。
+    image_source=alias
+    return 2
+  fi
+  # exe 读不到、cmdline 也不指向已知角色：无法证明它属于本实例，不当成 knoted 进程。
+  return 1
+}
+
+# 两边 gid 写进输出：换组重跑是恢复强判据的入口。
+describe_process_gid() {
+  local caller_gid gid
+  caller_gid=$(id -g 2>/dev/null || true)
+  gid=$(awk '/^Gid:/{print $2}' "$1/status" 2>/dev/null || true)
+  printf '调用者 gid=%s，进程 Gid=%s' "${caller_gid:-?}" "${gid:-?}"
+}
+
+sg_hint() {
+  printf "用该进程主组重跑可恢复 exe 判据：sg <进程主组> -c 'pnpm deploy:dev'（组名见 getent group <gid>）"
+}
+
+note_image_source() {
+  [ "$1" = cmdline ] || return 0
+  [ "$criterion_notice" = 1 ] && return 0
+  criterion_notice=1
+  log "/proc/<pid>/exe 不可读（跨 uid/gid 的 ptrace 限制），改用 /proc/<pid>/cmdline 判定进程映像"
+}
+
+# 现有进程若只能给到别名，重启后必须靠 launcher 固定 argv[0]。pcwrap daemon 用的是
+# 主检出，不是本脚本所在的任务 worktree；不能让旧 launcher 把问题带到切换之后。
+preflight_process_evidence() {
+  local pid status expected_root launcher_paths current_root=$runtime_parent/current
+  for pid in "$proc_root"/[0-9]*; do
+    [ -d "$pid" ] || continue
+    status=0
+    identify_process "$pid" || status=$?
+    [ "$status" -eq 1 ] && continue
+    [ "$status" -eq 2 ] || continue
+    # 这里只检查 launcher 能否解析链接；历史产物目录可能仍是短 SHA。
+    expected_root=$(readlink -f -- "$current_root" 2>/dev/null) || expected_root=""
+    if [ -L "$current_root" ] && [ -n "$expected_root" ] && [ "$expected_root" != "$current_root" ] &&
+      launcher_paths=$(KNOTED_RUNTIME_ROOT="$current_root" bash "$instance_repository/tools/dev/pc/service.sh" paths 2>/dev/null) &&
+      grep -Fxq -- "runtime_root=$expected_root" <<<"$launcher_paths"; then
+      log "现有进程只提供运行根别名（$(describe_process_gid "$pid")）；主检出的 launcher 能为新进程固定产物路径"
+      return 0
+    fi
+    fail "无法从现有进程验证具体产物路径（$(describe_process_gid "$pid")）。请先更新主检出 $instance_repository 的 launcher；也可$(sg_hint)。未切换指针" 2
+  done
+}
+
+# 进程映像必须已经来自新产物。
 check_processes() {
-  local exe_link exe name dir seen_api=0 seen_worker=0 seen_intelligence=0
+  local pid status seen_api=0 seen_worker=0 seen_intelligence=0
   process_problem=""
-  for exe_link in "$proc_root"/[0-9]*/exe; do
-    exe=$(readlink -- "$exe_link" 2>/dev/null) || continue
-    exe=${exe% (deleted)}
-    case "$exe" in
-    "$runtime_parent"/*/bin/knoted-api) {
-      name=knoted-api
-      dir=${exe%/bin/$name}
-      seen_api=1
-    } ;;
-    "$runtime_parent"/*/bin/knoted-worker) {
-      name=knoted-worker
-      dir=${exe%/bin/$name}
-      seen_worker=1
-    } ;;
-    "$runtime_parent"/*/share/knoted/intelligence/python/bin/python3.12) {
-      name=knoted-intelligence
-      dir=${exe%/share/knoted/intelligence/python/bin/python3.12}
-      seen_intelligence=1
-    } ;;
-    *) continue ;;
+  process_unverifiable=0
+  for pid in "$proc_root"/[0-9]*; do
+    [ -d "$pid" ] || continue
+    status=0
+    identify_process "$pid" || status=$?
+    [ "$status" -eq 1 ] && continue
+    if [ "$status" -eq 2 ]; then
+      process_unverifiable=1
+      process_problem="无法判定进程 ${pid##*/} 的映像来自哪个产物目录（$image_source；$(describe_process_gid "$pid")）；$(sg_hint)"
+      return 1
+    fi
+    note_image_source "$image_source"
+    case "$image_role" in
+    knoted-api) seen_api=1 ;;
+    knoted-worker) seen_worker=1 ;;
+    knoted-intelligence) seen_intelligence=1 ;;
     esac
-    if [ "$dir" != "$target" ]; then
-      process_problem="$name 仍运行在 $dir（期望 $target）"
+    if [ "$image_dir" != "$target" ]; then
+      process_problem="$image_role 仍运行在 $image_dir（期望 $target）"
       return 1
     fi
   done
@@ -456,6 +582,12 @@ check_https() {
 # 启动），此时保留新产物并打印人工入口，避免留下“指针旧、数据库新”的死锁。
 fail_after_switch() {
   local reason=$1
+  if [ "$process_unverifiable" = 1 ]; then
+    log "$reason"
+    log "无法用进程映像证明新旧版本，指针保持指向 $target（不回滚：判断依据不会因回滚改变，只会扩大空窗）"
+    log "排查入口：pnpm pc process list / pnpm pc process logs knoted-api -n 200 / pnpm pc process logs knoted-intelligence -n 200"
+    exit 1
+  fi
   if [ "$migrations_changed" = 1 ]; then
     log "$reason；本次部署包含迁移，指针保持指向 $target（只回退指针会与已应用的 schema 冲突）"
     log "排查入口：pnpm pc process logs knoted-api -n 200 / pnpm pc process logs knoted-intelligence -n 200"
@@ -505,6 +637,7 @@ main() {
     return 0
   fi
 
+  preflight_process_evidence
   # 构建前就要有运行变量：Vite 用 KNOTED_OFFICE_ORIGIN 决定是否编入 Office。
   resolve_runtime_variables
 

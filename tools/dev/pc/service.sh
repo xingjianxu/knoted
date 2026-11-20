@@ -44,6 +44,11 @@ script_dir=$(cd "${BASH_SOURCE[0]%/*}" && pwd)
 
 instance_root=${KNOTED_INSTANCE_ROOT:-/data/knoted-dev/service}
 runtime_root=${KNOTED_RUNTIME_ROOT:-/data/knoted-dev/runtime/current}
+# 解析成具体产物目录再 exec：execve 本来就会解析符号链接，语义不变，但进程表从此
+# 自描述——/proc/<pid>/cmdline 的 argv[0] 带 <sha>。部署脚本的进程映像校验需要它：
+# /proc/<pid>/exe 受内核 ptrace 的 uid+gid 校验，跨组时读不到，cmdline 则世界可读。
+runtime_root=$(readlink -f -- "$runtime_root" 2>/dev/null || printf '%s' "$runtime_root")
+[ -n "$runtime_root" ] || runtime_root=${KNOTED_RUNTIME_ROOT:-/data/knoted-dev/runtime/current}
 api_port=${KNOTED_API_PORT:-15602}
 intelligence_port=${KNOTED_INTELLIGENCE_PORT:-15603}
 https_port=${KNOTED_HTTPS_PORT:-15601}

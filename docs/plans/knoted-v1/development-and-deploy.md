@@ -62,8 +62,25 @@ schema 由编排里的 `migrate` 进程管理（`sqlx migrate run`）；库不�
 | 判迁移 | 比对旧 `current` 与新产物 `share/knoted/migrations/*.sql` 文件名集合 |
 | 切换 | `current` 用 `ln` + `mv -Tf` 原子替换；共享 Caddy 静态根随即指向新产物 |
 | 重启 | 集合有变：先 `pnpm pc down`（停止失败则指针不切、实例仍旧版本）再 `up -D`（重跑 prepare/migrate）；无变：依次 `process restart` api / worker / intelligence（intelligence 也来自产物目录，不能漏），单个 restart 失败则退回到 `down` + `up -D` |
-| 验证 | `REVISION` 匹配、完整 `SHA256SUMS` 校验、API `/health/ready`、intelligence health、三个进程 `/proc/<pid>/exe` 落在新目录、`https://$domain:$HTTPS_PORT/` 200。readiness 与进程映像在同一个收敛等待里重试（worker 要等 process-compose 自己观察到 intelligence 健康后才被拉起，探针一过就扫 `/proc` 会误报） |
-| 失败 | 切换前失败：不改指针、不重启（运行变量文件可能已写入，不影响业务）。切换后失败且**迁移集合未变**：复位 `current` 并重启回旧版本。切换后失败且**包含迁移**：保留新产物（只回退指针会与已应用的 schema 冲突）、打印 `process logs` 入口、退出非 0 |
+| 验证 | `REVISION` 匹配、完整 `SHA256SUMS` 校验、API `/health/ready`、intelligence health、三个进程映像落在新产物目录、`https://$domain:$HTTPS_PORT/` 200。readiness 与进程映像在同一个收敛等待里重试（worker 要等 process-compose 自己观察到 intelligence 健康后才被拉起，探针一过就扫 `/proc` 会误报） |
+| 失败 | 切换前失败：不改指针、不重启（运行变量文件可能已写入，不影响业务）。切换后失败且**迁移集合未变**：复位 `current` 并重启回旧版本。切换后失败且**包含迁移**：保留新产物（只回退指针会与已应用的 schema 冲突）、打印 `process logs` 入口、退出非 0。切换后**无法判定**进程映像（既读不到 exe、cmdline 也不含具体产物目录）：立即失败、**不回滚**（回滚不改变判断依据，只会扩大空窗） |
+
+### 进程映像判据与 ptrace 边界
+
+读取 `/proc/<pid>/exe` 时，内核按 `PTRACE_MODE_READ_FSCREDS` 检查访问权限。对没有额外权限的同 UID 调用者，GID 不匹配也会导致拒绝访问。若 process-compose 托管进程的主组为 `strata-clients`，而操作者 shell 的主组为 `users`，`readlink /proc/<pid>/exe` 可能报权限错误，不能当成「进程不存在」。
+
+因此部署脚本的判据分两层：
+
+1. 优先用 `/proc/<pid>/exe` 判断进程映像；读得到时不采信与之矛盾的命令行。
+2. `exe` 读不到时检查 `/proc/<pid>/cmdline`。`service.sh` 在 exec 前固定运行根，`argv[0]` 必须直接指向 `<runtime_parent>/<40 位提交 SHA>/…`；`current` 和其他符号链接别名不作为版本证据。
+
+首次部署这项修复前，先把**稳定实例的主检出**快进到包含新版 `tools/dev/pc/service.sh` 的提交。即使从任务 Worktree 运行，daemon 重启时用的仍是主检出的 launcher。旧进程只提供别名时，部署会先检查主检出的 launcher 能否固定产物路径；不能则在切换前退出。切换后若只能看见别名，脚本停止等待、不自动回滚。若此时 `current` 已指向目标，更新主检出后按 `knoted-api`、`knoted-worker`、`knoted-intelligence` 顺序各执行一次 `pnpm pc process restart <name>`，再跑 `pnpm deploy:dev <目标 SHA>` 验证；同 SHA 的部署只验证，不会代为重启。
+
+同一 ptrace 校验也可能限制 `/proc/<pid>/environ`。只从 `exe` 能确认的进程抓取变量；权限不足时优先使用已有 `deploy.env` 或显式设置所需变量。需要恢复强判据或自动抓取时，用进程主组重跑：
+
+```bash
+sg strata-clients -c 'pnpm deploy:dev'
+```
 
 运行变量白名单（只存路径与开关，不存密钥）：`KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR`、`KNOTED_INTELLIGENCE_BGE_M3_DIR`（这两个缺失时脚本在切换前拒绝）、`KNOTED_SEARCH_ENABLED`、`KNOTED_SEARCH_CREDENTIAL_FILE`、`KNOTED_VECTORS_ENABLED`、`KNOTED_OFFICE_ORIGIN`、`KNOTED_OFFICE_JWT_SECRET_FILE`、`KNOTED_CHAT_LOCAL_BASE_URL`、`KNOTED_CHAT_LOCAL_MODEL`、`KNOTED_CHAT_LOCAL_CREDENTIAL_FILE`。
 
