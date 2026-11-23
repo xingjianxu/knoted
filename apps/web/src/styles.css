@@ -23,6 +23,11 @@
 
 /* Application page composition. The mtone Content remains the scroll owner. */
 @layer components {
+  .workspace-sider {
+    /* Leave room for the return link and actions when expanded on a narrow screen. */
+    max-inline-size: max(52px, calc(100% - 13rem));
+  }
+
   .workspace-content {
     container: workspace / inline-size;
   }

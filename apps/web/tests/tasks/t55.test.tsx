@@ -104,12 +104,13 @@ it("t55_2 restores every submitted filter when the URL is reopened", async () =>
 
 it("t55_3 highlights matching text without interpreting HTML", async () => {
   const snippet = '<img src=x onerror="alert(1)"> 查找 <em>纯文本</em>';
-  const view = await openSearch("/search?q=查找", () => page([{ ...hit, snippet }]));
+  await openSearch("/search?q=查找", () => page([{ ...hit, snippet }]));
   await screen.findByRole("link", { name: "会议纪要" });
-  const item = screen.getByRole("listitem");
+  const results = screen.getByRole("list", { name: "匹配资料" });
+  const item = within(results).getByRole("listitem");
   expect(item.textContent).toContain(snippet);
   expect(item.querySelector("mark")).toHaveTextContent("查找");
-  expect(view.container.querySelector("img, em")).toBeNull();
+  expect(results.querySelector("img, em")).toBeNull();
 });
 
 it("disables cursor controls while loading and resets them when the URL query changes", async () => {
