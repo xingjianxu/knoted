@@ -120,6 +120,7 @@ function Shell() {
           content.focus({ preventScroll: true });
         }}>跳到主要内容</a>
       <AdminLayout.Sider
+        className="workspace-sider"
         logo={<strong>Knoted</strong>}
         collapsedLogo={<strong><span aria-hidden="true">K</span><span className="sr-only">Knoted</span></strong>}
         collapsible
@@ -155,15 +156,20 @@ function Shell() {
         <AdminLayout.Header
           className="px-3 sm:px-6"
           breadcrumb={
-            <Breadcrumb aria-label="当前位置" items={collection ? [
-              { label: (
-                <Link className="page-link inline-flex items-center gap-1" to={collection} resetScroll={collection !== "/files"} activeOptions={{ exact: true }}>
-                  <ArrowLeft aria-hidden="true" size={16} />
-                  {detailLabels[collection].back}
-                </Link>
-              ) },
-              { label: detailLabels[collection].current },
-            ] : [{ label: section }]} />
+            <Breadcrumb
+              aria-label="当前位置"
+              className={collection ? "[&>ol>li:first-child]:shrink-0" : undefined}
+              items={collection ? [
+                { label: (
+                  <Link className="page-link inline-flex items-center gap-1" to={collection}
+                    resetScroll={collection !== "/files"} activeOptions={{ exact: true }}>
+                    <ArrowLeft aria-hidden="true" size={16} />
+                    {detailLabels[collection].back}
+                  </Link>
+                ) },
+                { label: detailLabels[collection].current },
+              ] : [{ label: section }]}
+            />
           }
           extra={
             <WorkspaceHeaderActions compact={compactHeader} logoutPending={busy}
