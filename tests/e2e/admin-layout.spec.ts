@@ -65,6 +65,28 @@ async function mockWorkspace(page: Page, authenticated = true) {
   });
 }
 
+for (const width of [1440, 390, 320]) {
+  test(`侧栏品牌区与顶栏底边在 ${width}px 对齐`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 720 });
+    await mockWorkspace(page);
+    await page.goto(`/projects/${fixtureId(201)}`);
+
+    const sidebarToggle = page.getByRole("button", {
+      name: width < 768 ? "展开侧边栏" : "收起侧边栏",
+    });
+    await expect(sidebarToggle).toHaveAttribute("aria-expanded", String(width >= 768));
+    const header = page.getByRole("banner");
+    await expect(header.getByRole("link", { name: "返回项目" })).toBeInViewport({ ratio: 1 });
+    await expect(header.getByRole("button", { name: "退出登录" })).toBeInViewport({ ratio: 1 });
+
+    const brand = page.locator(".mt-sidebar-heading");
+    await expect.poll(async () => {
+      const [left, right] = await Promise.all([brand.boundingBox(), header.boundingBox()]);
+      return left && right ? (right.y + right.height) - (left.y + left.height) : null;
+    }).toBe(0);
+  });
+}
+
 test("窄屏图标导航可通过键盘打开页面，并可在桌面折叠或展开", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 700 });
   await mockWorkspace(page);
