@@ -12,7 +12,7 @@ description: Use when a proposed change affects long-term module boundaries, int
 ## 步骤
 
 1. 检索已有 Proposed/Accepted/Superseded ADR，确认本次提案是否与已确认决策冲突。列明约束、未知项和需要人工确认的部分。
-2. 复用实际安装的 Superpowers brainstorming 讨论方案，不重建通用设计 Skill。分析至少现状与合理候选的接口、依赖、兼容性、数据、安全、性能、迁移成本和回退。
+2. 分析至少现状与合理候选的接口、依赖、兼容性、数据、安全、性能、迁移成本和回退（若当前环境已安装设计/头脑风暴 Skill 可直接复用，不重建通用设计 Skill）。
 3. 区分事实、推断、试验结果；必要研究仅在授权范围内。写草稿仍须任务 Worktree，只读研究可不建。
 4. 重大/跨模块调整按 [RFC 模板](../../../docs/rfcs/template.md) 建议或起草 RFC，包含推荐方案、权衡、验收、开放问题和确认责任人。推荐不是 Accepted。
 5. 输出具体可审阅方案，等待重要决策的人工确认。已有明确确认不重复请求；确认后转 adr-create。涉及旧 Accepted ADR 时建议新 ADR 及替代关系，不直接改旧决策正文。

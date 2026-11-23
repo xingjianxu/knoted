@@ -1,6 +1,6 @@
 # 任务标题实施计划
 
-> 执行方式：实际可用的 executing-plans 或 subagent-driven-development；按依赖执行，不提前标记完成。
+> 执行方式：拆分后的可独立交付项登记为 GitHub Issue 与 `docs/tasks/<编号>.md`，按直接前置依赖依次推进，不提前标记完成。
 
 - Goal: 可验证目标
 - Issue / authorization: 真实 Issue 或直接人工请求及授权范围
