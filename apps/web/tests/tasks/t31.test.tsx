@@ -603,3 +603,76 @@ it("move dialog uses TreeSelect to pick a non-root parent while excluding the cu
   await waitFor(() => expect(calls("POST", "/move")).toHaveLength(1));
   expect(await calls("POST", "/move")[0]!.json()).toEqual({ expected_version: 1, parent_id: id(2), position: 0 });
 });
+
+it("notes index opens the first root note by default inside the Splitter layout and keeps it stable across move/delete", async () => {
+  notes = [
+    { ...note(2), position: 0, title: "首篇根笔记", document: doc("首篇根正文") },
+    { ...note(1), position: 1, title: "次篇根笔记", document: doc("次篇根正文") },
+    { ...note(3, 2), position: 0, title: "子笔记", document: doc("子正文") },
+  ];
+  const { router } = await mount("/notes");
+  expect(router.state.location.pathname).toBe("/notes");
+  expect(await title()).toHaveValue("首篇根笔记");
+  expect(screen.getByRole("region", { name: "当前笔记" })).toHaveTextContent("首篇根正文");
+  expect(screen.getByRole("treeitem", { name: "首篇根笔记" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("separator", { name: "调整分栏 1" })).toBeInTheDocument();
+
+  // Moving the default root note while on /notes must not jump away to another note.
+  await selectNoteAction("移动笔记");
+  const dialog = await screen.findByRole("dialog", { name: "移动笔记" });
+  fireEvent.click(within(dialog).getByRole("combobox", { name: "目标父笔记" }));
+  const moveTree = await screen.findByRole("tree", { name: "目标父笔记" });
+  fireEvent.click(within(moveTree).getByRole("treeitem", { name: "次篇根笔记" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "确认移动" }));
+  await waitFor(() => expect(calls("POST", "/move")).toHaveLength(1));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(await title()).toHaveValue("首篇根笔记");
+  expect(router.state.location.pathname).toBe("/notes");
+
+  // Switching to another note navigates cleanly to its canonical detail route.
+  fireEvent.click(screen.getByRole("treeitem", { name: "次篇根笔记" }));
+  await waitFor(() => expect(router.state.location.pathname).toBe(`/notes/${id(1)}`));
+  expect(await title()).toHaveValue("次篇根笔记");
+});
+
+it("deleting the default root note on /notes advances to the next root note and keeps the undo receipt", async () => {
+  const { router } = await mount("/notes");
+  expect(await title()).toHaveValue("笔记1");
+  await selectNoteAction("删除笔记");
+  fireEvent.click(await screen.findByRole("button", { name: "确认删除" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "恢复本次删除 笔记1" })).toBeInTheDocument());
+  expect(router.state.location.pathname).toBe("/notes");
+  expect(await title()).toHaveValue("笔记2");
+  expect(screen.getByRole("treeitem", { name: "笔记2" })).toHaveAttribute("aria-selected", "true");
+});
+
+it("deleting a non-default note preserves active editing session protection on the reopened default root note", async () => {
+  const { router } = await mount("/notes");
+  expect(await title()).toHaveValue("笔记1");
+  fireEvent.click(screen.getByRole("treeitem", { name: "笔记2" }));
+  await waitFor(() => expect(router.state.location.pathname).toBe(`/notes/${id(2)}`));
+  expect(await title()).toHaveValue("笔记2");
+
+  await selectNoteAction("删除笔记");
+  fireEvent.click(await screen.findByRole("button", { name: "确认删除" }));
+  await waitFor(() => expect(router.state.location.pathname).toBe("/notes"));
+  const reopenedTitle = await title();
+  expect(reopenedTitle).toHaveValue("笔记1");
+
+  intercept = r => r.method === "PATCH" ? failure(503) : undefined;
+  fireEvent.change(reopenedTitle, { target: { value: "删后继续编辑不能丢" } });
+  fireEvent.click(await openWorkspaceLogout());
+  await screen.findByText(/无法安全离开笔记/);
+  expect(calls("POST", "/auth/logout")).toHaveLength(0);
+  expect(router.state.location.pathname).toBe("/notes");
+  expect(reopenedTitle).toHaveValue("删后继续编辑不能丢");
+});
+
+it("empty notes index renders the empty state and create entry without errors", async () => {
+  notes = [];
+  const { router } = await mount("/notes");
+  expect(router.state.location.pathname).toBe("/notes");
+  expect((await screen.findAllByText("暂无笔记")).length).toBeGreaterThan(0);
+  expect(screen.getByRole("button", { name: "新建笔记" })).toBeEnabled();
+  expect(screen.queryByRole("textbox", { name: "笔记标题" })).not.toBeInTheDocument();
+});

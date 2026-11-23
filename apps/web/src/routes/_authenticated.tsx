@@ -71,7 +71,13 @@ function Shell() {
     },
   });
   // The existing tasks route hosts both the list and the board.
-  const wide = /^\/(notes|tasks|chat)(?:\/|$)/.test(pathname);
+  const notesLayout = /^\/notes(?:\/|$)/.test(pathname);
+  const wide = /^\/(tasks|chat)(?:\/|$)/.test(pathname);
+  const frameClass = notesLayout
+    ? "workspace-frame workspace-frame--flush"
+    : wide
+      ? "workspace-frame workspace-frame--wide"
+      : "workspace-frame";
   const section = sectionLabels[pathname.replace(/^(\/[^/]+)\/.*$/, "$1")] ?? "工作空间";
   const [compactHeader, setCompactHeader] = useState(false);
   const frame = useWorkspaceScrollFrame();
@@ -178,8 +184,8 @@ function Shell() {
         />
         <AdminLayout.Content id="workspace-content" tabIndex={-1} data-workspace-content
           data-scroll-restoration-id="workspace" className="workspace-content bg-canvas p-0">
-          <div ref={frame} className={wide ? "workspace-frame workspace-frame--wide" : "workspace-frame"}>
-            {error && <div className="mb-4"><Alert tone="error">{error}</Alert></div>}
+          <div ref={frame} className={frameClass}>
+            {error && <div className={notesLayout ? "shrink-0 px-3 pt-3 sm:px-6 sm:pt-4" : "mb-4"}><Alert tone="error">{error}</Alert></div>}
             <NotesNavigationBlocked.Provider value={() => blockedLogout.current?.()}>
               <Outlet />
             </NotesNavigationBlocked.Provider>

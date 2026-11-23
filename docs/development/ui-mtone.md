@@ -13,7 +13,7 @@
 
 ## 现状与目标
 
-当前精确依赖为 **`@bixlab/mtone@0.13.1`**（`apps/web/package.json` / `pnpm-lock.yaml`）。下文保留 T17—T19 的原始接入与各版本升级记录。
+当前精确依赖为 **`@bixlab/mtone@0.13.2`**（`apps/web/package.json` / `pnpm-lock.yaml`，仓库根目录 `.npmrc` 固定使用官方源 `https://registry.npmjs.org/`）。下文保留 T17—T19 的原始接入与各版本升级记录。
 
 T17 已精确接入 npm `@bixlab/mtone@0.2.0`，迁移 App 静态类并移除 `packages/ui`；**PR #42 已普通 merge 至主线 `e3e1db2`，独立审查/主线验证/任务清理完成**。T17 接入时，生产入口使用应用层 `UiProvider` 配置公开 `MtoneProvider`，不转发控件 API；CSS 从应用样式入口导入。基础表单组合仅在测试夹具中，不建立生产演示路由或通用包装库。证据见 [T17](../plans/knoted-v1/evidence/t17.md)。
 
@@ -50,6 +50,13 @@ T17 实测：旧 `cn('p-2', 'p-4')` 返回 `p-4`，mtone 的 `cn` 返回 `p-2 p-
 0.2.0 在实施时距发布不足 pnpm 默认最小等待时间；`pnpm-workspace.yaml` 仅为已明确选择、检查过的精确版本添加 minimumReleaseAgeExclude，其他依赖策略保持不变。不改 workspace 通配范围。
 
 只使用 npm 已发布版本作为正式依赖；不以浮动 latest、Git、file/link、未发布 tarball 交付。不修改 API 或业务语义来迁就组件。
+
+## 0.13.2 升级与笔记页 Splitter 重构
+
+仓库根目录通过 `.npmrc` 固定 `registry=https://registry.npmjs.org/`，同步将精确依赖与 `pnpm-workspace.yaml` 等待期例外升级至 **`@bixlab/mtone@0.13.2`**（公开入口、CSS 导出路径与 React peers 不变，锁文件无无关依赖漂移）。[npm 元数据](https://registry.npmjs.org/@bixlab%2fmtone/0.13.2) · [发布说明](https://github.com/xingjianxu/mtone/releases/tag/v0.13.2) · [任务卡 #278](../tasks/278.md)
+
+- **笔记页 Splitter 分栏与侧栏文档树**：`NotesPage` 在全高工作区容器内直接组合公开 `Splitter` / `Splitter.Panel`，左侧面板放 `Sidebar` + `Tree`（启用 0.13.2 的 `directory`、`expandAction={false}`、`indent={14}`、`gap={2}`、`selectedKeys`/`expandedKeys`），右侧面板承载当前笔记；访问 `/notes` 且存在笔记时默认显示树根的第一个笔记内容，窄屏下保留 `Drawer` 目录入口与焦点恢复。
+- **笔记页 mtone 组件化优化**：笔记顶部操作条采用 `Toolbar` + `Status` + 带图标的 `Button`/`Popover.Menu`，标题输入框采用 `Input variant="borderless"` 与 `Divider`，移动对话框改用 `Form` + `Form.Item` + `TreeSelect`，历史版本与标签关联采用 `Card` 与 `Tag` 呈现，完整保留草稿隔离、冲突恢复、导航拦截与安全退出契约。
 
 ## 0.13.1 工作区布局修复
 
