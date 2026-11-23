@@ -136,7 +136,7 @@ const routeSamples: RouteSample[] = [
   { name: "bootstrap", path: "/bootstrap", ready: heading("首次注册") },
   { name: "recovery", path: "/recovery", ready: heading("恢复账号") },
   { name: "dashboard", path: "/", ready: heading("工作概览"), section: "概览" },
-  { name: "notes", path: "/notes", ready: page => page.getByRole("treeitem", { name: /调研手记/ }), section: "笔记" },
+  { name: "notes", path: "/notes", ready: page => page.getByRole("textbox", { name: "笔记标题" }), section: "笔记" },
   { name: "note", path: `/notes/${note.id}`, ready: page => page.getByRole("textbox", { name: "笔记标题" }), section: "笔记" },
   { name: "projects", path: "/projects", ready: heading("项目"), section: "项目" },
   { name: "project", path: `/projects/${project.id}`, ready: heading(project.title), section: "项目" },
@@ -352,6 +352,7 @@ test("笔记目录选中新笔记和切换到宽屏后焦点仍在可见界面",
   await page.route(`**/api/v1/notes/${child.id}`, route => route.fulfill({ json: child }));
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`http://127.0.0.1:4178/notes/${note.id}`);
+  await expect(page.getByRole("complementary", { name: "笔记目录" })).toBeHidden();
   const opener = page.getByRole("button", { name: "目录", exact: true });
   await opener.click();
   const dialog = page.getByRole("dialog", { name: "笔记目录" });
@@ -366,4 +367,48 @@ test("笔记目录选中新笔记和切换到宽屏后焦点仍在可见界面",
   await page.setViewportSize({ width: 1440, height: 900 });
   await expect(dialog).toBeHidden();
   await expect(page.getByRole("heading", { name: "笔记目录" })).toBeFocused();
+  const sidebarBox = await page.getByRole("complementary", { name: "笔记目录" }).boundingBox();
+  expect(sidebarBox?.width ?? 0).toBeGreaterThan(150);
+});
+
+test("笔记页使用 Splitter 左右分栏，默认展示树根首篇笔记并支持拖拽调节", async ({ page }) => {
+  test.skip(baseline, "改版后的布局回归");
+  await fixtures(page);
+  const child = { ...note, id: id(15), title: "后续问题", parent_id: note.id, document: { blocks: [{ id: id(150), type: "paragraph", content: [{ type: "text", text: "子笔记正文内容", styles: {} }] }] } };
+  await page.route(`**/api/v1/notes/${child.id}`, route => route.fulfill({ json: child }));
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("http://127.0.0.1:4178/notes");
+
+  const sidebar = page.getByRole("complementary", { name: "笔记目录" });
+  const current = page.getByRole("region", { name: "当前笔记" });
+  const rootItem = sidebar.getByRole("treeitem", { name: /调研手记/ });
+  await expect(rootItem).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("textbox", { name: "笔记标题" })).toHaveValue(note.title);
+  await expect(current).toContainText("调研记录第 1 段");
+
+  const [beforeSidebar, beforeContent] = await Promise.all([sidebar.boundingBox(), current.boundingBox()]);
+  expect(beforeSidebar).toBeTruthy();
+  expect(beforeContent).toBeTruthy();
+  expect(beforeSidebar!.x + beforeSidebar!.width).toBeLessThanOrEqual(beforeContent!.x + 1);
+  expect(beforeSidebar!.height).toBeGreaterThan(700);
+  expect(beforeContent!.height).toBeGreaterThan(700);
+
+  const separator = page.getByRole("separator", { name: "调整分栏 1" });
+  const sepBox = await separator.boundingBox();
+  expect(sepBox).toBeTruthy();
+  const startX = sepBox!.x + sepBox!.width / 2;
+  const startY = sepBox!.y + sepBox!.height / 2;
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(startX + 80, startY, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(async () => (await sidebar.boundingBox())?.width ?? 0).toBeGreaterThan(beforeSidebar!.width + 40);
+  expect(await page.getByRole("main").evaluate(main => main.scrollWidth - main.clientWidth)).toBeLessThanOrEqual(1);
+
+  await rootItem.focus();
+  await page.keyboard.press("ArrowRight");
+  await sidebar.getByRole("treeitem", { name: /后续问题/ }).click();
+  await expect(page).toHaveURL(new RegExp(`/notes/${child.id}$`));
+  await expect(page.getByRole("textbox", { name: "笔记标题" })).toHaveValue(child.title);
+  await expect(current).toContainText("子笔记正文内容");
 });

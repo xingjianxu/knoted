@@ -1,6 +1,7 @@
 import { useReducer, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Drawer, Empty, Form, Input, List, ListItem, SectionGroup, Select, Spinner } from "@bixlab/mtone";
+import { Alert, Button, Drawer, Empty, Form, Input, List, ListItem, SectionGroup, Select, Spinner, Tag } from "@bixlab/mtone";
+import { Tags } from "lucide-react";
 import type { ApiClient, components } from "@knoted/api-client";
 import { createCursorState, cursorReducer } from "../../../lib/cursor-state";
 
@@ -89,7 +90,7 @@ function NoteAssociationsContent({ noteId, api, readOnly = false, assertCanWrite
   const nextOption = options.data?.next_cursor ?? null;
   const nextLink = links.data?.next_cursor ?? null;
 
-  return <Drawer title="标签与关联" trigger={<Button size="sm" variant="outline">标签与关联</Button>}>
+  return <Drawer title="标签与关联" trigger={<Button size="sm" variant="outline"><Tags size={14} aria-hidden="true" />标签与关联</Button>}>
     <SectionGroup aria-label="笔记标签与资料关联" role="region">
       <SectionGroup.Section title="标签" headingLevel={3} aria-labelledby={undefined} aria-label="笔记标签">
         <div className="space-y-3">
@@ -99,10 +100,10 @@ function NoteAssociationsContent({ noteId, api, readOnly = false, assertCanWrite
         {tags.data?.items.length === 0 && <Empty title="暂无标签" />}
         {!!tags.data?.items.length && <List aria-label="笔记标签列表">
           {tags.data.items.map(tag => <ListItem key={tag.id}
-            actions={<Button size="sm" disabled={tagsDisabled} aria-label={`移除标签 ${tag.name}`} onClick={() => void mutate("tags", async () => {
+            actions={<Button size="sm" variant="ghost" disabled={tagsDisabled} aria-label={`移除标签 ${tag.name}`} onClick={() => void mutate("tags", async () => {
               assertCanWrite();
               await api.raw.DELETE("/entities/{entityType}/{entityId}/tags/{tagId}", { params: { path: { entityType: "note", entityId: noteId, tagId: tag.id } } });
-            })}>移除</Button>}><span className="[overflow-wrap:anywhere]">{tag.name}</span></ListItem>)}
+            })}>移除</Button>}><Tag tone="neutral"><span className="[overflow-wrap:anywhere]">{tag.name}</span></Tag></ListItem>)}
         </List>}
         <div className="flex flex-wrap gap-2">
           <Button size="sm" disabled={tags.isFetching || tagPage.previous.length === 0} onClick={() => tagDispatch({ type: "previous" })}>上一页标签</Button>
@@ -150,8 +151,8 @@ function NoteAssociationsContent({ noteId, api, readOnly = false, assertCanWrite
         {errors.links && <Alert tone="error">{errors.links}</Alert>}
         {links.data?.items.length === 0 && <Empty title="暂无资料关联" />}
         {!!links.data?.items.length && <List aria-label="资料关联列表">
-          {links.data.items.map(link => <ListItem key={link.id} description={entityLabels[link.target_type] ?? link.target_type}
-            actions={<Button size="sm" disabled={linksDisabled} aria-label={`移除关联 ${link.target_id}`} onClick={() => void mutate("links", async () => {
+          {links.data.items.map(link => <ListItem key={link.id} description={<Tag tone="neutral">{entityLabels[link.target_type] ?? link.target_type}</Tag>}
+            actions={<Button size="sm" variant="ghost" disabled={linksDisabled} aria-label={`移除关联 ${link.target_id}`} onClick={() => void mutate("links", async () => {
               assertCanWrite();
               await api.raw.DELETE("/links/{linkId}", { params: { path: { linkId: link.id }, query: { expected_version: link.version } } });
             })}>移除</Button>}><span className="[overflow-wrap:anywhere]">{link.target_id}</span></ListItem>)}

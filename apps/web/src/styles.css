@@ -43,9 +43,21 @@
     max-width: none;
   }
 
+  .workspace-frame--flush {
+    max-width: none;
+    height: 100%;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
   @container workspace (min-width: 48rem) {
     .workspace-frame {
       padding: 1.5rem;
+    }
+
+    .workspace-frame--flush {
+      padding: 0;
     }
   }
 
