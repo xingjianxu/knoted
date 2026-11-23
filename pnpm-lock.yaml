@@ -200,8 +200,8 @@ importers:
   apps/web:
     dependencies:
       '@bixlab/mtone':
-        specifier: 0.13.0
-        version: 0.13.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        specifier: 0.13.1
+        version: 0.13.1(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@blocknote/core':
         specifier: 0.57.0
         version: 0.57.0(@types/hast@3.0.5)
@@ -399,8 +399,8 @@ packages:
     resolution: {integrity: sha512-6zABk/ECA/QYSCQ1NGiVwwbQerUCZ+TQbp64Q3AgmfNvurHH0j8TtXa1qbShXA6qqkpAj4V5W8pP6mLe1mcMqA==}
     engines: {node: '>=18'}
 
-  '@bixlab/mtone@0.13.0':
-    resolution: {integrity: sha512-AtaMRK2e4Mog2P883InxmLe4XBUsheoGCP1RO77yJels/yUs+V/v9kktyzHd3Emb/lVRlJd3JTO1AkZXfHzLJA==}
+  '@bixlab/mtone@0.13.1':
+    resolution: {integrity: sha512-8VV2ocoCooK2thbPnKaR+nJeIh00zS/onmHfwUTcvj0dqMJ9R6gkuz+oOXmpxnwn2plSgH/+0m/y0ZqDZyFWTg==}
     peerDependencies:
       react: ^19.2.0
       react-dom: ^19.2.0
@@ -2634,7 +2634,7 @@ snapshots:
   '@bcoe/v8-coverage@1.0.2':
     optional: true
 
-  '@bixlab/mtone@0.13.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
+  '@bixlab/mtone@0.13.1(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
     dependencies:
       '@base-ui/react': 1.9.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@rc-component/table': 1.12.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
