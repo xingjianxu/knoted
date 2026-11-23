@@ -1,6 +1,6 @@
 import { useReducer, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Drawer, Empty, FormField, Input, List, ListItem, Select, Spinner } from "@bixlab/mtone";
+import { Alert, Button, Drawer, Empty, Form, Input, List, ListItem, SectionGroup, Select, Spinner } from "@bixlab/mtone";
 import type { ApiClient, components } from "@knoted/api-client";
 import { createCursorState, cursorReducer } from "../../../lib/cursor-state";
 
@@ -90,9 +90,9 @@ function NoteAssociationsContent({ noteId, api, readOnly = false, assertCanWrite
   const nextLink = links.data?.next_cursor ?? null;
 
   return <Drawer title="标签与关联" trigger={<Button size="sm" variant="outline">标签与关联</Button>}>
-    <div aria-label="笔记标签与资料关联" role="region" className="space-y-6">
-      <section aria-label="笔记标签" className="space-y-3">
-        <h3 className="section-title">标签</h3>
+    <SectionGroup aria-label="笔记标签与资料关联" role="region">
+      <SectionGroup.Section title="标签" headingLevel={3} aria-labelledby={undefined} aria-label="笔记标签">
+        <div className="space-y-3">
         {tags.isFetching && <Spinner label="正在读取标签" />}
         {tags.error && <Alert tone="error">{tags.error.message} <Button size="sm" onClick={() => void tags.refetch()}>重试标签</Button></Alert>}
         {errors.tags && <Alert tone="error">{errors.tags}</Alert>}
@@ -110,7 +110,7 @@ function NoteAssociationsContent({ noteId, api, readOnly = false, assertCanWrite
           <Button size="sm" variant="outline" aria-expanded={editingTags} aria-controls="edit-note-tags" onClick={() => setEditingTags(value => !value)}>添加标签</Button>
         </div>
         <div id="edit-note-tags" hidden={!editingTags} className="space-y-3">
-          <form onSubmit={event => {
+          <Form onSubmit={event => {
             event.preventDefault();
             if (tagsDisabled) return;
             void mutate("tags", async () => {
@@ -126,13 +126,13 @@ function NoteAssociationsContent({ noteId, api, readOnly = false, assertCanWrite
               await queryClient.invalidateQueries({ queryKey: ["tag-options"] });
             });
           }} className="flex flex-wrap items-end gap-2">
-            <FormField label="新标签名称"><Input value={name} maxLength={64} onChange={event => setName(event.target.value)} disabled={tagsDisabled} /></FormField>
+            <Form.Item label="新标签名称"><Input value={name} maxLength={64} onChange={event => setName(event.target.value)} disabled={tagsDisabled} /></Form.Item>
             <Button type="submit" disabled={tagsDisabled}>创建并添加标签</Button>
-          </form>
+          </Form>
           {options.isFetching && <Spinner label="正在读取已有标签" />}
           {options.error && <Alert tone="error">{options.error.message} <Button size="sm" onClick={() => void options.refetch()}>重试已有标签</Button></Alert>}
           <div className="flex flex-wrap items-end gap-2">
-            <FormField label="已有标签"><Select value={selectedTag} onValueChange={setSelectedTag} options={tagOptions} disabled={optionsDisabled} /></FormField>
+            <Form.Item label="已有标签"><Select value={selectedTag} onValueChange={setSelectedTag} options={tagOptions} disabled={optionsDisabled} /></Form.Item>
             <Button disabled={tagsDisabled || (optionsDisabled && selectedTag !== createdTag?.id) || !selectedTag}
               onClick={() => { if (selectedTag) void mutate("tags", () => assign(selectedTag)); }}>添加已有标签</Button>
           </div>
@@ -141,9 +141,10 @@ function NoteAssociationsContent({ noteId, api, readOnly = false, assertCanWrite
             <Button size="sm" disabled={options.isFetching || !nextOption || nextOption === optionsPage.cursor} onClick={() => optionsDispatch({ type: "next", nextCursor: nextOption })}>下一页已有标签</Button>
           </div>
         </div>
-      </section>
-      <section aria-label="资料关联" className="space-y-3">
-        <h3 className="section-title">资料关联</h3>
+        </div>
+      </SectionGroup.Section>
+      <SectionGroup.Section title="资料关联" headingLevel={3}>
+        <div className="space-y-3">
         {links.isFetching && <Spinner label="正在读取资料关联" />}
         {links.error && <Alert tone="error">{links.error.message} <Button size="sm" onClick={() => void links.refetch()}>重试资料关联</Button></Alert>}
         {errors.links && <Alert tone="error">{errors.links}</Alert>}
@@ -161,7 +162,7 @@ function NoteAssociationsContent({ noteId, api, readOnly = false, assertCanWrite
           <Button size="sm" variant="outline" aria-expanded={editingLinks} aria-controls="edit-note-links" onClick={() => setEditingLinks(value => !value)}>新建关联</Button>
         </div>
         <div id="edit-note-links" hidden={!editingLinks}>
-          <form onSubmit={event => {
+          <Form onSubmit={event => {
             event.preventDefault();
             if (linksDisabled) return;
             void mutate("links", async () => {
@@ -171,13 +172,14 @@ function NoteAssociationsContent({ noteId, api, readOnly = false, assertCanWrite
               setTargetId("");
             });
           }} className="flex flex-wrap items-end gap-2">
-            <FormField label="关联目标类型"><Select value={targetType} onValueChange={value => { if (value) setTargetType(value as EntityType); }}
-              options={Object.entries(entityLabels).map(([value, label]) => ({ value, label }))} disabled={linksDisabled} /></FormField>
-            <FormField label="关联目标 ID"><Input value={targetId} onChange={event => setTargetId(event.target.value)} disabled={linksDisabled} /></FormField>
+            <Form.Item label="关联目标类型"><Select value={targetType} onValueChange={value => { if (value) setTargetType(value as EntityType); }}
+              options={Object.entries(entityLabels).map(([value, label]) => ({ value, label }))} disabled={linksDisabled} /></Form.Item>
+            <Form.Item label="关联目标 ID"><Input value={targetId} onChange={event => setTargetId(event.target.value)} disabled={linksDisabled} /></Form.Item>
             <Button type="submit" disabled={linksDisabled}>添加关联</Button>
-          </form>
+          </Form>
         </div>
-      </section>
-    </div>
+        </div>
+      </SectionGroup.Section>
+    </SectionGroup>
   </Drawer>;
 }

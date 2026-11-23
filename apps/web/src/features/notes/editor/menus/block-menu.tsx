@@ -1,4 +1,4 @@
-import { Button, DropdownMenu } from "@bixlab/mtone";
+import { Button, Popover } from "@bixlab/mtone";
 import { SideMenuExtension } from "@blocknote/core/extensions";
 import { SideMenuController, useBlockNoteEditor, useExtension, useExtensionState } from "@blocknote/react";
 import { useState } from "react";
@@ -16,7 +16,7 @@ function BlockActions() {
   function close() {
     setOpen(false);
     sideMenu.unfreezeMenu();
-    // DropdownMenu owns popup keyboard/focus. Restore the editor after its
+    // Popover.Menu owns popup keyboard/focus. Restore the editor after its
     // return-to-trigger lifecycle, without changing the ProseMirror selection.
     requestAnimationFrame(() => editor.focus());
   }
@@ -24,10 +24,10 @@ function BlockActions() {
   function run(operation: () => void) {
     editor.transact(operation);
   }
-  return <DropdownMenu open={open} onOpenChange={(next) => {
+  return <Popover.Menu open={open} onOpenChange={(next) => {
     if (next) { sideMenu.freezeMenu(); setOpen(true); }
     else close();
-  }} trigger={<Button aria-label="块操作" onMouseDown={(event) => event.preventDefault()}>⋮</Button>}
+  }} trigger={<Button iconOnly aria-label="块操作" onMouseDown={(event) => event.preventDefault()}>⋮</Button>}
     items={[
       ...blockChoices.map((choice) => ({ key: choice.key, label: `转换为${choice.label}`, onSelect: () => run(() => { editor.updateBlock(id, choice.block); }) })),
       { key: "up", label: "上移", disabled: !canMoveBlock(editor, id, "up"), onSelect: () => run(() => { if (canMoveBlock(editor, id, "up")) editor.moveBlocksUp(id); }) },

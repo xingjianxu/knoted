@@ -1,6 +1,6 @@
 import { useId, useReducer, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Empty, FormField, Input, List, ListItem, Select, Spinner } from "@bixlab/mtone";
+import { Alert, Button, Empty, Form, Input, List, ListItem, SectionGroup, Select, Spinner } from "@bixlab/mtone";
 import type { ApiClient, components } from "@knoted/api-client";
 import { createCursorState, cursorReducer } from "../../lib/cursor-state";
 
@@ -102,12 +102,18 @@ export function ProjectAssociations({ projectId, api, readOnly = false }: Projec
 
   return (
     <section aria-label="项目标签与资料关联" className="grid items-start gap-6 md:grid-cols-2">
-      <section aria-label="项目标签" className="min-w-0 space-y-3">
-        <header className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="section-title">标签</h2>
-          {!readOnly && <Button disabled={busy === "tags"} aria-expanded={addingTag} aria-controls={tagsId}
-            onClick={() => setAddingTag((open) => !open)}>{addingTag ? "收起标签选项" : "添加标签"}</Button>}
-        </header>
+      <SectionGroup.Section
+        aria-labelledby={undefined}
+        aria-label="项目标签"
+        title="标签"
+        headingLevel={2}
+        className="min-w-0"
+        actions={
+          !readOnly && <Button disabled={busy === "tags"} aria-expanded={addingTag} aria-controls={tagsId}
+            onClick={() => setAddingTag((open) => !open)}>{addingTag ? "收起标签选项" : "添加标签"}</Button>
+        }
+      >
+        <div className="space-y-3">
         {tags.isFetching && <Spinner label="正在读取项目标签" />}
         {tags.error && <Alert tone="error">{message(tags.error)}
           <Button disabled={tags.isFetching} onClick={() => void tags.refetch()}>重试读取项目标签</Button>
@@ -137,9 +143,9 @@ export function ProjectAssociations({ projectId, api, readOnly = false }: Projec
             <Button disabled={options.isFetching} onClick={() => void options.refetch()}>重试读取标签选项</Button>
           </Alert>}
           <div className="flex flex-wrap items-end gap-2">
-            <FormField label="已有标签"><Select value={selectedTag} onValueChange={setSelectedTag}
+            <Form.Item label="已有标签"><Select value={selectedTag} onValueChange={setSelectedTag}
               options={(options.data?.items ?? []).map((tag) => ({ value: tag.id, label: tag.name }))}
-              disabled={optionsLocked} /></FormField>
+              disabled={optionsLocked} /></Form.Item>
             <Button disabled={optionsLocked || !selectedTag} onClick={() => {
               if (!selectedTag) return;
               void mutate("tags", async () => {
@@ -164,13 +170,18 @@ export function ProjectAssociations({ projectId, api, readOnly = false }: Projec
           </nav>}
         </div>
         {tagError && <Alert tone="error">{tagError}</Alert>}
-      </section>
-      <section aria-label="资料关联" className="min-w-0 space-y-3">
-        <header className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="section-title">资料关联</h2>
-          {!readOnly && <Button disabled={busy === "links"} aria-expanded={addingLink} aria-controls={linksId}
-            onClick={() => setAddingLink((open) => !open)}>{addingLink ? "收起关联输入" : "添加资料"}</Button>}
-        </header>
+        </div>
+      </SectionGroup.Section>
+      <SectionGroup.Section
+        title="资料关联"
+        headingLevel={2}
+        className="min-w-0"
+        actions={
+          !readOnly && <Button disabled={busy === "links"} aria-expanded={addingLink} aria-controls={linksId}
+            onClick={() => setAddingLink((open) => !open)}>{addingLink ? "收起关联输入" : "添加资料"}</Button>
+        }
+      >
+        <div className="space-y-3">
         {links.isFetching && <Spinner label="正在读取资料关联" />}
         {links.error && <Alert tone="error">{message(links.error)}
           <Button disabled={links.isFetching} onClick={() => void links.refetch()}>重试读取资料关联</Button>
@@ -196,7 +207,7 @@ export function ProjectAssociations({ projectId, api, readOnly = false }: Projec
             onClick={() => linkDispatch({ type: "next", nextCursor: links.data?.next_cursor ?? null })}>下一页关联</Button>
         </nav>}
         <div id={linksId} hidden={readOnly || !addingLink}>
-          <form className="flex flex-wrap items-end gap-2" onSubmit={(event) => {
+          <Form className="flex flex-wrap items-end gap-2" onSubmit={(event) => {
             event.preventDefault();
             void mutate("links", async () => {
               if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetId.trim())) {
@@ -208,18 +219,19 @@ export function ProjectAssociations({ projectId, api, readOnly = false }: Projec
               setTargetId("");
             });
           }}>
-            <FormField label="关联目标类型"><Select value={targetType}
+            <Form.Item label="关联目标类型"><Select value={targetType}
               onValueChange={(value) => { if (value) setTargetType(value as EntityType); }}
               options={Object.entries(targetLabels).map(([value, label]) => ({ value, label }))}
-              disabled={linksLocked} /></FormField>
-            <FormField label="关联目标 ID">
+              disabled={linksLocked} /></Form.Item>
+            <Form.Item label="关联目标 ID">
               <Input value={targetId} onChange={(event) => setTargetId(event.target.value)} disabled={linksLocked} />
-            </FormField>
+            </Form.Item>
             <Button type="submit" disabled={linksLocked}>添加关联</Button>
-          </form>
+          </Form>
         </div>
         {linkError && <Alert tone="error">{linkError}</Alert>}
-      </section>
+        </div>
+      </SectionGroup.Section>
     </section>
   );
 }

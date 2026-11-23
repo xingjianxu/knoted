@@ -1,4 +1,4 @@
-import { Badge, Empty, Link, List, ListItem } from "@bixlab/mtone";
+import { Empty, Link, List, ListItem, Tag } from "@bixlab/mtone";
 import { priorityOptions, statusOptions } from "./TaskForm";
 import type { Project, Task } from "./queries";
 
@@ -35,8 +35,8 @@ export function TaskList({ items, projects, onSelectTask, label = "事项列表�
         <span>{statusOptions.find(({ value }) => value === task.status)?.label}</span>
         <span className="wrap-anywhere">{projects.find(({ id }) => id === task.project_id)?.title ?? task.project_id ?? "独立事项"}</span>
         <span>优先级 {priorityOptions.find(({ value }) => value === task.priority)?.label}</span>
-        {task.parent_id && <Badge>子事项</Badge>}
-        {task.archived_at && <Badge>已归档</Badge>}
+        {task.parent_id && <Tag>子事项</Tag>}
+        {task.archived_at && <Tag>已归档</Tag>}
       </span>}>
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
         <TaskLink task={task} onSelectTask={onSelectTask} />

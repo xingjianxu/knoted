@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Button, ConfirmDialog, FormField, Input, MultiSelect, PropertyItem, PropertyList, Spinner, Status, Textarea } from "@bixlab/mtone";
+import { Alert, Button, ConfirmDialog, Form, Input, Paragraph, PropertyItem, PropertyList, SectionGroup, Select, Spinner, Status } from "@bixlab/mtone";
 import { ApiRequestError, type components } from "@knoted/api-client";
 import { queryKeys, type QueryClientBundle } from "../../lib/query";
 import { fileQuery, remember, type FileSource } from "./queries";
@@ -232,9 +232,9 @@ function FileEditor({ bundle, source, onSelectFile }: {
       <div id="file-relink" hidden={!relinkOpen}>
           {relinkOpen && <div className="grid gap-2">
             <p>将备注、标签和关联转移到所选来源，原引用保留快照。{dirty && "请先保存或丢弃草稿。"}</p>
-            <FormField label="重关联目标 UUID"><Input value={targetId} disabled={busy || dirty} onChange={e => {
+            <Form.Item label="重关联目标 UUID"><Input value={targetId} disabled={busy || dirty} onChange={e => {
               setTargetId(e.target.value); setTarget(undefined);
-            }} /></FormField>
+            }} /></Form.Item>
             <div className="flex flex-wrap gap-2">
               <Button disabled={busy || dirty} onClick={() => void inspectTarget()}>读取重关联目标</Button>
               {target && <ConfirmDialog title="确认重关联？"
@@ -259,7 +259,7 @@ function FileEditor({ bundle, source, onSelectFile }: {
             <Button disabled={busy || readOnly} onClick={() => void download(source)}>下载原文件</Button>
           </div>
         </div>
-        <p className="wrap-anywhere text-muted">{source.relative_path}</p>
+        <Paragraph muted className="wrap-anywhere">{source.relative_path}</Paragraph>
       </header>
  <FilePreview api={bundle.api} file={preview} open={preview !== null} onDownload={selected => download(selected, true)} onOpenChange={open => {
         if (open) return;
@@ -282,40 +282,44 @@ function FileEditor({ bundle, source, onSelectFile }: {
         {relinkForm}
       </div>}
 
-      <section aria-labelledby="file-notes" className="grid gap-3">
-        <h2 id="file-notes" className="section-title">备注与标签</h2>
-        <FormField label="文件备注"><Textarea value={note} disabled={locked} onChange={e => setNote(e.target.value)} /></FormField>
-        <FormField label="文件标签"><MultiSelect value={tags} options={choices} disabled={locked} onValueChange={setTags} /></FormField>
-        {options.error && <Alert tone="error">标签名称读取失败，已有标签 ID 保留。<Button onClick={() => void options.refetch()}>重试标签</Button></Alert>}
-        {options.data?.next_cursor && <div><Button disabled={options.isFetching} onClick={() => setTagPage(options.data?.next_cursor ?? null)}>加载更多标签名称</Button></div>}
-        {!readOnly && <div className="flex flex-wrap gap-2">
-          <Button variant="solid" disabled={locked || !dirty || conflict} onClick={() => void save()}>保存备注和标签</Button>
-          <Button disabled={busy || !dirty} onClick={() => {
-            setBase(source); setNote(source.note ?? ""); setTags(source.tag_ids); setConflict(false);
-          }}>丢弃草稿</Button>
-        </div>}
-        {conflict && <>
-          <Alert tone="warning">版本冲突，草稿已保留。</Alert>
-          <FormField label="文件草稿副本"><Textarea readOnly value={JSON.stringify(draft, null, 2)} /></FormField>
-          <div className="flex flex-wrap gap-2">
-            <Button disabled={busy} onClick={() => void refresh(false)}>刷新服务端信息，保留草稿</Button>
-            <ConfirmDialog title="用当前版本重试草稿？" description="保存会覆盖服务端的备注和标签。"
-              confirmText="采用当前版本" trigger={<Button disabled={busy}>用当前版本重试草稿</Button>} onConfirm={() => refresh(true)} />
+      <SectionGroup>
+        <SectionGroup.Section title="备注与标签" headingLevel={2}>
+          <div className="grid gap-3">
+            <Form.Item label="文件备注"><Input.TextArea value={note} disabled={locked} onChange={e => setNote(e.target.value)} /></Form.Item>
+            <Form.Item label="文件标签"><Select mode="multiple" value={tags} options={choices} disabled={locked} onValueChange={setTags} /></Form.Item>
+            {options.error && <Alert tone="error">标签名称读取失败，已有标签 ID 保留。<Button onClick={() => void options.refetch()}>重试标签</Button></Alert>}
+            {options.data?.next_cursor && <div><Button disabled={options.isFetching} onClick={() => setTagPage(options.data?.next_cursor ?? null)}>加载更多标签名称</Button></div>}
+            {!readOnly && <div className="flex flex-wrap gap-2">
+              <Button variant="solid" disabled={locked || !dirty || conflict} onClick={() => void save()}>保存备注和标签</Button>
+              <Button disabled={busy || !dirty} onClick={() => {
+                setBase(source); setNote(source.note ?? ""); setTags(source.tag_ids); setConflict(false);
+              }}>丢弃草稿</Button>
+            </div>}
+            {conflict && <>
+              <Alert tone="warning">版本冲突，草稿已保留。</Alert>
+              <Form.Item label="文件草稿副本"><Input.TextArea readOnly value={JSON.stringify(draft, null, 2)} /></Form.Item>
+              <div className="flex flex-wrap gap-2">
+                <Button disabled={busy} onClick={() => void refresh(false)}>刷新服务端信息，保留草稿</Button>
+                <ConfirmDialog title="用当前版本重试草稿？" description="保存会覆盖服务端的备注和标签。"
+                  confirmText="采用当前版本" trigger={<Button disabled={busy}>用当前版本重试草稿</Button>} onConfirm={() => refresh(true)} />
+              </div>
+            </>}
           </div>
-        </>}
-      </section>
+        </SectionGroup.Section>
 
-      <section aria-labelledby="file-source" className="grid gap-2">
-        <h2 id="file-source" className="section-title">来源属性</h2>
-        <PropertyList>
-          <PropertyItem label="来源 ID"><span className="wrap-anywhere">{source.id}</span></PropertyItem>
-          <PropertyItem label="大小">{source.size} 字节</PropertyItem>
-          <PropertyItem label="SHA-256"><span className="wrap-anywhere">{source.sha256}</span></PropertyItem>
-          <PropertyItem label="版本 / 内容版本">{source.version} / {source.content_version}</PropertyItem>
-          <PropertyItem label="最后出现">{source.last_seen_at ?? "未知"}</PropertyItem>
-        </PropertyList>
-        {!readOnly && <div><Button aria-expanded={relinkOpen} aria-controls="file-relink" onClick={() => setRelinkOpen(!relinkOpen)}>手动重关联</Button></div>}
-        {!readOnly && relinkForm}
-      </section>
+        <SectionGroup.Section title="来源属性" headingLevel={2}>
+          <div className="grid gap-2">
+            <PropertyList>
+              <PropertyItem label="来源 ID"><span className="wrap-anywhere">{source.id}</span></PropertyItem>
+              <PropertyItem label="大小">{source.size} 字节</PropertyItem>
+              <PropertyItem label="SHA-256"><span className="wrap-anywhere">{source.sha256}</span></PropertyItem>
+              <PropertyItem label="版本 / 内容版本">{source.version} / {source.content_version}</PropertyItem>
+              <PropertyItem label="最后出现">{source.last_seen_at ?? "未知"}</PropertyItem>
+            </PropertyList>
+            {!readOnly && <div><Button aria-expanded={relinkOpen} aria-controls="file-relink" onClick={() => setRelinkOpen(!relinkOpen)}>手动重关联</Button></div>}
+            {!readOnly && relinkForm}
+          </div>
+        </SectionGroup.Section>
+      </SectionGroup>
     </section>;
 }

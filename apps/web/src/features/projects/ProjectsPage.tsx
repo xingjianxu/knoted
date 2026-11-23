@@ -1,8 +1,8 @@
 import { useEffect, useReducer, useRef, useState, type FormEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Alert, Badge, Button, ConfirmDialog, Dialog, Empty, FormField, Input, Link,
-  List, ListItem, Menu, Segmented, Spinner, Textarea,
+  Alert, Button, ConfirmDialog, Dialog, Empty, Form, Input, Link,
+  List, ListItem, PageLayout, Paragraph, Popover, RadioGroup, Spinner, Tag,
 } from "@bixlab/mtone";
 import { ApiRequestError, type components } from "@knoted/api-client";
 import { queryKeys, type QueryClientBundle } from "../../lib/query";
@@ -64,50 +64,55 @@ export function ProjectsPage({ bundle, projectId, onSelectProject, onSelectTask 
   const loading = projects.isFetching;
   const nextCursor = projects.data?.next_cursor ?? null;
   return (
-    <section aria-label="项目列表" className="space-y-4">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="page-title">项目</h1>
-        <ProjectCreate bundle={bundle} onCreated={async (id) => {
-          await invalidate();
-          onSelectProject(id);
-        }} />
-      </header>
-      <Segmented label="归档筛选" value={archivedFilter ? "archived" : "active"}
-        options={[{ value: "active", label: "未归档" }, { value: "archived", label: "已归档" }]}
-        onValueChange={(value) => {
-          setArchivedFilter(value === "archived");
-          dispatch({ type: "filter", filterKey: value });
-        }} />
-      {loading && <Spinner label="正在读取项目" />}
-      {projects.error && <Alert tone="error">
-        {message(projects.error)}
-        <Button disabled={loading} onClick={() => void projects.refetch()}>重试读取项目</Button>
-      </Alert>}
-      {!!projects.data?.items.length && <List aria-label="项目列表项">
-        {projects.data.items.map((project) => (
-          <ListItem key={project.id} description={project.description === null ? undefined :
-            <span className="line-clamp-2 wrap-anywhere">{project.description}</span>}>
-            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-              <Link ref={lastProject === project.id ? returnLink : undefined} href={`/projects/${project.id}`} className="page-link wrap-anywhere" onClick={(event) => {
-                if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-                event.preventDefault();
-                restorePending.current = true;
-                setLastProject(project.id);
-                onSelectProject(project.id);
-              }}>{project.title}</Link>
-              {project.archived_at !== null && <Badge tone="neutral">已归档</Badge>}
-            </div>
-          </ListItem>
-        ))}
-      </List>}
-      {projects.isSuccess && projects.data.items.length === 0 &&
-        <Empty title={archivedFilter ? "没有已归档项目" : "还没有项目"} />}
-      {(projects.data || page.previous.length > 0) && <nav aria-label="项目分页" className="flex flex-wrap gap-2">
-        <Button disabled={loading || page.previous.length === 0}
-          onClick={() => dispatch({ type: "previous" })}>上一页项目</Button>
-        <Button disabled={loading || nextCursor === null || nextCursor === page.cursor}
-          onClick={() => dispatch({ type: "next", nextCursor })}>下一页项目</Button>
-      </nav>}
+    <section aria-label="项目列表">
+      <PageLayout
+        title="项目"
+        actions={
+          <ProjectCreate bundle={bundle} onCreated={async (id) => {
+            await invalidate();
+            onSelectProject(id);
+          }} />
+        }
+      >
+        <div className="space-y-4">
+          <RadioGroup variant="segmented" label="归档筛选" value={archivedFilter ? "archived" : "active"}
+            options={[{ value: "active", label: "未归档" }, { value: "archived", label: "已归档" }]}
+            onValueChange={(value) => {
+              setArchivedFilter(value === "archived");
+              dispatch({ type: "filter", filterKey: value });
+            }} />
+          {loading && <Spinner label="正在读取项目" />}
+          {projects.error && <Alert tone="error">
+            {message(projects.error)}
+            <Button disabled={loading} onClick={() => void projects.refetch()}>重试读取项目</Button>
+          </Alert>}
+          {!!projects.data?.items.length && <List aria-label="项目列表项">
+            {projects.data.items.map((project) => (
+              <ListItem key={project.id} description={project.description === null ? undefined :
+                <span className="line-clamp-2 wrap-anywhere">{project.description}</span>}>
+                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                  <Link ref={lastProject === project.id ? returnLink : undefined} href={`/projects/${project.id}`} className="page-link wrap-anywhere" onClick={(event) => {
+                    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                    event.preventDefault();
+                    restorePending.current = true;
+                    setLastProject(project.id);
+                    onSelectProject(project.id);
+                  }}>{project.title}</Link>
+                  {project.archived_at !== null && <Tag tone="neutral">已归档</Tag>}
+                </div>
+              </ListItem>
+            ))}
+          </List>}
+          {projects.isSuccess && projects.data.items.length === 0 &&
+            <Empty title={archivedFilter ? "没有已归档项目" : "还没有项目"} />}
+          {(projects.data || page.previous.length > 0) && <nav aria-label="项目分页" className="flex flex-wrap gap-2">
+            <Button disabled={loading || page.previous.length === 0}
+              onClick={() => dispatch({ type: "previous" })}>上一页项目</Button>
+            <Button disabled={loading || nextCursor === null || nextCursor === page.cursor}
+              onClick={() => dispatch({ type: "next", nextCursor })}>下一页项目</Button>
+          </nav>}
+        </div>
+      </PageLayout>
     </section>
   );
 }
@@ -154,19 +159,19 @@ function ProjectCreate({ bundle, onCreated }: {
   }
   return <Dialog title="新建项目" open={open} onOpenChange={updateOpen}
     trigger={<Button variant="blue">新建项目</Button>}>
-    <form onSubmit={(event) => void create(event)} className="space-y-3 pb-4">
-      <FormField label="新项目名称">
+    <Form onSubmit={(event) => void create(event)} className="gap-3 pb-4">
+      <Form.Item label="新项目名称">
         <Input value={title} maxLength={500} onChange={(event) => setTitle(event.target.value)} disabled={creating} />
-      </FormField>
-      <FormField label="新项目说明">
-        <Textarea value={description} rows={3} onChange={(event) => setDescription(event.target.value)} disabled={creating} />
-      </FormField>
+      </Form.Item>
+      <Form.Item label="新项目说明">
+        <Input.TextArea value={description} rows={3} onChange={(event) => setDescription(event.target.value)} disabled={creating} />
+      </Form.Item>
       {error && <Alert tone="error">{error}</Alert>}
       <div className="flex flex-wrap justify-end gap-2">
         <Button disabled={creating} onClick={() => updateOpen(false)}>取消</Button>
         <Button type="submit" variant="blue" loading={creating}>创建项目</Button>
       </div>
-    </form>
+    </Form>
   </Dialog>;
 }
 
@@ -225,48 +230,53 @@ function ProjectDetail({ bundle, projectId, invalidate, onDeleted, onSelectTask 
   const locked = busy || project.isFetching || project.isError;
 
   return (
-    <section aria-label="项目详情" className="space-y-5">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 space-y-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="page-title wrap-anywhere">{loaded.title}</h1>
-            {archived && <Badge tone="neutral">已归档</Badge>}
-          </div>
-          <p className="text-sm text-muted">版本 {loaded.version}</p>
+    <section aria-label="项目详情">
+      <PageLayout
+        title={<span className="wrap-anywhere">{loaded.title}</span>}
+        subtitle={
+          <span className="inline-flex flex-wrap items-center gap-2">
+            <span>版本 {loaded.version}</span>
+            {archived && <Tag tone="neutral">已归档</Tag>}
+          </span>
+        }
+        actions={
+          <>
+            <ProjectEdit bundle={bundle} project={loaded} disabled={archived || locked}
+              invalidate={invalidate} refresh={async () => {
+                const result = await project.refetch();
+                if (result.error || !result.data) throw result.error ?? new Error("无法读取项目");
+                return result.data;
+              }} />
+            {archived ? <Button disabled={locked} onClick={() => void archive("unarchive")}>取消归档</Button> :
+              <Popover.Menu trigger={<Button ref={menuRef} disabled={locked}>更多项目操作</Button>} items={[
+                { key: "archive", label: "归档项目", onSelect: () => void archive("archive") },
+                { key: "delete", label: "删除项目", danger: true, onSelect: () => setDeleteOpen(true) },
+              ]} />}
+          </>
+        }
+      >
+        <div className="space-y-5">
+          {archived && <Alert tone="info">项目已归档，取消归档后可修改。</Alert>}
+          {project.error && <Alert tone="error">
+            {message(project.error)}
+            <Button disabled={project.isFetching} onClick={() => void project.refetch()}>重试读取项目</Button>
+          </Alert>}
+          {actionError && <Alert tone="error">{actionError}</Alert>}
+          {showUnfinished && unfinished.isFetching && <Spinner label="正在读取未完成事项" />}
+          {showUnfinished && unfinished.error && <Alert tone="error">
+            {message(unfinished.error)}
+            <Button disabled={unfinished.isFetching} onClick={() => void unfinished.refetch()}>重试读取未完成事项</Button>
+          </Alert>}
+          {showUnfinished && !!unfinished.data?.length && (
+            <Alert tone="warning" title="无法归档：仍有未完成事项">
+              <p>完成、取消或移出下列事项后再归档。</p>
+              <TaskList items={unfinished.data} projects={[loaded]} onSelectTask={onSelectTask} label="未完成事项" />
+            </Alert>
+          )}
+          {loaded.description && <Paragraph className="reading-measure wrap-anywhere whitespace-pre-wrap">{loaded.description}</Paragraph>}
+          <ProjectAssociations key={projectId} projectId={projectId} api={bundle.api} readOnly={archived || project.isError} />
         </div>
-        <div className="flex flex-wrap gap-2">
-          <ProjectEdit bundle={bundle} project={loaded} disabled={archived || locked}
-            invalidate={invalidate} refresh={async () => {
-              const result = await project.refetch();
-              if (result.error || !result.data) throw result.error ?? new Error("无法读取项目");
-              return result.data;
-            }} />
-          {archived ? <Button disabled={locked} onClick={() => void archive("unarchive")}>取消归档</Button> :
-            <Menu trigger={<Button ref={menuRef} disabled={locked}>更多项目操作</Button>} items={[
-              { key: "archive", label: "归档项目", onSelect: () => void archive("archive") },
-              { key: "delete", label: "删除项目", danger: true, onSelect: () => setDeleteOpen(true) },
-            ]} />}
-        </div>
-      </header>
-      {archived && <Alert tone="info">项目已归档，取消归档后可修改。</Alert>}
-      {project.error && <Alert tone="error">
-        {message(project.error)}
-        <Button disabled={project.isFetching} onClick={() => void project.refetch()}>重试读取项目</Button>
-      </Alert>}
-      {actionError && <Alert tone="error">{actionError}</Alert>}
-      {showUnfinished && unfinished.isFetching && <Spinner label="正在读取未完成事项" />}
-      {showUnfinished && unfinished.error && <Alert tone="error">
-        {message(unfinished.error)}
-        <Button disabled={unfinished.isFetching} onClick={() => void unfinished.refetch()}>重试读取未完成事项</Button>
-      </Alert>}
-      {showUnfinished && !!unfinished.data?.length && (
-        <Alert tone="warning" title="无法归档：仍有未完成事项">
-          <p>完成、取消或移出下列事项后再归档。</p>
-          <TaskList items={unfinished.data} projects={[loaded]} onSelectTask={onSelectTask} label="未完成事项" />
-        </Alert>
-      )}
-      {loaded.description && <p className="reading-measure wrap-anywhere whitespace-pre-wrap">{loaded.description}</p>}
-      <ProjectAssociations key={projectId} projectId={projectId} api={bundle.api} readOnly={archived || project.isError} />
+      </PageLayout>
       <ConfirmDialog
         open={deleteOpen}
         onOpenChange={(open) => {
@@ -370,15 +380,15 @@ function ProjectEdit({ bundle, project, disabled, invalidate, refresh }: {
   }
   return <Dialog title="编辑项目" open={!!edit} onOpenChange={updateOpen}
     trigger={<Button variant="blue" disabled={disabled}>编辑项目</Button>}>
-    {edit && <form onSubmit={(event) => void save(event)} className="space-y-3 pb-4">
-      <FormField label="项目名称">
+    {edit && <Form onSubmit={(event) => void save(event)} className="gap-3 pb-4">
+      <Form.Item label="项目名称">
         <Input value={edit.title} maxLength={500} disabled={busy}
           onChange={(event) => setEdit({ ...edit, title: event.target.value })} />
-      </FormField>
-      <FormField label="项目说明">
-        <Textarea value={edit.description} rows={5} disabled={busy}
+      </Form.Item>
+      <Form.Item label="项目说明">
+        <Input.TextArea value={edit.description} rows={5} disabled={busy}
           onChange={(event) => setEdit({ ...edit, description: event.target.value })} />
-      </FormField>
+      </Form.Item>
       {error && <Alert tone="error">{error}</Alert>}
       {current && <Alert tone="info" title={`服务端版本 ${current.version}`}>
         <p className="wrap-anywhere">{current.title}</p>
@@ -396,6 +406,6 @@ function ProjectEdit({ bundle, project, disabled, invalidate, refresh }: {
         <Button type="submit" variant="blue" loading={busy}
           disabled={disabled || refreshRequired || !!current?.archived_at}>保存修改</Button>
       </div>
-    </form>}
+    </Form>}
   </Dialog>;
 }

@@ -1,4 +1,4 @@
-import { Badge, Button, Form, FormField, Input, Textarea } from "@bixlab/mtone";
+import { Button, Form, Input, Tag } from "@bixlab/mtone";
 import { useState } from "react";
 
 // Test-only composition: no demo route or generic control implementation ships.
@@ -11,7 +11,7 @@ export function T17Form() {
   return (
     <main className="mx-auto max-w-xl p-6">
       <h1>T17 基础表单消费验收</h1>
-      <Badge tone="green">测试夹具</Badge>
+      <Tag tone="green">测试夹具</Tag>
       <Form
         onSubmit={(event) => {
           event.preventDefault();
@@ -19,16 +19,16 @@ export function T17Form() {
           setSubmissions((count) => count + 1);
         }}
       >
-        <FormField
+        <Form.Item
           label="标题"
           description="填写笔记标题"
           error={invalid ? "标题不可用" : undefined}
         >
           <Input name="title" />
-        </FormField>
-        <FormField label="说明" description="补充上下文">
-          <Textarea name="description" />
-        </FormField>
+        </Form.Item>
+        <Form.Item label="说明" description="补充上下文">
+          <Input.TextArea name="description" />
+        </Form.Item>
         <Button
           type="submit"
           variant="solid"

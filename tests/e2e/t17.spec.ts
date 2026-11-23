@@ -42,7 +42,7 @@ test("t17_1 label, Tab order, keyboard submit and real control styles", async ({
   await expect.poll(focusContrast).toBeGreaterThanOrEqual(3);
   // Grid items blockify inline-flex to flex in computed styles.
   await expect(save).toHaveCSS("display", "flex");
-  await expect(save).toHaveCSS("height", "34px");
+  await expect(save).toHaveCSS("height", "32px");
   await expect(title).toHaveCSS("border-top-width", "1px");
   await expect(description).toHaveCSS("min-height", "72px");
   await expect(page.getByText("测试夹具", { exact: true })).toHaveCSS("border-radius", "3px");
@@ -82,7 +82,7 @@ test("t17_3 descriptions and errors stay accessible through recovery", async ({ 
   await expect(title).toHaveAttribute("aria-invalid", "true");
   await expect(title).toHaveAccessibleDescription("标题不可用");
   await page.getByRole("button", { name: "切换错误" }).click();
-  // Manual FormField may omit aria-invalid when the error is cleared.
+  // Manual Form.Item may omit aria-invalid when the error is cleared.
   await expect(title).not.toHaveAttribute("aria-invalid", "true");
   await expect(title).toHaveAccessibleDescription("填写笔记标题");
 });

@@ -1,7 +1,7 @@
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useBlocker, useNavigate, useRouterState } from "@tanstack/react-router";
-import { Alert, Button, ConfirmDialog, Dialog, Drawer, Empty, Input, Menu, Select, Spinner, Tree } from "@bixlab/mtone";
+import { Alert, Button, ConfirmDialog, Dialog, Drawer, Empty, Input, Link, Popover, Spinner, Toolbar, Tree, TreeSelect } from "@bixlab/mtone";
 import { ApiRequestError } from "@knoted/api-client";
 import type { QueryClientBundle } from "../../lib/query";
 import { queryKeys } from "../../lib/query";
@@ -170,7 +170,7 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
     {error && <Alert tone="error">{error}</Alert>}
     {expired && <Alert tone="warning" title="会话已失效，本地草稿已保留">
       <p>远程写入已停止。请先复制草稿，或在新标签页重新登录，再明确重试原版本。</p>
-      <a href={`/login?redirect=${encodeURIComponent(pathname)}`} target="_blank" rel="noreferrer">在新标签页重新登录</a>
+      <Link href={`/login?redirect=${encodeURIComponent(pathname)}`} target="_blank">在新标签页重新登录</Link>
       <Button onClick={() => { void (async () => {
         try {
           const { data } = await bundle.api.raw.GET("/auth/session"); if (!data) throw new Error("会话尚未恢复");
@@ -264,22 +264,28 @@ function NotePane({ initialNote, draftStore, bundle, notes, expired, working, on
     {autosave.serverUpdated && <Alert tone="warning">服务器内容已更新；本地草稿仍保留。</Alert>}
     {(autosave.status === "conflict" || autosave.serverUpdated) && <Button ref={conflictTrigger} size="sm" variant="outline" disabled={unavailable}
       onClick={() => setConflict(true)}>版本与冲突处理</Button>}
-    <div className="flex flex-wrap gap-2">
-      <Button size="sm" variant="solid" disabled={unavailable} onClick={() => { void command(async () => { await autosave.retrySave(); await autosave.flush(); }).catch(() => {}); }}>保存并记录历史</Button>
-      <Button size="sm" variant="outline" ref={historyTrigger} aria-expanded={history}
-        aria-controls={history ? "note-history" : undefined} onClick={() => { if (history) closeHistory(); else setHistory(true); }}>历史版本</Button>
-      <NoteAssociations noteId={initialNote.id} api={bundle.api} readOnly={unavailable} assertCanWrite={assertCanWrite} />
-      <Menu trigger={<Button size="sm" variant="ghost" ref={menuTrigger} aria-label="更多笔记操作">更多</Button>} items={[
-        { key: "new-child", label: "新建子笔记", disabled: unavailable, onSelect: onCreateChild },
-        { key: "move", label: "移动笔记", disabled: unavailable || notes.length === 0, onSelect: () => { setParent(ROOT); setMoveError(""); setMoveOpen(true); } },
-        { key: "copy", label: "复制当前草稿", onSelect: () => { void autosave.copyDraft().catch(cause => onError(message(cause))); } },
-        ...((autosave.status === "conflict" || autosave.serverUpdated) ? [] : [
-          { key: "conflict", label: "版本与冲突处理", disabled: unavailable, onSelect: () => setConflict(true) },
-        ]),
-        { type: "divider", key: "before-delete" },
-        { key: "delete", label: "删除笔记", danger: true, disabled: unavailable, onSelect: () => setDeleteOpen(true) },
-      ]} />
-    </div>
+    <Toolbar
+      background="white"
+      aria-label="笔记操作"
+      start={
+        <>
+          <Button size="sm" variant="solid" disabled={unavailable} onClick={() => { void command(async () => { await autosave.retrySave(); await autosave.flush(); }).catch(() => {}); }}>保存并记录历史</Button>
+          <Button size="sm" variant="outline" ref={historyTrigger} aria-expanded={history}
+            aria-controls={history ? "note-history" : undefined} onClick={() => { if (history) closeHistory(); else setHistory(true); }}>历史版本</Button>
+          <NoteAssociations noteId={initialNote.id} api={bundle.api} readOnly={unavailable} assertCanWrite={assertCanWrite} />
+          <Popover.Menu trigger={<Button size="sm" variant="ghost" ref={menuTrigger} aria-label="更多笔记操作">更多</Button>} items={[
+            { key: "new-child", label: "新建子笔记", disabled: unavailable, onSelect: onCreateChild },
+            { key: "move", label: "移动笔记", disabled: unavailable || notes.length === 0, onSelect: () => { setParent(ROOT); setMoveError(""); setMoveOpen(true); } },
+            { key: "copy", label: "复制当前草稿", onSelect: () => { void autosave.copyDraft().catch(cause => onError(message(cause))); } },
+            ...((autosave.status === "conflict" || autosave.serverUpdated) ? [] : [
+              { key: "conflict", label: "版本与冲突处理", disabled: unavailable, onSelect: () => setConflict(true) },
+            ]),
+            { type: "divider", key: "before-delete" },
+            { key: "delete", label: "删除笔记", danger: true, disabled: unavailable, onSelect: () => setDeleteOpen(true) },
+          ]} />
+        </>
+      }
+    />
     {/* The same editor and selection survive history and drawer interactions. */}
     <div className="notes-document reading-measure" hidden={history} inert={history}>
       <NoteEditor key={`${initialNote.id}:${autosave.resetEpoch}`} document={autosave.draft.document} readOnly={unavailable} onChange={document => { if (!pending.current && !expired) autosave.changeDraft({ document }); }}>
@@ -299,16 +305,26 @@ function NotePane({ initialNote, draftStore, bundle, notes, expired, working, on
       requestAnimationFrame(() => titleInput.current?.focus());
     }} />}
     <Dialog open={moveOpen} onOpenChange={open => { if (!open && !pending.current) closeMove(); }} title="移动笔记" description="笔记将移到所选父节点的末尾。">
-      {moveError && <div ref={focusMoveError} tabIndex={-1}><Alert tone="error">{moveError}</Alert></div>}
-      <Select label="目标父笔记" value={parent} onValueChange={setParent} disabled={unavailable} options={[{ value: ROOT, label: "根目录" }, ...notes.filter(note => !blockedParents.has(note.id)).map(note => ({ value: note.id, label: note.title }))]} />
-      <Button disabled={unavailable || parent === null} onClick={() => { setMoveError(""); void command(async () => {
-        const parentId = parent === ROOT ? null : parent;
-        const position = notes.filter(note => note.parent_id === parentId && note.id !== initialNote.id).length;
-        await autosave.runStructuralMutation(async (noteId, baseVersion) => {
-          const { data } = await bundle.api.raw.POST("/notes/{noteId}/move", { params: { path: { noteId } }, body: { expected_version: baseVersion, parent_id: parentId, position } });
-          if (!data) throw new Error("移动响应缺少笔记"); return data;
-        }); await onRefresh(); closeMove();
-      }).catch(cause => setMoveError(message(cause))); }}>确认移动</Button>
+      <div className="space-y-3">
+        {moveError && <div ref={focusMoveError} tabIndex={-1}><Alert tone="error">{moveError}</Alert></div>}
+        <TreeSelect
+          aria-label="目标父笔记"
+          value={parent}
+          onValueChange={value => setParent(value === null ? null : String(value))}
+          disabled={unavailable}
+          searchable
+          defaultExpandAll
+          items={[{ id: ROOT, label: "根目录" }, ...noteTree(notes.filter(note => !blockedParents.has(note.id)))]}
+        />
+        <Button disabled={unavailable || parent === null} onClick={() => { setMoveError(""); void command(async () => {
+          const parentId = parent === ROOT ? null : parent;
+          const position = notes.filter(note => note.parent_id === parentId && note.id !== initialNote.id).length;
+          await autosave.runStructuralMutation(async (noteId, baseVersion) => {
+            const { data } = await bundle.api.raw.POST("/notes/{noteId}/move", { params: { path: { noteId } }, body: { expected_version: baseVersion, parent_id: parentId, position } });
+            if (!data) throw new Error("移动响应缺少笔记"); return data;
+          }); await onRefresh(); closeMove();
+        }).catch(cause => setMoveError(message(cause))); }}>确认移动</Button>
+      </div>
     </Dialog>
     <ConfirmDialog open={deleteOpen} onOpenChange={open => { setDeleteOpen(open); if (!open) requestAnimationFrame(() => menuTrigger.current?.focus()); }} title="删除笔记" description={notes.some(note => note.parent_id === initialNote.id) ? "此笔记仍有子页。请先移动或删除子页；服务端会拒绝删除有存活子页的笔记。" : "先保存当前内容与历史，再删除；本页提供本次删除的恢复入口。"} confirmText="确认删除" danger onConfirm={() => command(async () => {
       await autosave.flush(); const expectedVersion = session.getSnapshot().baseVersion;

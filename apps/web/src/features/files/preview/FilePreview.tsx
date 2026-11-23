@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Button, Dialog, Image, Spinner } from "@bixlab/mtone";
+import { Alert, Button, Dialog, Image, Spinner, Typography } from "@bixlab/mtone";
 import { ApiRequestError, type ApiClient } from "@knoted/api-client";
 import { inspectPreview, isOfficeFile, PREVIEW_BYTES, previewKind, type FileSource } from "./inspect";
 import { OfficePreview } from "./OfficePreview";
@@ -161,7 +161,7 @@ function OpenPreview({ api, file, onOpenChange, onDownload }: FilePreviewProps &
       {office ? <OfficePreview api={api} file={snapshot} disposeRef={officeLifetime} onUnauthorized={markUnauthorized}/> : <>
         {current.kind === "loading" && <Spinner label="正在读取预览"/>}
         {current.kind === "error" && <Alert tone="warning">{current.message}</Alert>}
-        {current.kind === "text" && <pre aria-label="文件文本" className="whitespace-pre-wrap wrap-anywhere">{current.text}</pre>}
+        {current.kind === "text" && <Typography.Code block aria-label="文件文本" className="whitespace-pre-wrap wrap-anywhere">{current.text}</Typography.Code>}
         {current.kind === "image" && <Image src={current.url} alt={file.name} preview={false} fit="contain" className="max-h-[60dvh] max-w-full" onError={() => {
             if (!lifetime.current || lifetime.current.disposed || lifetime.current.url !== current.url)
                 return;
