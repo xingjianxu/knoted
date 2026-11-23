@@ -1,4 +1,4 @@
-import { Alert, Button, Empty, FilterBar, Form, FormField, Input, List, MultiSelect, SearchInput, Select, Spinner } from "@bixlab/mtone";
+import { Alert, Button, Card, Empty, Fieldset, Form, Input, List, PageLayout, Select, Spinner, Text, Toolbar } from "@bixlab/mtone";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useId, useReducer, useRef, useState } from "react";
 import { createCursorState, cursorReducer } from "../../lib/cursor-state";
@@ -99,8 +99,8 @@ function SearchForm({ bundle, filters, filterKey, onSearch }: {
     }}>
       <div className="flex flex-wrap items-start gap-2">
         <div className="min-w-0 flex-1 basis-44">
-          <FormField label={<span className="sr-only">搜索词</span>} error={error === "query" ? "请输入搜索词。" : undefined}>
-            <SearchInput
+          <Form.Item label={<span className="sr-only">搜索词</span>} error={error === "query" ? "请输入搜索词。" : undefined}>
+            <Input.Search
               ref={keyword}
               type="search"
               placeholder="输入搜索词"
@@ -112,108 +112,118 @@ function SearchForm({ bundle, filters, filterKey, onSearch }: {
                 if (error === "query") setError(undefined);
               }}
             />
-          </FormField>
+          </Form.Item>
         </div>
         <Button type="submit" variant="solid" aria-describedby={changed ? dirtyId : undefined}>搜索</Button>
       </div>
-      <FilterBar className="flex flex-wrap items-end gap-2">
-        <Button type="button" aria-expanded={expanded} aria-controls={filtersId} onClick={() => setExpanded(!expanded)}>
-          筛选条件
-        </Button>
-        <div className="min-w-0">
-          <FormField label={<span className="sr-only">排序</span>}>
-            <Select
-              options={sortOptions}
-              value={draft.sort ?? "relevance"}
-              onValueChange={(value) => setDraft({ ...draft, sort: validateSearch({ sort: value }).sort })}
-            />
-          </FormField>
-        </div>
-        {changed && <span id={dirtyId} className="text-sm text-muted">有待提交的修改</span>}
-      </FilterBar>
+      <Toolbar
+        background="white"
+        aria-label="搜索筛选与排序"
+        start={
+          <>
+            <Button type="button" aria-expanded={expanded} aria-controls={filtersId} onClick={() => setExpanded(!expanded)}>
+              筛选条件
+            </Button>
+            <div className="min-w-0">
+              <Form.Item label={<span className="sr-only">排序</span>}>
+                <Select
+                  options={sortOptions}
+                  value={draft.sort ?? "relevance"}
+                  onValueChange={(value) => setDraft({ ...draft, sort: validateSearch({ sort: value }).sort })}
+                />
+              </Form.Item>
+            </div>
+            {changed && <Text id={dirtyId} muted className="text-sm">有待提交的修改</Text>}
+          </>
+        }
+      />
       {submitted.length > 0 && <p className="text-sm wrap-anywhere text-muted">已应用：{submitted.join(" · ")}</p>}
       <div id={filtersId} hidden={!expanded}>
-        {expanded && <div className="grid gap-4 rounded-panel border border-line p-3 @min-[42rem]/workspace:grid-cols-2">
-          <fieldset className="min-w-0 space-y-2">
-            <legend className="mb-2 text-sm font-medium">对象</legend>
-            <FormField label="类型">
-              <Select
-                options={typeOptions}
-                placeholder="全部类型"
-                value={draft.type ?? null}
-                onValueChange={(value) => setDraft({ ...draft, type: validateSearch({ type: value }).type })}
-              />
-            </FormField>
-            <FormField label="项目">
-              <Select
-                options={[{ value: "", label: "全部项目" }, ...Array.from(projectOptions, ([value, label]) => ({ value, label }))]}
-                placeholder="全部项目"
-                value={draft.project ?? null}
-                onValueChange={(value) => setDraft({ ...draft, project: value || undefined })}
-              />
-            </FormField>
-            {projects.isError && <Alert tone="error">
-              无法读取项目选项。{" "}
-              <Button type="button" onClick={() => void projects.refetch()}>重试读取项目</Button>
-            </Alert>}
-            <FormField label="标签">
-              <MultiSelect
-                options={Array.from(tagOptions, ([value, label]) => ({ value, label }))}
-                value={draft.tags ?? []}
-                onValueChange={(value) => setDraft({ ...draft, tags: value })}
-              />
-            </FormField>
-            {tags.isError && <Alert tone="error">
-              无法读取标签选项。{" "}
-              <Button type="button" onClick={() => void tags.refetch()}>重试读取标签</Button>
-            </Alert>}
-            <FormField label="归档">
-              <Select
-                options={archiveOptions}
-                placeholder="全部归档状态"
-                value={draft.archived === undefined ? null : String(draft.archived)}
-                onValueChange={(value) => setDraft({ ...draft, archived: value ? value === "true" : undefined })}
-              />
-            </FormField>
-          </fieldset>
+        {expanded && <Card size="small"><div className="grid gap-4 @min-[42rem]/workspace:grid-cols-2">
+          <Fieldset legend="对象" className="min-w-0">
+            <div className="space-y-2">
+              <Form.Item label="类型">
+                <Select
+                  options={typeOptions}
+                  placeholder="全部类型"
+                  value={draft.type ?? null}
+                  onValueChange={(value) => setDraft({ ...draft, type: validateSearch({ type: value }).type })}
+                />
+              </Form.Item>
+              <Form.Item label="项目">
+                <Select
+                  options={[{ value: "", label: "全部项目" }, ...Array.from(projectOptions, ([value, label]) => ({ value, label }))]}
+                  placeholder="全部项目"
+                  value={draft.project ?? null}
+                  onValueChange={(value) => setDraft({ ...draft, project: value || undefined })}
+                />
+              </Form.Item>
+              {projects.isError && <Alert tone="error">
+                无法读取项目选项。{" "}
+                <Button type="button" onClick={() => void projects.refetch()}>重试读取项目</Button>
+              </Alert>}
+              <Form.Item label="标签">
+                <Select
+                  mode="multiple"
+                  options={Array.from(tagOptions, ([value, label]) => ({ value, label }))}
+                  value={draft.tags ?? []}
+                  onValueChange={(value) => setDraft({ ...draft, tags: value })}
+                />
+              </Form.Item>
+              {tags.isError && <Alert tone="error">
+                无法读取标签选项。{" "}
+                <Button type="button" onClick={() => void tags.refetch()}>重试读取标签</Button>
+              </Alert>}
+              <Form.Item label="归档">
+                <Select
+                  options={archiveOptions}
+                  placeholder="全部归档状态"
+                  value={draft.archived === undefined ? null : String(draft.archived)}
+                  onValueChange={(value) => setDraft({ ...draft, archived: value ? value === "true" : undefined })}
+                />
+              </Form.Item>
+            </div>
+          </Fieldset>
           <div className="min-w-0 space-y-4">
-            <fieldset className="min-w-0 space-y-2">
-              <legend className="mb-2 text-sm font-medium">更新时间</legend>
-              <FormField label="更新时间起">
-                <Input
-                  type="datetime-local"
-                  step="any"
-                  value={toLocalTime(draft.updated_from)}
-                  onChange={(event) => {
-                    setDraft({ ...draft, updated_from: fromLocalTime(event.target.value) });
-                    if (error === "range") setError(undefined);
-                  }}
-                />
-              </FormField>
-              <FormField label="更新时间止" error={error === "range" ? "更新时间起点须早于或等于终点。" : undefined}>
-                <Input
-                  ref={rangeEnd}
-                  type="datetime-local"
-                  step="any"
-                  value={toLocalTime(draft.updated_to)}
-                  onChange={(event) => {
-                    setDraft({ ...draft, updated_to: fromLocalTime(event.target.value) });
-                    if (error === "range") setError(undefined);
-                  }}
-                />
-              </FormField>
-            </fieldset>
-            <fieldset className="min-w-0 space-y-2">
-              <legend className="mb-2 text-sm font-medium">文件位置</legend>
-              <FormField label="路径">
-                <Input value={draft.path ?? ""} onChange={(event) => setDraft({ ...draft, path: event.target.value })} />
-              </FormField>
-              <FormField label="格式">
-                <Input value={draft.format ?? ""} onChange={(event) => setDraft({ ...draft, format: event.target.value })} />
-              </FormField>
-            </fieldset>
+            <Fieldset legend="更新时间" className="min-w-0">
+              <div className="space-y-2">
+                <Form.Item label="更新时间起">
+                  <Input
+                    type="datetime-local"
+                    step="any"
+                    value={toLocalTime(draft.updated_from)}
+                    onChange={(event) => {
+                      setDraft({ ...draft, updated_from: fromLocalTime(event.target.value) });
+                      if (error === "range") setError(undefined);
+                    }}
+                  />
+                </Form.Item>
+                <Form.Item label="更新时间止" error={error === "range" ? "更新时间起点须早于或等于终点。" : undefined}>
+                  <Input
+                    ref={rangeEnd}
+                    type="datetime-local"
+                    step="any"
+                    value={toLocalTime(draft.updated_to)}
+                    onChange={(event) => {
+                      setDraft({ ...draft, updated_to: fromLocalTime(event.target.value) });
+                      if (error === "range") setError(undefined);
+                    }}
+                  />
+                </Form.Item>
+              </div>
+            </Fieldset>
+            <Fieldset legend="文件位置" className="min-w-0">
+              <div className="space-y-2">
+                <Form.Item label="路径">
+                  <Input value={draft.path ?? ""} onChange={(event) => setDraft({ ...draft, path: event.target.value })} />
+                </Form.Item>
+                <Form.Item label="格式">
+                  <Input value={draft.format ?? ""} onChange={(event) => setDraft({ ...draft, format: event.target.value })} />
+                </Form.Item>
+              </div>
+            </Fieldset>
           </div>
-        </div>}
+        </div></Card>}
       </div>
     </Form>
   );
@@ -261,20 +271,21 @@ export function SearchPage({ bundle, filters, onSearch }: {
   const [submission, setSubmission] = useState(0);
 
   return (
-    <div className="min-w-0 space-y-4">
-      <h1 className="page-title">搜索</h1>
-      <SearchForm
-        bundle={bundle}
-        filters={filters}
-        filterKey={filterKey}
-        onSearch={(next) => {
-          if (JSON.stringify(next) === filterKey) setSubmission((current) => current + 1);
-          else onSearch(next);
-        }}
-      />
-      {filters.q && (
-        <SearchResults key={`results:${filterKey}:${submission}`} bundle={bundle} filters={filters} />
-      )}
-    </div>
+    <PageLayout title="搜索" className="min-w-0">
+      <div className="min-w-0 space-y-4">
+        <SearchForm
+          bundle={bundle}
+          filters={filters}
+          filterKey={filterKey}
+          onSearch={(next) => {
+            if (JSON.stringify(next) === filterKey) setSubmission((current) => current + 1);
+            else onSearch(next);
+          }}
+        />
+        {filters.q && (
+          <SearchResults key={`results:${filterKey}:${submission}`} bundle={bundle} filters={filters} />
+        )}
+      </div>
+    </PageLayout>
   );
 }

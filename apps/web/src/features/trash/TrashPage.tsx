@@ -1,4 +1,4 @@
-import { Alert, Button, Dialog, Empty, FilterBar, List, ListItem, Select, Spinner } from "@bixlab/mtone";
+import { Alert, Button, Dialog, Empty, List, ListItem, Paragraph, Select, Spinner, Tag, Toolbar } from "@bixlab/mtone";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useReducer, useRef, useState } from "react";
 import { ApiRequestError, type components } from "@knoted/api-client";
@@ -38,18 +38,24 @@ export function TrashPage({ bundle }: { bundle: QueryClientBundle }) {
   }
   return <section aria-labelledby="trash-title" className="grid gap-4">
     <h1 id="trash-title" ref={heading} tabIndex={-1}>回收站</h1>
-    <FilterBar className="flex flex-wrap items-end gap-3">
-      <Select label="对象类型" value={filter}
-        options={[{ value: "all", label: "全部" }, { value: "note", label: "笔记" }, { value: "project", label: "项目" }, { value: "task", label: "事项" }]}
-        onValueChange={value => {
-          if (value) {
-            setFilter(value as EntityType | "all");
-            dispatch({ type: "filter", filterKey: value });
-          }
-        }} />
-      <Button disabled={page.isFetching} onClick={() => { void page.refetch(); }}>刷新列表</Button>
-    </FilterBar>
-    <p className="text-sm text-muted">删除满 30 天后具备清理资格。恢复时会重新校验版本与关系。</p>
+    <Toolbar
+      background="white"
+      aria-label="回收站筛选"
+      start={
+        <>
+          <Select label="对象类型" value={filter}
+            options={[{ value: "all", label: "全部" }, { value: "note", label: "笔记" }, { value: "project", label: "项目" }, { value: "task", label: "事项" }]}
+            onValueChange={value => {
+              if (value) {
+                setFilter(value as EntityType | "all");
+                dispatch({ type: "filter", filterKey: value });
+              }
+            }} />
+          <Button disabled={page.isFetching} onClick={() => { void page.refetch(); }}>刷新列表</Button>
+        </>
+      }
+    />
+    <Paragraph muted className="text-sm">删除满 30 天后具备清理资格。恢复时会重新校验版本与关系。</Paragraph>
     {restoredItem && <p role="status" key={`${restoredItem.entity_type}:${restoredItem.id}`}>已恢复 {restoredItem.title}</p>}
     {page.isFetching && <Spinner label="加载回收站" />}
     {page.isError && <Alert tone="error" title={page.data ? "列表刷新失败" : "回收站暂时不可用"}>请重试读取列表；已经成功的恢复操作无需重复提交。</Alert>}
@@ -97,8 +103,11 @@ function RestoreAction({ bundle, item, onRestored }: { bundle: QueryClientBundle
   }
   return <ListItem><section aria-label={`回收对象 ${item.title}`} className="flex flex-wrap items-start justify-between gap-3">
     <div className="min-w-0 space-y-1">
-      <h2 className="font-medium wrap-anywhere">{item.title}</h2>
-      <p className="text-sm text-muted">{labels[item.entity_type]} · 删除时间：<time dateTime={item.deleted_at}>{new Date(item.deleted_at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}</time>（上海）</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="font-medium wrap-anywhere">{item.title}</h2>
+        <Tag>{labels[item.entity_type]}</Tag>
+      </div>
+      <p className="text-sm text-muted">删除时间：<time dateTime={item.deleted_at}>{new Date(item.deleted_at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}</time>（上海）</p>
       {item.reason && <p className="wrap-anywhere">{item.reason}</p>}
     </div>
     <Dialog title={`恢复 ${item.title}`} open={confirm} onOpenChange={value => { if (!writing.current) setConfirm(value); }}

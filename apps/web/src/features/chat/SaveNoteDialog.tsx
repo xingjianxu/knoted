@@ -1,4 +1,4 @@
-import { Alert, Button, Dialog, Form, FormField, Input, Select } from "@bixlab/mtone";
+import { Alert, Button, Dialog, Form, Input, TreeSelect, type TreeItem } from "@bixlab/mtone";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useRef, useState } from "react";
@@ -7,12 +7,16 @@ import { notesTreeQuery, noteTree } from "../notes/queries";
 
 const root = "root";
 
-function parentOptions(tree: ReturnType<typeof noteTree>, ancestors: string[] = []): Array<{ value: string; label: string }> {
-  return tree.flatMap((item) => {
-    const title = typeof item.label === "string" && item.label ? item.label : "无标题";
-    const path = [...ancestors, title];
-    return [{ value: item.id, label: path.join(" / ") }, ...parentOptions(item.children ?? [], path)];
-  });
+function normalizeTree(tree: ReturnType<typeof noteTree>): TreeItem[] {
+  return tree.map((item) => ({
+    ...item,
+    label: typeof item.label === "string" && item.label ? item.label : "无标题",
+    children: item.children ? normalizeTree(item.children) : undefined,
+  }));
+}
+
+function hasTreeId(items: TreeItem[], target: string): boolean {
+  return items.some((item) => String(item.id) === target || hasTreeId(item.children ?? [], target));
 }
 
 export function SaveNoteDialog({ bundle, messageId }: { bundle: QueryClientBundle; messageId: string }) {
@@ -25,8 +29,8 @@ export function SaveNoteDialog({ bundle, messageId }: { bundle: QueryClientBundl
   const submitting = useRef(false);
   const keys = useRef(new Map<string, string>());
   const tree = useQuery({ ...notesTreeQuery(bundle), enabled: open });
-  const options = [{ value: root, label: "根目录" }, ...parentOptions(noteTree(open ? tree.data ?? [] : []))];
-  const validParent = parent === root || (tree.isSuccess && options.some((option) => option.value === parent));
+  const items: TreeItem[] = [{ id: root, label: "根目录" }, ...normalizeTree(noteTree(open ? tree.data ?? [] : []))];
+  const validParent = parent === root || (tree.isSuccess && hasTreeId(items, parent));
 
   async function save() {
     const trimmedTitle = title.trim();
@@ -71,12 +75,20 @@ export function SaveNoteDialog({ bundle, messageId }: { bundle: QueryClientBundl
         event.preventDefault();
         void save();
       }}>
-        <FormField label="标题">
+        <Form.Item label="标题">
           <Input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={500} required disabled={pending} />
-        </FormField>
-        <FormField label="父页">
-          <Select options={options} value={parent} onValueChange={(value) => setParent(value ?? root)} disabled={pending} />
-        </FormField>
+        </Form.Item>
+        <Form.Item label="父页">
+          <TreeSelect
+            aria-label="父页"
+            items={items}
+            value={parent}
+            onValueChange={(value) => setParent(value === null ? root : String(value))}
+            disabled={pending}
+            searchable
+            defaultExpandAll
+          />
+        </Form.Item>
         {tree.isError && <Alert tone="error">无法读取笔记目录。{" "}
           <Button type="button" onClick={() => void tree.refetch()}>重试读取</Button>
         </Alert>}

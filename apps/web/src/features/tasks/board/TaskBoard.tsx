@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Button, Empty, List, ListItem, Menu } from "@bixlab/mtone";
+import { Alert, Button, Empty, List, ListItem, Paragraph, Popover } from "@bixlab/mtone";
 import { queryKeys, type QueryClientBundle } from "../../../lib/query";
 import { projectQuery } from "../../projects/queries";
 import { formatTaskDate, TaskLink } from "../TaskList";
@@ -56,7 +56,7 @@ export function TaskBoard({ bundle, items, projects, disabled, onSelectTask, onB
     finally { setPending(undefined); writing.current = false; onBusyChange(false); dragged.current = undefined; }
   }
   return <section ref={board} aria-label="事项看板" className="@container space-y-3">
-    <p id="task-board-help" className="text-sm text-muted">拖动卡片、按 Alt + 左右方向键，或使用卡片菜单更改状态。</p>
+    <Paragraph id="task-board-help" muted className="text-sm">拖动卡片、按 Alt + 左右方向键，或使用卡片菜单更改状态。</Paragraph>
     {error && <Alert tone="error">{error}</Alert>}
     <div className="grid gap-4 @min-[60rem]:grid-cols-4">{columns.map((column) => <section key={column.status} aria-label={column.label} className="min-w-0 space-y-2">
       <h2 className="section-title">{column.label}</h2>
@@ -100,7 +100,7 @@ function TaskCard({ bundle, task, projectName, disabled, onSelectTask, onDragSta
       {task.due && <span>截止 {formatTaskDate(task.due)}</span>}
       {readOnly && <span>只读事项</span>}
     </span>}
-    actions={!readOnly && <Menu
+    actions={!readOnly && <Popover.Menu
       trigger={<Button size="sm" disabled={locked} aria-label={`更改状态 ${task.title}`}>更改状态</Button>}
       items={columns.filter(({ status }) => status !== task.status).map(({ status, label }) => ({
         key: status, label, onSelect: () => onMove(status),

@@ -1,4 +1,4 @@
-import { Alert, Button, ConfirmDialog, Empty, FilterBar, FormField, List, ListItem, Select, Spinner, Status } from "@bixlab/mtone";
+import { Alert, Button, ConfirmDialog, Empty, Form, List, ListItem, PageLayout, Paragraph, SectionGroup, Select, Spinner, Status, Toolbar, Typography } from "@bixlab/mtone";
 import { ApiRequestError } from "@knoted/api-client";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useReducer, useRef, useState, type ReactNode } from "react";
@@ -59,7 +59,7 @@ function JobRow({ job, pending, error, onAction }: {
         <span className="text-sm text-muted">尝试 {job.attempts}/{job.max_attempts}</span>
         {Number.isFinite(updated.getTime()) && <time dateTime={job.updated_at} className="text-sm text-muted"><span className="sr-only">更新时间 </span>{timeFormat.format(updated)}</time>}
         <div>{kindActions(job, pending, error, onAction)}</div>
-        {problem && <p className="wrap-anywhere @min-[48rem]/workspace:col-span-full"><code>{problem.code}</code> {problem.message}</p>}
+        {problem && <p className="wrap-anywhere @min-[48rem]/workspace:col-span-full"><Typography.Code>{problem.code}</Typography.Code> {problem.message}</p>}
       </div>
     </ListItem>
   );
@@ -109,60 +109,74 @@ export function JobsPage({ bundle, filesLink }: { bundle: QueryClientBundle; fil
   const items = list.data?.items ?? [];
   const busy = operation.isPending || list.isFetching;
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       {filesLink}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1>索引任务</h1>
-        <Button loading={operation.isPending && operation.variables?.type === "scan"} disabled={operation.isPending} variant="solid" onClick={() => {
-          scanKey.current ??= crypto.randomUUID();
-          void run({ type: "scan", key: scanKey.current }).catch(() => {});
-        }}>扫描文件</Button>
-      </div>
-      <FilterBar className="flex flex-wrap items-end gap-3">
-        <FormField label="任务状态">
-          <Select
-            options={stateOptions}
-            value={state ?? ""}
-            disabled={operation.isPending}
-            onValueChange={(value) => {
-              setState(value && Object.hasOwn(jobStates, value) ? value as JobState : undefined);
-              dispatch({ type: "filter", filterKey: value ?? "" });
-            }}
+      <PageLayout
+        title="索引任务"
+        actions={
+          <Button loading={operation.isPending && operation.variables?.type === "scan"} disabled={operation.isPending} variant="solid" onClick={() => {
+            scanKey.current ??= crypto.randomUUID();
+            void run({ type: "scan", key: scanKey.current }).catch(() => {});
+          }}>扫描文件</Button>
+        }
+      >
+        <div className="space-y-5">
+          <Toolbar
+            background="white"
+            aria-label="任务筛选"
+            start={
+              <div className="flex flex-wrap items-end gap-3">
+                <Form.Item label="任务状态">
+                  <Select
+                    options={stateOptions}
+                    value={state ?? ""}
+                    disabled={operation.isPending}
+                    onValueChange={(value) => {
+                      setState(value && Object.hasOwn(jobStates, value) ? value as JobState : undefined);
+                      dispatch({ type: "filter", filterKey: value ?? "" });
+                    }}
+                  />
+                </Form.Item>
+                <Button disabled={busy} onClick={() => void list.refetch()}>刷新任务</Button>
+              </div>
+            }
           />
-        </FormField>
-        <Button disabled={busy} onClick={() => void list.refetch()}>刷新任务</Button>
-      </FilterBar>
-      {notice && <Alert tone="success">{notice}</Alert>}
-      {operation.error && operation.variables?.type === "scan" && <Alert tone="error">{operation.error.message}</Alert>}
-      {list.isPending && <Spinner label="正在读取任务" />}
-      {list.isError && <Alert tone="error">无法读取任务记录。请刷新后重试。</Alert>}
+          {notice && <Alert tone="success">{notice}</Alert>}
+          {operation.error && operation.variables?.type === "scan" && <Alert tone="error">{operation.error.message}</Alert>}
+          {list.isPending && <Spinner label="正在读取任务" />}
+          {list.isError && <Alert tone="error">无法读取任务记录。请刷新后重试。</Alert>}
 
-      <div className="space-y-5" aria-busy={list.isFetching}>
-        {list.data && items.length > 0 && stageKeys.map((stage) => {
-          const jobs = items.filter((job) => jobStage(job.kind) === stage);
-          if (stage === "other" && jobs.length === 0) return null;
-          const title = jobStages[stage];
-          return (
-            <section aria-label={title} className="space-y-2" key={stage}>
-              <h2 className="section-title">{title}</h2>
-              {jobs.length === 0 ? <p className="text-sm text-muted">本页没有{title}任务</p> : <List aria-label={`${title}任务`}>
-                {jobs.map((job) => <JobRow key={job.id} job={job} pending={operation.isPending}
-                  error={operation.variables && "jobId" in operation.variables && operation.variables.jobId === job.id
-                    ? operation.error?.message : undefined}
-                  onAction={run} />)}
-              </List>}
-            </section>
-          );
-        })}
-        {list.isSuccess && !list.isFetching && items.length === 0 && <Empty title="没有匹配的任务记录" />}
-      </div>
-      {(list.data || page.previous.length > 0) && (
-        <nav aria-label="任务翻页" className="flex gap-2">
-          <Button disabled={busy || page.previous.length === 0} onClick={() => dispatch({ type: "previous" })}>上一页</Button>
-          <Button disabled={busy || list.isError || !list.data?.next_cursor || list.data.next_cursor === page.cursor}
-            onClick={() => dispatch({ type: "next", nextCursor: list.data?.next_cursor ?? null })}>下一页</Button>
-        </nav>
-      )}
+          <div className="space-y-5" aria-busy={list.isFetching}>
+            {list.data && items.length > 0 && (
+              <SectionGroup>
+                {stageKeys.map((stage) => {
+                  const jobs = items.filter((job) => jobStage(job.kind) === stage);
+                  if (stage === "other" && jobs.length === 0) return null;
+                  const title = jobStages[stage];
+                  return (
+                    <SectionGroup.Section title={title} headingLevel={2} key={stage}>
+                      {jobs.length === 0 ? <Paragraph muted className="text-sm">本页没有{title}任务</Paragraph> : <List aria-label={`${title}任务`}>
+                        {jobs.map((job) => <JobRow key={job.id} job={job} pending={operation.isPending}
+                          error={operation.variables && "jobId" in operation.variables && operation.variables.jobId === job.id
+                            ? operation.error?.message : undefined}
+                          onAction={run} />)}
+                      </List>}
+                    </SectionGroup.Section>
+                  );
+                })}
+              </SectionGroup>
+            )}
+            {list.isSuccess && !list.isFetching && items.length === 0 && <Empty title="没有匹配的任务记录" />}
+          </div>
+          {(list.data || page.previous.length > 0) && (
+            <nav aria-label="任务翻页" className="flex gap-2">
+              <Button disabled={busy || page.previous.length === 0} onClick={() => dispatch({ type: "previous" })}>上一页</Button>
+              <Button disabled={busy || list.isError || !list.data?.next_cursor || list.data.next_cursor === page.cursor}
+                onClick={() => dispatch({ type: "next", nextCursor: list.data?.next_cursor ?? null })}>下一页</Button>
+            </nav>
+          )}
+        </div>
+      </PageLayout>
     </div>
   );
 }

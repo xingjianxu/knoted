@@ -1,4 +1,4 @@
-import { Alert, Badge, Button, Empty, List, ListItem, Spinner } from "@bixlab/mtone";
+import { Alert, Button, Empty, List, ListItem, Spinner, Tag } from "@bixlab/mtone";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useId, useState, type ReactNode } from "react";
@@ -40,7 +40,7 @@ export function CitationList({ citations }: { citations: Citation[] }) {
         >
           <span className="flex flex-wrap items-center gap-2">
             <CitationTitle citation={citation} />
-            {sourceStates[citation.source_state] && <Badge tone="orange">{sourceStates[citation.source_state]}</Badge>}
+            {sourceStates[citation.source_state] && <Tag tone="orange">{sourceStates[citation.source_state]}</Tag>}
           </span>
         </ListItem>
       ))}

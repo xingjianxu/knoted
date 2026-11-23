@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Alert, Button, FormField, Input } from "@bixlab/mtone";
+import { Alert, Button, Card, Divider, Form, Input, Paragraph, Text, Title } from "@bixlab/mtone";
 import { Link, useNavigate, useRouteContext } from "@tanstack/react-router";
 import { queryKeys } from "../../lib/query";
 import { safeReturnTo } from "../../lib/router";
@@ -109,60 +109,63 @@ export function AuthPage({
         : "恢复账号";
   return (
     <main aria-labelledby="auth-title" className="grid min-h-dvh place-items-center p-3 sm:p-6">
-      <section className="w-full min-w-0 max-w-sm space-y-6 rounded-panel border border-line bg-surface p-4 sm:p-6">
-        <div className="space-y-2">
-          <p className="font-semibold text-accent">Knoted</p>
-          <h1 id="auth-title" className="page-title">{title}</h1>
-        </div>
-        {mode === "login" ? (
-          <div className="space-y-3">
-            <Button className="w-full" variant="solid" size="lg" loading={busy} focusableWhenDisabled
-              onClick={() => void authenticate()}>
-              使用 Passkey 登录
-            </Button>
-            {error && <Alert tone="error">{error}</Alert>}
+      <Card className="w-full min-w-0 max-w-sm">
+        <div className="space-y-6">
+          <div className="space-y-2">
+            <Text strong className="block text-accent">Knoted</Text>
+            <Title level={1} id="auth-title" className="page-title">{title}</Title>
           </div>
-        ) : (
-          <form aria-labelledby="auth-title" className="space-y-4" onSubmit={(event) => void handleSubmit(authenticate)(event)}>
-            {mode === "bootstrap" ? (
-              <p className="text-muted">使用管理员在本机签发的一次性注册令牌。</p>
-            ) : (
-              <Alert tone="warning">恢复成功后将撤销所有旧凭据与会话。</Alert>
-            )}
-            <FormField label="一次性令牌" error={errors.token?.message}>
-              <Input
-                id="token"
-                type="password"
-                autoComplete="off"
-                {...register("token")}
-                disabled={busy}
-              />
-            </FormField>
-            <FormField label="凭据名称" error={errors.name?.message}>
-              <Input
-                id="name"
-                autoComplete="off"
-                {...register("name")}
-                disabled={busy}
-              />
-            </FormField>
-            {error && <Alert tone="error">{error}</Alert>}
-            <Button type="submit" className="w-full" variant="solid" size="lg" loading={busy} focusableWhenDisabled>
-              {mode === "bootstrap" ? "注册 Passkey" : "替换凭据并恢复"}
-            </Button>
-          </form>
-        )}
-        <nav className="flex flex-wrap justify-center gap-x-6 gap-y-2 border-t border-line pt-4" aria-label="认证方式">
           {mode === "login" ? (
-            <>
-              <Link className="page-link" to="/bootstrap">首次注册</Link>
-              <Link className="page-link" to="/recovery">恢复账号</Link>
-            </>
+            <div className="space-y-3">
+              <Button className="w-full" variant="solid" size="lg" loading={busy} focusableWhenDisabled
+                onClick={() => void authenticate()}>
+                使用 Passkey 登录
+              </Button>
+              {error && <Alert tone="error">{error}</Alert>}
+            </div>
           ) : (
-            <Link className="page-link" to="/login" search={{ redirect: safeReturnTo(returnTo) }}>返回登录</Link>
+            <Form aria-labelledby="auth-title" className="gap-4" onSubmit={(event) => void handleSubmit(authenticate)(event)}>
+              {mode === "bootstrap" ? (
+                <Paragraph muted>使用管理员在本机签发的一次性注册令牌。</Paragraph>
+              ) : (
+                <Alert tone="warning">恢复成功后将撤销所有旧凭据与会话。</Alert>
+              )}
+              <Form.Item label="一次性令牌" error={errors.token?.message}>
+                <Input
+                  id="token"
+                  type="password"
+                  autoComplete="off"
+                  {...register("token")}
+                  disabled={busy}
+                />
+              </Form.Item>
+              <Form.Item label="凭据名称" error={errors.name?.message}>
+                <Input
+                  id="name"
+                  autoComplete="off"
+                  {...register("name")}
+                  disabled={busy}
+                />
+              </Form.Item>
+              {error && <Alert tone="error">{error}</Alert>}
+              <Button type="submit" className="w-full" variant="solid" size="lg" loading={busy} focusableWhenDisabled>
+                {mode === "bootstrap" ? "注册 Passkey" : "替换凭据并恢复"}
+              </Button>
+            </Form>
           )}
-        </nav>
-      </section>
+          <Divider />
+          <nav className="flex flex-wrap justify-center gap-x-6 gap-y-2" aria-label="认证方式">
+            {mode === "login" ? (
+              <>
+                <Link className="page-link" to="/bootstrap">首次注册</Link>
+                <Link className="page-link" to="/recovery">恢复账号</Link>
+              </>
+            ) : (
+              <Link className="page-link" to="/login" search={{ redirect: safeReturnTo(returnTo) }}>返回登录</Link>
+            )}
+          </nav>
+        </div>
+      </Card>
     </main>
   );
 }

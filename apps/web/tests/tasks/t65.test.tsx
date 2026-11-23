@@ -406,8 +406,7 @@ it("t66_5 saves only a complete answer and reuses the key on retry", async () =>
   const dialog = await screen.findByRole("dialog", { name: "存为笔记" });
   fireEvent.change(within(dialog).getByRole("textbox", { name: "标题" }), { target: { value: "项目风险" } });
   fireEvent.click(await within(dialog).findByRole("combobox", { name: "父页" }));
-  const parentOption = await screen.findByRole("option", { name: "目标父页" });
-  fireEvent.pointerDown(parentOption, { pointerType: "mouse" });
+  const parentOption = await screen.findByRole("treeitem", { name: "目标父页" });
   fireEvent.click(parentOption);
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
   expect(await within(dialog).findByRole("alert")).toHaveTextContent("保存失败");

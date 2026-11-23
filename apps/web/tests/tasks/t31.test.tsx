@@ -585,3 +585,17 @@ it("t67_editor refuses to insert a reclaimed image returned on upload replay", a
   expect(screen.queryByRole("img", { name: "笔记图片" })).not.toBeInTheDocument();
   expect(calls("PATCH", id(1))).toHaveLength(0);
 });
+
+it("move dialog uses TreeSelect to pick a non-root parent while excluding the current note", async () => {
+  await mount();
+  await title();
+  await selectNoteAction("移动笔记");
+  const dialog = await screen.findByRole("dialog", { name: "移动笔记" });
+  fireEvent.click(within(dialog).getByRole("combobox", { name: "目标父笔记" }));
+  const tree = await screen.findByRole("tree", { name: "目标父笔记" });
+  expect(within(tree).queryByRole("treeitem", { name: "笔记1" })).not.toBeInTheDocument();
+  fireEvent.click(within(tree).getByRole("treeitem", { name: "笔记2" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "确认移动" }));
+  await waitFor(() => expect(calls("POST", "/move")).toHaveLength(1));
+  expect(await calls("POST", "/move")[0]!.json()).toEqual({ expected_version: 1, parent_id: id(2), position: 0 });
+});

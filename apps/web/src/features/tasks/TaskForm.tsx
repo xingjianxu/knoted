@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Alert, Button, FormField, Input, Select, Textarea } from "@bixlab/mtone";
+import { Alert, Button, Fieldset, Form, Input, Paragraph, Select } from "@bixlab/mtone";
 import { ApiRequestError, type components } from "@knoted/api-client";
 import { dateBoundary } from "./dates";
 import type { Project, Task } from "./queries";
@@ -92,42 +92,41 @@ export function TaskForm({ task, parent, projects, parents, disabled = false, pe
       setMessage(cause instanceof Error ? cause.message : "保存失败，请重试");
     }
   }
-  return <form noValidate onSubmit={(event) => void handleSubmit(submitDraft)(event)} className="space-y-3 pb-4">
-    <FormField label="事项标题" error={errors.title?.message}><Input {...register("title")} disabled={locked} /></FormField>
-    <FormField label="事项说明" error={errors.description?.message}><Textarea {...register("description")} rows={3} disabled={locked} /></FormField>
-    <fieldset className="min-w-0 space-y-2">
-      <legend className="font-medium">状态与优先级</legend>
+  return <Form noValidate onSubmit={(event) => void handleSubmit(submitDraft)(event)} className="gap-3 pb-4">
+    <Form.Item label="事项标题" error={errors.title?.message}><Input {...register("title")} disabled={locked} /></Form.Item>
+    <Form.Item label="事项说明" error={errors.description?.message}><Input.TextArea {...register("description")} rows={3} disabled={locked} /></Form.Item>
+    <Fieldset legend="状态与优先级" className="min-w-0">
       <div className="grid gap-2 sm:grid-cols-2">
-        <Controller control={control} name="status" render={({ field }) => <FormField label="事项状态" error={errors.status?.message}><Select value={field.value} onValueChange={field.onChange} options={statusOptions} disabled={locked} /></FormField>} />
-        <Controller control={control} name="priority" render={({ field }) => <FormField label="优先级" error={errors.priority?.message}><Select value={field.value} onValueChange={field.onChange} options={priorityOptions} disabled={locked} /></FormField>} />
+        <Controller control={control} name="status" render={({ field }) => <Form.Item label="事项状态" error={errors.status?.message}><Select value={field.value} onValueChange={field.onChange} options={statusOptions} disabled={locked} /></Form.Item>} />
+        <Controller control={control} name="priority" render={({ field }) => <Form.Item label="优先级" error={errors.priority?.message}><Select value={field.value} onValueChange={field.onChange} options={priorityOptions} disabled={locked} /></Form.Item>} />
       </div>
-    </fieldset>
-    <fieldset className="min-w-0 space-y-2">
-      <legend className="font-medium">项目与父事项</legend>
+    </Fieldset>
+    <Fieldset legend="项目与父事项" className="min-w-0">
       <div className="grid gap-2 sm:grid-cols-2">
-        <Controller control={control} name="parent_id" render={({ field }) => <FormField label="父事项" error={errors.parent_id?.message}><Select value={field.value} onValueChange={field.onChange} options={[{ value: "", label: "顶层事项" }, ...parents.filter((row) => row.id !== task?.id).map((row) => ({ value: row.id, label: row.title })), ...(parent && !parents.some((row) => row.id === parent.id) ? [{ value: parent.id, label: parent.title }] : [])]} disabled={locked || !!parent} /></FormField>} />
-        <Controller control={control} name="project_id" render={({ field }) => <FormField label="所属项目" error={errors.project_id?.message} description={parentId ? "子事项继承父事项所属项目" : undefined}><Select value={selectedParent ? selectedParent.project_id ?? "" : field.value} onValueChange={field.onChange} options={[{ value: "", label: "独立事项" }, ...projects.map((row) => ({ value: row.id, label: row.title, disabled: row.archived_at !== null }))]} disabled={locked || !!parentId} /></FormField>} />
+        <Controller control={control} name="parent_id" render={({ field }) => <Form.Item label="父事项" error={errors.parent_id?.message}><Select value={field.value} onValueChange={field.onChange} options={[{ value: "", label: "顶层事项" }, ...parents.filter((row) => row.id !== task?.id).map((row) => ({ value: row.id, label: row.title })), ...(parent && !parents.some((row) => row.id === parent.id) ? [{ value: parent.id, label: parent.title }] : [])]} disabled={locked || !!parent} /></Form.Item>} />
+        <Controller control={control} name="project_id" render={({ field }) => <Form.Item label="所属项目" error={errors.project_id?.message} description={parentId ? "子事项继承父事项所属项目" : undefined}><Select value={selectedParent ? selectedParent.project_id ?? "" : field.value} onValueChange={field.onChange} options={[{ value: "", label: "独立事项" }, ...projects.map((row) => ({ value: row.id, label: row.title, disabled: row.archived_at !== null }))]} disabled={locked || !!parentId} /></Form.Item>} />
       </div>
-    </fieldset>
-    <fieldset className="min-w-0 space-y-2">
-      <legend className="font-medium">开始与截止（上海）</legend>
-      <p className="text-sm text-muted">时间可留空；纯日期的截止时间为次日零点。</p>
-      <div className="grid gap-2 sm:grid-cols-2">
-        <FormField label="开始日期" error={errors.startDate?.message}><Input type="date" {...register("startDate")} disabled={locked} /></FormField>
-        <FormField label="开始时间" error={errors.startTime?.message}><Input type="time" step={60} {...register("startTime")} disabled={locked} /></FormField>
-        <FormField label="截止日期" error={errors.dueDate?.message}><Input type="date" {...register("dueDate")} disabled={locked} /></FormField>
-        <FormField label="截止时间" error={errors.dueTime?.message}><Input type="time" step={60} {...register("dueTime")} disabled={locked} /></FormField>
+    </Fieldset>
+    <Fieldset legend="开始与截止（上海）" className="min-w-0">
+      <div className="space-y-2">
+        <Paragraph muted className="text-sm">时间可留空；纯日期的截止时间为次日零点。</Paragraph>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <Form.Item label="开始日期" error={errors.startDate?.message}><Input type="date" {...register("startDate")} disabled={locked} /></Form.Item>
+          <Form.Item label="开始时间" error={errors.startTime?.message}><Input type="time" step={60} {...register("startTime")} disabled={locked} /></Form.Item>
+          <Form.Item label="截止日期" error={errors.dueDate?.message}><Input type="date" {...register("dueDate")} disabled={locked} /></Form.Item>
+          <Form.Item label="截止时间" error={errors.dueTime?.message}><Input type="time" step={60} {...register("dueTime")} disabled={locked} /></Form.Item>
+        </div>
       </div>
-    </fieldset>
+    </Fieldset>
     <div className="flex flex-wrap justify-end gap-2">
       {onCancel && <Button type="button" disabled={busy} onClick={onCancel}>取消</Button>}
       <Button type="submit" variant="blue" loading={busy} disabled={locked || conflict}>{submitLabel}</Button>
     </div>
     {error && <Alert tone="error">{error}</Alert>}
     {conflict && <div className="space-y-2">
-      <FormField label="草稿副本" description="可选中复制全部内容"><Textarea value={copy} readOnly rows={8} /></FormField>
+      <Form.Item label="草稿副本" description="可选中复制全部内容"><Input.TextArea value={copy} readOnly rows={8} /></Form.Item>
       <Button type="button" onClick={() => { void navigator.clipboard?.writeText(copy).then(() => setCopyMessage("草稿已复制")).catch(() => setCopyMessage("复制失败，请从草稿副本手动复制")); }}>复制草稿</Button>
       {copyMessage && <p role="status">{copyMessage}</p>}
     </div>}
-  </form>;
+  </Form>;
 }

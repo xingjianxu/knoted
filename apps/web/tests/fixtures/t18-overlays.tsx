@@ -3,7 +3,6 @@ import {
   ConfirmDialog,
   ContextMenu,
   Dialog,
-  DropdownMenu,
   Input,
   Popover,
   useToast,
@@ -80,7 +79,7 @@ export function T18Overlays() {
         open={popoverOpen}
         onOpenChange={setPopoverOpen}
       />
-      <DropdownMenu
+      <Popover.Menu
         trigger={<Button>笔记菜单</Button>}
         items={items}
         onSelect={(key) => select("dropdown", key)}

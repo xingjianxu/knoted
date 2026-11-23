@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import { Alert, Button, Dialog, Input } from "@bixlab/mtone";
+import { Alert, Button, Dialog, Divider, Form, Input, Paragraph } from "@bixlab/mtone";
 import { conflictCopyTitle, type NoteDraft } from "./autosave";
 
 export interface ConflictDialogProps {
@@ -33,16 +33,18 @@ export function ConflictDialog({ open, draft, readOnly = false, onOpenChange, on
       {error && <div ref={focusError} tabIndex={-1}><Alert tone="error" title="操作失败">{error}</Alert></div>}
       {feedback && <Alert tone="success" title={feedback} />}
       <Button disabled={busy} onClick={() => void run(onCopyDraft, "已复制本地草稿")}>复制草稿</Button>
-      <form className="space-y-2" onSubmit={event => {
+      <Form className="gap-2" onSubmit={event => {
         event.preventDefault();
         if (!readOnly) void run(() => onSaveCopy(copyTitle), "已另存副本，原草稿仍保留");
       }}>
-        <label className="block">副本标题<Input aria-label="副本标题" value={copyTitle} maxLength={500}
-          onChange={event => setTitle(event.target.value)} disabled={busy || readOnly} /></label>
+        <Form.Item label="副本标题">
+          <Input value={copyTitle} maxLength={500} onChange={event => setTitle(event.target.value)} disabled={busy || readOnly} />
+        </Form.Item>
         <Button type="submit" disabled={busy || readOnly}>另存副本</Button>
-      </form>
+      </Form>
+      <Divider />
       <section aria-label="服务器版本" className="space-y-2">
-        <p>加载服务器版本会替换当前本地草稿。</p>
+        <Paragraph>加载服务器版本会替换当前本地草稿。</Paragraph>
         <Button danger disabled={busy || readOnly} onClick={() => void run(onLoadServer, "已加载服务器内容")}>加载服务器并替换本地</Button>
       </section>
     </div>

@@ -13,7 +13,7 @@
 
 ## 现状与目标
 
-当前精确依赖为 **`@bixlab/mtone@0.8.0`**（`apps/web/package.json` / `pnpm-lock.yaml`）。下文保留 T17—T19 的原始接入与各版本升级记录。
+当前精确依赖为 **`@bixlab/mtone@0.13.0`**（`apps/web/package.json` / `pnpm-lock.yaml`）。下文保留 T17—T19 的原始接入与各版本升级记录。
 
 T17 已精确接入 npm `@bixlab/mtone@0.2.0`，迁移 App 静态类并移除 `packages/ui`；**PR #42 已普通 merge 至主线 `e3e1db2`，独立审查/主线验证/任务清理完成**。T17 接入时，生产入口使用应用层 `UiProvider` 配置公开 `MtoneProvider`，不转发控件 API；CSS 从应用样式入口导入。基础表单组合仅在测试夹具中，不建立生产演示路由或通用包装库。证据见 [T17](../plans/knoted-v1/evidence/t17.md)。
 
@@ -50,6 +50,17 @@ T17 实测：旧 `cn('p-2', 'p-4')` 返回 `p-4`，mtone 的 `cn` 返回 `p-2 p-
 0.2.0 在实施时距发布不足 pnpm 默认最小等待时间；`pnpm-workspace.yaml` 仅为已明确选择、检查过的精确版本添加 minimumReleaseAgeExclude，其他依赖策略保持不变。不改 workspace 通配范围。
 
 只使用 npm 已发布版本作为正式依赖；不以浮动 latest、Git、file/link、未发布 tarball 交付。不修改 API 或业务语义来迁就组件。
+
+## 0.13.0 升级与全站组件迁移记录
+
+从 `0.8.0` 升级至 **`@bixlab/mtone@0.13.0`**，同步更新 `pnpm-workspace.yaml` 精确等待期例外与 `pnpm-lock.yaml`（新增上游 `Typography.Code` 语法高亮所需的 `@shikijs/*` 等传递依赖，无其他无关依赖漂移）。公开包入口、CSS 导出路径与 React peers 不变。[npm 元数据](https://registry.npmjs.org/@bixlab%2fmtone/0.13.0) · [发布说明](https://github.com/xingjianxu/mtone/releases/tag/v0.13.0) · [迁移指南](https://github.com/xingjianxu/mtone/blob/v0.13.0/docs/MIGRATION.md)
+
+- **0.8.0 → 0.13.0 破坏性 API 迁移**：全仓将已移除导出迁移至新版公开 API——`Badge` → `Tag`、`FilterBar` → `Toolbar`、`FormField` → `Form.Item`、`Textarea` → `Input.TextArea`、`SearchInput` → `Input.Search`、`MultiSelect` → `Select mode="multiple"`、`DropdownMenu` 与带 `trigger` 的 `Menu` → `Popover.Menu`、`Segmented` → `RadioGroup variant="segmented"`。默认单行按钮基准高度由 34px 调整为 32px，已同步更新 T17 浏览器样式断言。
+- **全站 mtone 组件全面采用**：
+  - 页面外壳与分节：凭据与会话、工作概览、项目、事项、索引任务、搜索页面采用 `PageLayout`；笔记/项目关联、子事项、跟进时间线、文件详情与索引任务阶段采用 `SectionGroup`；根路由错误/404 页采用 `Result`。
+  - 表单与容器：全站原生 `<form>` 统一迁移为 `Form`，原生 `<fieldset>`/`<legend>` 迁移为 `Fieldset`，手写边框面板统一替换为 `Card` / `CardGroup`，手写分割线替换为 `Divider`。
+  - 工具栏、选择器、排版与对话：笔记操作栏、编辑器格式工具栏及回收站/事项/索引任务/搜索筛选栏采用 `Toolbar`（`background="white"` 保持标准控件边框）；笔记移动与回答转存笔记的父笔记选择迁移至可搜索 `TreeSelect`（仍由应用过滤当前笔记及后代，后端继续做完整性校验）；代码片段与文本预览采用 `Typography.Code`；问答消息行采用 `AiMessage`（保留外层列表、定位高亮与业务引用/转存流程）。
+- 跟踪记录见 [Issue #272](https://github.com/xingjianxu/knoted/issues/272) 与 [任务卡 #272](../tasks/272.md)。
 
 ## 0.8.0 升级记录
 

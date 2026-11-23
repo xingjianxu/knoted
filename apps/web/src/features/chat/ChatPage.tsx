@@ -1,4 +1,4 @@
-import { Alert, Button, Dialog, Empty, Form, FormField, Input, List, ListItem, Select, Spinner } from "@bixlab/mtone";
+import { Alert, Button, Dialog, Empty, Form, Input, List, ListItem, Select, Spinner } from "@bixlab/mtone";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -61,15 +61,15 @@ function NewSession({ bundle }: { bundle: QueryClientBundle }) {
       trigger={<Button variant="solid">新建会话</Button>}
     >
       <Form className="space-y-3" onSubmit={(event) => { event.preventDefault(); void create(); }}>
-        <FormField label="会话名称">
+        <Form.Item label="会话名称">
           <Input disabled={busy} maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} />
-        </FormField>
-        <FormField label="生成服务">
+        </Form.Item>
+        <Form.Item label="生成服务">
           <Select disabled={busy} options={providerOptions} value={provider} onValueChange={(value) => setProvider(value ?? "local")} />
-        </FormField>
-        {provider === "external" && <FormField label="外部服务名">
+        </Form.Item>
+        {provider === "external" && <Form.Item label="外部服务名">
           <Input disabled={busy} value={external} autoComplete="off" onChange={(event) => setExternal(event.target.value)} />
-        </FormField>}
+        </Form.Item>}
         {problem && <Alert tone="error">{problem}</Alert>}
         <div className="flex justify-end gap-2">
           <Button type="button" disabled={busy} onClick={() => setOpen(false)}>返回</Button>

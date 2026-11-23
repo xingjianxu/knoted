@@ -1,4 +1,4 @@
-import { Badge, ListItem } from "@bixlab/mtone";
+import { ListItem, Tag } from "@bixlab/mtone";
 import { Link } from "@tanstack/react-router";
 import { Fragment, type ReactNode } from "react";
 import { z } from "zod";
@@ -55,7 +55,7 @@ export function SearchResult({ hit, query }: { hit: SearchHit; query: string }) 
       </span>
     }>
       <span className="flex flex-wrap items-center gap-2">
-        <Badge>{searchTypes[hit.entity_type]}</Badge>
+        <Tag>{searchTypes[hit.entity_type]}</Tag>
         {resultTitle(hit, chat)}
       </span>
     </ListItem>

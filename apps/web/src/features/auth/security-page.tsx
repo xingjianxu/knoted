@@ -4,13 +4,17 @@ import { Link, useNavigate, useRouteContext } from "@tanstack/react-router";
 import {
   Alert,
   Button,
+  Card,
   ConfirmDialog,
   Empty,
-  FormField,
+  Form,
   Input,
   List,
   ListItem,
+  PageLayout,
+  Paragraph,
   Spinner,
+  Text,
 } from "@bixlab/mtone";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -158,144 +162,158 @@ export function SecurityPage() {
     }
   }
   return (
-    <div className="mx-auto grid w-full min-w-0 max-w-[45rem] gap-6">
-      <h1 className="page-title">凭据与会话</h1>
-      <section className="min-w-0 space-y-4 rounded-panel border border-line bg-surface p-3 sm:p-4" aria-labelledby="passkeys-title">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 id="passkeys-title" className="section-title">Passkey 凭据</h2>
-          <Button ref={addTrigger} variant={showAddForm ? "outline" : "solid"} disabled={busy} focusableWhenDisabled
-            aria-expanded={showAddForm} aria-controls={showAddForm ? "add-passkey" : undefined}
-            onClick={() => showAddForm ? closeAddForm() : setShowAddForm(true)}>
-            添加 Passkey
-          </Button>
-        </div>
-        {showAddForm && (
-          <form id="add-passkey" aria-label="添加 Passkey" className="space-y-3 rounded-panel border border-line bg-canvas p-3"
-            onSubmit={(event) => void handleSubmit(addPasskey)(event)}>
-            <p className="text-muted">新增或删除 Passkey 需要最近五分钟内的登录验证。 <ReverifyLink /></p>
-            <FormField label="新凭据名称" error={errors.name?.message}>
-              <Input autoFocus {...register("name")} disabled={busy} />
-            </FormField>
-            {error && <Alert tone="error">{error}</Alert>}
-            <div className="flex flex-wrap gap-2">
-              <Button type="submit" variant="solid" loading={busy} focusableWhenDisabled>注册 Passkey</Button>
-              <Button disabled={busy} onClick={closeAddForm}>取消</Button>
-            </div>
-          </form>
-        )}
-        {passkeys.isPending && <Spinner label="正在加载凭据" />}
-        {passkeys.isError && (
-          <>
-            <Alert tone="error">{authError(passkeys.error)}</Alert>
-            <Button loading={passkeys.isFetching} focusableWhenDisabled onClick={() => void passkeys.refetch()}>重试凭据</Button>
-          </>
-        )}
-        {passkeys.data?.items.length === 0 && <Empty title="没有凭据" />}
-        {!!passkeys.data?.items.length && (
-          <List aria-labelledby="passkeys-title">
-            {passkeys.data.items.map((passkey) => (
-              <ListItem key={passkey.id}>
-                <div className="flex w-full flex-wrap items-center gap-3">
-                  <div className="min-w-0 flex-1 basis-48 wrap-anywhere">
-                    <strong>{passkey.name}</strong>
-                    <p className="text-sm text-muted">创建于 <AccountTime value={passkey.created_at} /></p>
+    <PageLayout title="凭据与会话" maxWidth={720}>
+      <div className="grid min-w-0 gap-6">
+        <section aria-labelledby="passkeys-title" className="min-w-0">
+          <Card
+            className="min-w-0"
+            title={<h2 id="passkeys-title" className="section-title">Passkey 凭据</h2>}
+            extra={
+              <Button ref={addTrigger} variant={showAddForm ? "outline" : "solid"} disabled={busy} focusableWhenDisabled
+                aria-expanded={showAddForm} aria-controls={showAddForm ? "add-passkey" : undefined}
+                onClick={() => showAddForm ? closeAddForm() : setShowAddForm(true)}>
+                添加 Passkey
+              </Button>
+            }
+          >
+            <div className="min-w-0 space-y-4">
+              {showAddForm && (
+                <Card type="inner" size="small">
+                  <Form id="add-passkey" aria-label="添加 Passkey" className="gap-3"
+                    onSubmit={(event) => void handleSubmit(addPasskey)(event)}>
+                  <Paragraph muted>新增或删除 Passkey 需要最近五分钟内的登录验证。 <ReverifyLink /></Paragraph>
+                  <Form.Item label="新凭据名称" error={errors.name?.message}>
+                    <Input autoFocus {...register("name")} disabled={busy} />
+                  </Form.Item>
+                  {error && <Alert tone="error">{error}</Alert>}
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="submit" variant="solid" loading={busy} focusableWhenDisabled>注册 Passkey</Button>
+                    <Button disabled={busy} onClick={closeAddForm}>取消</Button>
                   </div>
-                  <SecurityConfirmation
-                    title={`删除凭据 ${passkey.name}`}
-                    description="删除后将无法使用此凭据登录；最后一个凭据不能删除。"
-                    confirmText="确认删除"
-                    onConfirm={() => deletePasskey(passkey.id)}
-                    trigger={
-                      <Button aria-label={`删除 ${passkey.name}`} variant="ghost"
-                        disabled={busy || (passkeyCursor.cursor === null &&
-                          passkeys.data.next_cursor === null && passkeys.data.items.length === 1)}>
-                        删除
-                      </Button>
+                </Form>
+              </Card>
+            )}
+            {passkeys.isPending && <Spinner label="正在加载凭据" />}
+            {passkeys.isError && (
+              <>
+                <Alert tone="error">{authError(passkeys.error)}</Alert>
+                <Button loading={passkeys.isFetching} focusableWhenDisabled onClick={() => void passkeys.refetch()}>重试凭据</Button>
+              </>
+            )}
+            {passkeys.data?.items.length === 0 && <Empty title="没有凭据" />}
+            {!!passkeys.data?.items.length && (
+              <List aria-labelledby="passkeys-title">
+                {passkeys.data.items.map((passkey) => (
+                  <ListItem
+                    key={passkey.id}
+                    className="flex-wrap"
+                    description={<>创建于 <AccountTime value={passkey.created_at} /></>}
+                    actions={
+                      <SecurityConfirmation
+                        title={`删除凭据 ${passkey.name}`}
+                        description="删除后将无法使用此凭据登录；最后一个凭据不能删除。"
+                        confirmText="确认删除"
+                        onConfirm={() => deletePasskey(passkey.id)}
+                        trigger={
+                          <Button aria-label={`删除 ${passkey.name}`} variant="ghost"
+                            disabled={busy || (passkeyCursor.cursor === null &&
+                              passkeys.data.next_cursor === null && passkeys.data.items.length === 1)}>
+                            删除
+                          </Button>
+                        }
+                      />
                     }
-                  />
-                </div>
-              </ListItem>
-            ))}
-          </List>
-        )}
-        <nav aria-label="凭据分页" className="flex flex-wrap gap-2">
-          <Button
-            disabled={
-              passkeys.isFetching || passkeyCursor.previous.length === 0
-            }
-            onClick={() => passkeyDispatch({ type: "previous" })}
-          >
-            上一页凭据
-          </Button>
-          <Button
-            disabled={passkeys.isFetching || !passkeys.data?.next_cursor}
-            onClick={() =>
-              passkeyDispatch({
-                type: "next",
-                nextCursor: passkeys.data?.next_cursor ?? null,
-              })
-            }
-          >
-            下一页凭据
-          </Button>
-        </nav>
-      </section>
-      <section className="min-w-0 space-y-4 rounded-panel border border-line bg-surface p-3 sm:p-4" aria-labelledby="sessions-title">
-        <h2 id="sessions-title" className="section-title">登录会话</h2>
-        {sessions.isPending && <Spinner label="正在加载会话" />}
-        {sessions.isError && (
-          <>
-            <Alert tone="error">{authError(sessions.error)}</Alert>
-            <Button loading={sessions.isFetching} focusableWhenDisabled onClick={() => void sessions.refetch()}>重试会话</Button>
-          </>
-        )}
-        {sessions.data?.items.length === 0 && <Empty title="没有会话" />}
-        {!!sessions.data?.items.length && (
-          <List aria-labelledby="sessions-title">
-            {sessions.data.items.map((session) => (
-              <ListItem key={session.id}>
-                <div className="flex w-full flex-wrap items-center gap-3">
-                  <div className="min-w-0 flex-1 basis-48">
-                    <strong className={session.current ? "text-accent" : undefined}>
+                  >
+                    <Text strong className="wrap-anywhere">{passkey.name}</Text>
+                  </ListItem>
+                ))}
+              </List>
+            )}
+            <nav aria-label="凭据分页" className="flex flex-wrap gap-2">
+              <Button
+                disabled={
+                  passkeys.isFetching || passkeyCursor.previous.length === 0
+                }
+                onClick={() => passkeyDispatch({ type: "previous" })}
+              >
+                上一页凭据
+              </Button>
+              <Button
+                disabled={passkeys.isFetching || !passkeys.data?.next_cursor}
+                onClick={() =>
+                  passkeyDispatch({
+                    type: "next",
+                    nextCursor: passkeys.data?.next_cursor ?? null,
+                  })
+                }
+              >
+                下一页凭据
+              </Button>
+            </nav>
+          </div>
+          </Card>
+        </section>
+        <section aria-labelledby="sessions-title" className="min-w-0">
+          <Card className="min-w-0" title={<h2 id="sessions-title" className="section-title">登录会话</h2>}>
+          <div className="min-w-0 space-y-4">
+            {sessions.isPending && <Spinner label="正在加载会话" />}
+            {sessions.isError && (
+              <>
+                <Alert tone="error">{authError(sessions.error)}</Alert>
+                <Button loading={sessions.isFetching} focusableWhenDisabled onClick={() => void sessions.refetch()}>重试会话</Button>
+              </>
+            )}
+            {sessions.data?.items.length === 0 && <Empty title="没有会话" />}
+            {!!sessions.data?.items.length && (
+              <List aria-labelledby="sessions-title">
+                {sessions.data.items.map((session) => (
+                  <ListItem
+                    key={session.id}
+                    className="flex-wrap"
+                    description={<>最近使用 <AccountTime value={session.last_seen_at} /></>}
+                    actions={
+                      <SecurityConfirmation
+                        title={session.current ? "退出当前会话" : "撤销其他会话"}
+                        description="撤销后需要重新使用 Passkey 登录。"
+                        confirmText="确认撤销"
+                        onConfirm={() => revokeSession(session.id, session.current)}
+                        trigger={<Button variant="ghost">撤销{session.current ? "当前" : "其他"}会话</Button>}
+                      />
+                    }
+                  >
+                    <Text strong className={session.current ? "text-accent" : undefined}>
                       {session.current ? "当前会话" : "其他会话"}
-                    </strong>
-                    <p className="text-sm text-muted">最近使用 <AccountTime value={session.last_seen_at} /></p>
-                  </div>
-                  <SecurityConfirmation
-                    title={session.current ? "退出当前会话" : "撤销其他会话"}
-                    description="撤销后需要重新使用 Passkey 登录。"
-                    confirmText="确认撤销"
-                    onConfirm={() => revokeSession(session.id, session.current)}
-                    trigger={<Button variant="ghost">撤销{session.current ? "当前" : "其他"}会话</Button>}
-                  />
-                </div>
-              </ListItem>
-            ))}
-          </List>
-        )}
-        <nav aria-label="会话分页" className="flex flex-wrap gap-2">
-          <Button
-            disabled={
-              sessions.isFetching || sessionCursor.previous.length === 0
-            }
-            onClick={() => sessionDispatch({ type: "previous" })}
-          >
-            上一页会话
-          </Button>
-          <Button
-            disabled={sessions.isFetching || !sessions.data?.next_cursor}
-            onClick={() =>
-              sessionDispatch({
-                type: "next",
-                nextCursor: sessions.data?.next_cursor ?? null,
-              })
-            }
-          >
-            下一页会话
-          </Button>
-        </nav>
-      </section>
-    </div>
+                    </Text>
+                  </ListItem>
+                ))}
+              </List>
+            )}
+            <nav aria-label="会话分页" className="flex flex-wrap gap-2">
+              <Button
+                disabled={
+                  sessions.isFetching || sessionCursor.previous.length === 0
+                }
+                onClick={() => sessionDispatch({ type: "previous" })}
+              >
+                上一页会话
+              </Button>
+              <Button
+                disabled={sessions.isFetching || !sessions.data?.next_cursor}
+                onClick={() =>
+                  sessionDispatch({
+                    type: "next",
+                    nextCursor: sessions.data?.next_cursor ?? null,
+                  })
+                }
+              >
+                下一页会话
+              </Button>
+            </nav>
+          </div>
+          </Card>
+        </section>
+      </div>
+    </PageLayout>
   );
 }
 
