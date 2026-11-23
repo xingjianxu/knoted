@@ -1,3 +1,4 @@
+import { openWorkspaceLogout } from "../fixtures/workspace-header";
 import {
   act,
   fireEvent,
@@ -164,7 +165,7 @@ describe("t20 auth routes", () => {
     bundle.queryClient
       .getMutationCache()
       .build(bundle.queryClient, { mutationKey: ["private"] });
-    fireEvent.click(await screen.findByRole("button", { name: "退出登录" }));
+    fireEvent.click(await openWorkspaceLogout());
     await screen.findByRole("button", { name: "使用 Passkey 登录" });
     expect(
       bundle.queryClient.getQueryData(queryKeys.notes.detail("private")),
@@ -175,10 +176,10 @@ describe("t20 auth routes", () => {
     loggedIn = true;
     logoutFails = true;
     await mount("/");
-    fireEvent.click(await screen.findByRole("button", { name: "退出登录" }));
+    fireEvent.click(await openWorkspaceLogout());
     expect(await screen.findByRole("alert")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "退出登录" }),
+      await openWorkspaceLogout(),
     ).toBeInTheDocument();
     expect(loggedIn).toBe(true);
   });
@@ -215,7 +216,7 @@ describe("t20 auth routes", () => {
     await mount("/");
     const nav = await screen.findByRole("navigation", { name: "主导航" });
     expect(within(nav).getByRole("button", { name: "概览" })).toHaveAttribute("aria-current", "page");
-    expect(within(screen.getByRole("banner")).getByRole("button", { name: "退出登录" })).toBeEnabled();
+    expect(within(screen.getByRole("banner")).getByRole("button", { name: "账号菜单" })).toBeEnabled();
     const main = screen.getByRole("main");
     expect(await within(main).findByRole("heading", { name: "工作概览" })).toBeVisible();
   });
@@ -546,7 +547,7 @@ describe("t20 ceremony form contracts", () => {
           name: mode === "bootstrap" ? "注册 Passkey" : "替换凭据并恢复",
         }),
       );
-      await screen.findByRole("button", { name: "退出登录" });
+      await screen.findByRole("button", { name: "账号菜单" });
       expect(bodies[0]?.body).toEqual(
         mode === "bootstrap"
           ? { bootstrap_token: "one-use-test-token" }

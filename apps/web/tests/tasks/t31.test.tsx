@@ -1,4 +1,5 @@
 import { File as NodeFile } from "node:buffer";
+import { openWorkspaceLogout } from "../fixtures/workspace-header";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createBrowserHistory, createMemoryHistory } from "@tanstack/react-router";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
@@ -237,7 +238,7 @@ it.each([409, 503])("failed history restore %i retains the current title/documen
 it("t31_logout_preflight_order does not revoke authentication before safe mounted save/history/navigation", async () => {
   const pending = deferred(); intercept = (r) => r.method === "PATCH" ? pending.promise : undefined;
   const { router } = await mount(); const input = await title(); fireEvent.change(input, { target: { value: "退出前保存" } });
-  fireEvent.click(screen.getByRole("button", { name: "退出登录" }));
+  fireEvent.click(await openWorkspaceLogout());
   await waitFor(() => expect(calls("PATCH", id(1))).toHaveLength(1)); expect(calls("POST", "/auth/logout")).toHaveLength(0);
   const saved = { ...note(1), title: "退出前保存", content_version: 2 }; notes[0] = saved;
   await act(async () => pending.resolve(json(saved)));
@@ -248,7 +249,7 @@ it("t31_logout_preflight_order does not revoke authentication before safe mounte
 it.each([503, 409])("failed logout flush %i leaves draft and zero logout requests even if navigate resolves", async status => {
   intercept = r => r.method === "PATCH" ? failure(status) : undefined;
   const { router } = await mount(); const input = await title(); fireEvent.change(input, { target: { value: "退出失败留稿" } });
-  fireEvent.click(screen.getByRole("button", { name: "退出登录" }));
+  fireEvent.click(await openWorkspaceLogout());
   await screen.findByText(/无法安全离开笔记/); expect(calls("POST", "/auth/logout")).toHaveLength(0);
   expect(router.state.location.pathname).toBe(`/notes/${id(1)}`); expect(input).toHaveValue("退出失败留稿");
 });
@@ -342,13 +343,16 @@ it("sidebar and back navigation share the mounted notes flush barrier", async ()
 });
 it("blocked logout becomes retryable, then explicit save/history and safe location precede revocation", async () => {
   let fails = true; intercept = r => r.method === "PATCH" && fails ? failure(503) : undefined;
-  const { router } = await mount(); fireEvent.change(await title(), { target: { value: "可重试退出" } }); fireEvent.click(screen.getByRole("button", { name: "退出登录" }));
-  await screen.findByText(/无法安全离开笔记/); expect(screen.getByRole("button", { name: "退出登录" })).toBeEnabled(); expect(calls("POST", "/auth/logout")).toHaveLength(0);
+  const { router } = await mount(); fireEvent.change(await title(), { target: { value: "可重试退出" } }); fireEvent.click(await openWorkspaceLogout());
+  await screen.findByText(/无法安全离开笔记/);
+  expect(await openWorkspaceLogout()).not.toHaveAttribute("aria-disabled", "true");
+  fireEvent.click(screen.getByRole("button", { name: "账号菜单" }));
+  expect(calls("POST", "/auth/logout")).toHaveLength(0);
   fails = false; fireEvent.click(screen.getByRole("button", { name: "保存并记录历史" }));
   await waitFor(() => expect(calls("POST", "/snapshots")).toHaveLength(1));
   await waitFor(() => expect(screen.getByRole("button", { name: "保存并记录历史" })).toBeEnabled());
   let locationAtLogout = ""; intercept = (_r, u) => { if (u.pathname.endsWith("/auth/logout")) locationAtLogout = router.state.location.pathname; return undefined; };
-  fireEvent.click(screen.getByRole("button", { name: "退出登录" })); await screen.findByRole("button", { name: "使用 Passkey 登录" });
+  fireEvent.click(await openWorkspaceLogout()); await screen.findByRole("button", { name: "使用 Passkey 登录" });
   expect(locationAtLogout).toBe("/"); expect(calls("POST", "/auth/logout")).toHaveLength(1);
 });
 it("snapshot401 while a structural command waits prevents MOVE and keeps the old session", async () => {

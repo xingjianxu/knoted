@@ -1,4 +1,5 @@
 import { createAppRouter,safeReturnTo } from "../../src/lib/router";
+import { openWorkspaceLogout } from "../fixtures/workspace-header";
 import { createMemoryHistory } from "@tanstack/react-router";
 import App from "../../src/App";
 import { act,fireEvent,render,screen,waitFor } from "@testing-library/react";
@@ -147,7 +148,7 @@ it.each(["list", "detail", "content", "list-page", "logout"] as const)("default 
    await waitFor(() => expect(pendingContent).toBeDefined());
   }
   reject = true;
-  if (endpoint === "logout") fireEvent.click(screen.getByRole("button", { name: "退出登录" }));
+  if (endpoint === "logout") fireEvent.click(await openWorkspaceLogout());
   else if (endpoint === "content") fireEvent.click(screen.getByRole("button", { name: "下载原文件" }));
   else {
    await act(async () => {

@@ -284,7 +284,8 @@ test("笔记历史立即可读，保存冲突后离开及退出均保留草稿",
   await page.getByRole("button", { name: "关闭历史" }).click();
   await expect(history).toBeFocused();
   await editor.fill("当前草稿不能丢失");
-  await page.getByRole("button", { name: "退出登录" }).click();
+  await page.getByRole("button", { name: "更多操作" }).click();
+  await page.getByRole("menuitem", { name: "退出登录" }).click();
   await expect(editor).toHaveValue("当前草稿不能丢失");
   await expect(page.getByRole("button", { name: "版本与冲突处理" })).toBeVisible();
   await page.getByRole("button", { name: "目录", exact: true }).click();

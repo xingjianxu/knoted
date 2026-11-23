@@ -8,18 +8,26 @@ import {
   useRouter,
 } from "@tanstack/react-router";
 import { useLayoutEffect, useRef, useState } from "react";
-import { AdminLayout, Alert, Button, NavGroup, NavItem } from "@bixlab/mtone";
+import {
+  AdminLayout, Alert, Avatar, Breadcrumb, Button, Dialog, NavGroup, NavItem, Popover,
+  type MenuItem,
+} from "@bixlab/mtone";
 import {
   ArrowLeft,
+  Bell,
   BookOpen,
+  Ellipsis,
   FolderKanban,
   House,
   LibraryBig,
   ListTodo,
+  LogOut,
   MessageSquare,
   Search,
+  Settings,
   ShieldCheck,
   Trash2,
+  UserRound,
 } from "lucide-react";
 import { NotesNavigationBlocked } from "../features/notes/navigation";
 import { AuthGate, authError } from "../features/auth/auth";
@@ -28,6 +36,25 @@ export const Route = createFileRoute("/_authenticated")({
   beforeLoad: ({ context, location }) => AuthGate(context, location.href),
   component: Shell,
 });
+
+const sectionLabels: Readonly<Record<string, string>> = {
+  "/": "概览",
+  "/notes": "笔记",
+  "/projects": "项目",
+  "/tasks": "事项",
+  "/trash": "回收站",
+  "/files": "文件",
+  "/search": "搜索",
+  "/chat": "问答",
+  "/settings": "凭据与会话",
+};
+
+const detailLabels = {
+  "/projects": { back: "返回项目", current: "项目详情" },
+  "/tasks": { back: "返回事项", current: "事项详情" },
+  "/files": { back: "返回文件列表", current: "文件详情" },
+};
+
 function Shell() {
   const bundle = Route.useRouteContext();
   const navigate = useNavigate();
@@ -45,11 +72,16 @@ function Shell() {
   });
   // The existing tasks route hosts both the list and the board.
   const wide = /^\/(notes|tasks|chat)(?:\/|$)/.test(pathname);
+  const section = sectionLabels[pathname.replace(/^(\/[^/]+)\/.*$/, "$1")] ?? "工作空间";
+  const [compactHeader, setCompactHeader] = useState(false);
   const frame = useWorkspaceScrollFrame();
   const [busy, setBusy] = useState(false);
   const blockedLogout = useRef<(() => void) | null>(null);
   const [error, setError] = useState("");
+  const openSearch = () => void navigate({ to: "/search", search: { q: "" } });
+  const openSettings = () => void navigate({ to: "/settings/security" });
   async function logout() {
+    if (busy) return;
     setBusy(true);
     setError("");
     try {
@@ -92,6 +124,7 @@ function Shell() {
         collapsedLogo={<strong><span aria-hidden="true">K</span><span className="sr-only">Knoted</span></strong>}
         collapsible
         breakpoint={768}
+        onBreakpoint={setCompactHeader}
       >
         <nav aria-label="主导航">
           <NavGroup label="工作空间">
@@ -108,28 +141,35 @@ function Shell() {
             <NavItem icon={<LibraryBig size={16} aria-hidden="true" />} active={/^\/files(?:\/|$)/.test(pathname)}
               onClick={() => void navigate({ to: "/files" })}>文件</NavItem>
             <NavItem icon={<Search size={16} aria-hidden="true" />} active={pathname === "/search"}
-              onClick={() => void navigate({ to: "/search", search: { q: "" } })}>搜索</NavItem>
+              onClick={openSearch}>搜索</NavItem>
             <NavItem icon={<MessageSquare size={16} aria-hidden="true" />} active={/^\/chat(?:\/|$)/.test(pathname)}
               onClick={() => void navigate({ to: "/chat" })}>问答</NavItem>
           </NavGroup>
           <NavGroup label="账号">
             <NavItem icon={<ShieldCheck size={16} aria-hidden="true" />} active={pathname === "/settings/security"}
-              onClick={() => void navigate({ to: "/settings/security" })}>凭据与会话</NavItem>
+              onClick={openSettings}>凭据与会话</NavItem>
           </NavGroup>
         </nav>
       </AdminLayout.Sider>
       <AdminLayout className="min-w-0 flex-1">
-        <AdminLayout.Header className="px-3 sm:px-6">
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-            {collection && (
-              <Link className="page-link inline-flex items-center gap-1" to={collection} resetScroll={collection !== "/files"} activeOptions={{ exact: true }}>
-                <ArrowLeft aria-hidden="true" size={16} />
-                {{ "/projects": "返回项目", "/tasks": "返回事项", "/files": "返回文件列表" }[collection]}
-              </Link>
-            )}
-            <Button className="ms-auto" loading={busy} onClick={() => void logout()}>退出登录</Button>
-          </div>
-        </AdminLayout.Header>
+        <AdminLayout.Header
+          className="px-3 sm:px-6"
+          breadcrumb={
+            <Breadcrumb aria-label="当前位置" items={collection ? [
+              { label: (
+                <Link className="page-link inline-flex items-center gap-1" to={collection} resetScroll={collection !== "/files"} activeOptions={{ exact: true }}>
+                  <ArrowLeft aria-hidden="true" size={16} />
+                  {detailLabels[collection].back}
+                </Link>
+              ) },
+              { label: detailLabels[collection].current },
+            ] : [{ label: section }]} />
+          }
+          extra={
+            <WorkspaceHeaderActions compact={compactHeader} logoutPending={busy}
+              onSearch={openSearch} onSettings={openSettings} onLogout={() => void logout()} />
+          }
+        />
         <AdminLayout.Content id="workspace-content" tabIndex={-1} data-workspace-content
           data-scroll-restoration-id="workspace" className="workspace-content bg-canvas p-0">
           <div ref={frame} className={wide ? "workspace-frame workspace-frame--wide" : "workspace-frame"}>
@@ -141,6 +181,64 @@ function Shell() {
         </AdminLayout.Content>
       </AdminLayout>
     </AdminLayout>
+  );
+}
+
+function WorkspaceHeaderActions({ compact, logoutPending, onSearch, onSettings, onLogout }: {
+  compact: boolean;
+  logoutPending: boolean;
+  onSearch: () => void;
+  onSettings: () => void;
+  onLogout: () => void;
+}) {
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const notificationsTrigger = useRef<HTMLButtonElement>(null);
+  const actions = [
+    { key: "search", label: "全局搜索", icon: <Search size={17} aria-hidden="true" />, onSelect: onSearch },
+    { key: "notifications", label: "通知", icon: <Bell size={17} aria-hidden="true" />, onSelect: () => setNotificationsOpen(true) },
+    { key: "settings", label: "账号设置", icon: <Settings size={17} aria-hidden="true" />, onSelect: onSettings },
+  ];
+  const logout: MenuItem = {
+    key: "logout",
+    label: logoutPending ? "正在退出…" : "退出登录",
+    icon: <LogOut size={17} aria-hidden="true" />,
+    danger: true,
+    disabled: logoutPending,
+    onSelect: onLogout,
+  };
+  return (
+    <>
+      {compact ? (
+        <Popover.Menu key="more" align="end" label="更多操作" items={[...actions, logout]}
+          trigger={
+            <Button ref={notificationsTrigger} iconOnly variant="ghost" aria-label="更多操作" title="更多操作">
+              <Ellipsis size={17} aria-hidden="true" />
+            </Button>
+          } />
+      ) : (
+        <>
+          {actions.map(({ key, label, icon, onSelect }) => (
+            <Button key={key} iconOnly variant="ghost" aria-label={label} title={label} onClick={onSelect}
+              ref={key === "notifications" ? notificationsTrigger : undefined}
+              aria-haspopup={key === "notifications" ? "dialog" : undefined}>
+              {icon}
+            </Button>
+          ))}
+          <Popover.Menu align="end" label="账号菜单" items={[logout]}
+            trigger={
+              <Button iconOnly variant="ghost" aria-label="账号菜单" title="账号菜单">
+                <Avatar size={24} aria-hidden="true" icon={<UserRound size={15} />} />
+              </Button>
+            } />
+        </>
+      )}
+      <Dialog title="通知" open={notificationsOpen} onOpenChange={(open) => {
+        setNotificationsOpen(open);
+        if (!open) requestAnimationFrame(() => notificationsTrigger.current?.focus());
+      }}>
+        <p className="text-muted">暂无通知</p>
+      </Dialog>
+    </>
   );
 }
 

@@ -70,10 +70,11 @@ test("t71_1 file citation, saved note and linked task; t71_2 stale source recove
     await page.getByLabel("一次性令牌").fill(token);
     await page.getByLabel("凭据名称", { exact: true }).fill("T71 合成 Passkey");
     await page.getByRole("button", { name: "注册 Passkey", exact: true }).click();
-    await expect(page.getByRole("button", { name: "退出登录" })).toBeVisible();
-    await page.getByRole("button", { name: "退出登录" }).click();
+    const account = page.getByRole("button", { name: "账号菜单" });
+    await account.click();
+    await page.getByRole("menuitem", { name: "退出登录" }).click();
     await page.getByRole("button", { name: "使用 Passkey 登录", exact: true }).click();
-    await expect(page.getByRole("button", { name: "退出登录" })).toBeVisible();
+    await expect(account).toBeVisible();
     // The worker performs its initial scan on startup.
     await expect(async () => {
       expect(await search(page, oldTerm)).toHaveLength(1);
