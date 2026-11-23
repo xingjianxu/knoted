@@ -26,6 +26,29 @@ Make Git commits that follow the [Conventional Commits 1.0.0](https://www.conven
 - In the body, tell what changed and why.
 - Write each footer as `Token: value` or `Token #value`, for example `Refs: #456` or `Closes #123`. Conventional Commits accepts the two forms, but Git reads only `Token: value` as a trailer. In a token, use `-` in place of a space.
 
+## AI Agent & Model Attribution
+
+When an AI coding agent creates a commit in this repository, include two separate footer trailers so GitHub and `git log` clearly identify both the agent and the model:
+
+```text
+Co-authored-by: <Agent Name> <<email>>
+Model: <model-name>
+```
+
+Use these standard `Co-authored-by` identities:
+
+| Agent | `Co-authored-by` trailer |
+| ----- | ------------------------ |
+| `claude` | `Co-authored-by: Claude <noreply@anthropic.com>` |
+| `codex` | `Co-authored-by: Codex <codex@openai.com>` |
+| `agy` | `Co-authored-by: Antigravity <noreply@antigravity.dev>` |
+| `pi` | `Co-authored-by: Pi <noreply@pi.dev>` |
+| Other | `Co-authored-by: <AgentName> <noreply@<agent>.dev>` |
+
+- Write the current model name in `Model:` (exact ID or human-readable name, e.g. `claude-opus-4-6`, `gpt-6.2-astra`, `Gemini 4 Neon`, `deepseek-v4.1-flash`).
+- Keep `Co-authored-by:` and `Model:` in the same trailer block (no blank line between them). Prefer `--trailer` options on `git commit` so Git formats the footer automatically.
+- This repository also configures `.githooks/prepare-commit-msg` as a safety net: it auto-appends `Co-authored-by:` (and a best-effort fallback `Model:`) if omitted, and skips duplicates when already present.
+
 ## Types
 
 Conventional Commits defines only `feat` and `fix`. The other types come from the Angular convention ([`@commitlint/config-conventional`](https://github.com/conventional-changelog/commitlint/tree/master/%40commitlint/config-conventional)). If the repository has its own list, use that list.
@@ -141,8 +164,14 @@ In all other cases:
 Give each paragraph with a different `-m` option. Git puts a blank line between the paragraphs. This command works in Bash, PowerShell, and other shells.
 
 ```bash
-git commit -m "feat(auth): add token refresh"
-git commit -m "fix(parser): accept empty input" -m "An empty file caused a crash." -m "Closes: #123"
+git commit -m "feat(auth): add token refresh" \
+  --trailer "Co-authored-by: Codex <codex@openai.com>" \
+  --trailer "Model: gpt-6.2-astra"
+git commit -m "fix(parser): accept empty input" \
+  -m "An empty file caused a crash." \
+  --trailer "Closes: #123" \
+  --trailer "Co-authored-by: Claude <noreply@anthropic.com>" \
+  --trailer "Model: claude-opus-4-6"
 ```
 
 For a long message, write the message to a temporary file. Then run `git commit -F <file>`.

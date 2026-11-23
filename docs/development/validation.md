@@ -1,54 +1,58 @@
 # 验证与质量证据
 
-每次变更只运行与范围相关的验证。验证失败先使用 systematic-debugging 定位；不要修改测试或忽略错误以制造通过。
+每次变更只运行与范围相关的验证。验证失败先定位根因，不要修改测试或忽略错误以制造通过。仓库不运行 GitHub CI，**本地门禁输出是唯一合并依据**，PR 正文必须记录本轮真实命令与结果。
 
-## 当前项目
+## 代码与契约检查
 
-在任务 Worktree 运行并检查每条命令退出码：
+在任务 Worktree 按改动范围运行并检查每条命令退出码：
 
 ```bash
+# Rust
 cargo fmt --check
-cargo test --locked
-cargo clippy --locked --all-targets -- -D warnings
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets -- -D warnings
+
+# Web 与 OpenAPI 契约
+pnpm install --frozen-lockfile
+pnpm api:check
+pnpm api:verify
+pnpm run typecheck && pnpm run lint && pnpm run test && pnpm test:pc && pnpm run build
+
+# Python intelligence（改动 services/intelligence 时）
+# 在 services/intelligence 目录执行：
+# uv run --group dev pytest && uv run --group dev ruff check && uv run --group dev ruff format --check
+
+# Git 基础卫生
 git diff --check
 git diff --cached --check
 git check-ignore -v .worktrees/
 git status --short --untracked-files=all
 ```
 
-T01—T05 引入了真实回归测试：`cargo test --workspace --locked` 覆盖配置装载/脱敏与数据库迁移隔离（后者需要本机 PostgreSQL 测试库 `knoted_test`），前端 `pnpm run test` 覆盖空壳、客户端与查询入口。测试成功只证明这些场景，不表示未实现业务已有覆盖；行为新增时补有意义的回归测试。
+测试通过只证明已运行用例覆盖的场景；新增或修改行为时补写有意义的回归测试，涉及运行行为变更时按 [README](../../README.md#测试实例) 在 dev 实例复核并记录实际 SHA。
 
-## 文档、Skills 与 GitHub 配置
+## 文档、Skills、钩子与 GitHub 模板
 
-- 检查所有 Markdown 本地链接指向存在的文件；模板中的待填文字不作为真实路径。检查 ADR 编号唯一、状态合法、Accepted 有人工证据、替代关系双向完整。
-- 六个自定义 Skill 均须 `name` 和 `description` YAML frontmatter；目录名与 name 一致，name≤64、description≤1024，无非法连字符；正文包含输入、执行步骤、输出和边界。用户安装的 git-commit 保持原文。
-- 使用已有 YAML 1.2 解析器解析三份表单，检查 name/description、body、唯一 id、支持的 type、非空 label、dropdown options、布尔 required；Forms 必须包含来源、验收和 needs-triage。不能仅用正则把 YAML 语法视为已验证。
-- 检查标签 JSON 的名称唯一、颜色六位十六进制、描述完整，并与模板一致。
-- 仓库不运行 GitHub CI，因此本地 `cargo fmt --check`、`cargo test`、`cargo clippy --all-targets -- -D warnings` 是唯一门禁；PR 正文必须粘贴本轮真实输出而不是“应该通过”。
-- 实际发现验证使用 [Agent 适配](agent-adapters.md) 的 Codex skills/list 和隔离 Pi get_commands。当前工具读取并应用与仅有目录是不同证据。
+- **Markdown 链接与 ADR**：检查所有本地 Markdown 链接指向存在的文件（模板占位符除外）；检查 ADR 编号唯一、状态合法、Accepted 有人工证据、替代关系双向完整。
+- **任务索引与卡片**：核对 `docs/tasks/<编号>.md` 的文件名、GitHub Issue 号、原生 Type、前置关系与 `docs/tasks/README.md` 索引条目一致。
+- **Skills**：当前仓库保留 4 个项目专用 Skill（`adr-create`、`architecture-review`、`mtone-component-request`、`project-audit`）及带 AI 署名规范的 `git-commit`；均须具备合法 YAML frontmatter（`name`、`description`、`name` 与目录名一致且 ≤ 64、`description` ≤ 1024）。
+- **Git 钩子**：对 `.githooks/prepare-commit-msg` 执行 `bash -n` 语法检查并确认具备可执行权限（`test -x`），必要时用临时消息文件验证 trailer 注入与防重复逻辑。
+- **Issue 模板**：使用真实 YAML 1.2 解析器（如环境已有 Node `yaml` 或 Python `PyYAML`）解析 `.github/ISSUE_TEMPLATE/{feature,bug,task}.yml`，检查 `name`/`description`/`type`（`Feature`/`Bug`/`Task`）以及 `body` 中各字段的 `id` 唯一、类型合法、`label` 非空与布尔 `required`；不使用仅靠正则的伪校验。浏览器选择页渲染仍需人工确认。
 
-本次利用环境已有 Node `yaml` 模块完成 YAML/schema 子集检查，没有为验证修改项目依赖或安装全局解析器。该模块不是本项目运行时依赖；其他机器可使用已有等价解析器。Issue Forms 的选择页渲染仍只能在浏览器人工确认，不虚称已验证。
+## 协作流程场景核对
 
-## Skills 场景验收
-
-| 输入 | 必需结果 |
+| 场景 | 预期结果 |
 |---|---|
-| 疑似重复问题，需要新建 Issue | 查重后直接发布并标 agent-found、needs-triage |
-| needs-triage 且 Agent 认为容易修复 | 可自行领取，但重大架构选择仍需人工确认 |
-| 本地检查通过但 PR 未合并 | 保留 Worktree，合入后才清理 |
-| 新方案与 Accepted ADR 冲突 | 提案及人工确认，保留旧决策历史 |
-| 两个 Agent 同时需要下一 ADR号 | 主 Agent 串行分配，批准与编号分离 |
-| 审计发现凭据 | 脱敏报告，不将凭据写入任何提交或 Issue |
-| gh 查询失败 | 标明查重未完成，不断言无重复 |
-| 批准任务但未批准架构 | 不推定架构 Accepted |
-| git-commit 缺失 | 不伪称已使用；无替代授权时保留待提交 |
-| 无 TODO / 无 Subagent | 持久化清单 / 相同契约串行执行 |
-| 审计命令会生成文件 | 使用专用 Worktree |
+| 新发现缺陷或新目标 | 先查重，确认无重复后用 `gh issue create --type Bug\|Feature\|Task` 建单并按返回编号建 `docs/tasks/<编号>.md` |
+| 已有任务准备开工或接续 | 先查 `gh issue develop <编号> --list`、`git worktree list` 与 Issue 评论；复用已有工作或新建 `issue-<编号>-<slug>` 与 `.worktrees/<编号>-<slug>` 并回写 Issue |
+| 存在直接前置依赖 | 在 GitHub Issue 设置原生 `blocked-by` 关系，并在任务卡与索引同步列出 |
+| 本地检查通过但 PR 尚未合入 | 保留 Worktree 与分支，等待合入并完成主线复核后才清理 |
+| 新方案与 Accepted ADR 冲突 | 走 `architecture-review` 并提交提案待人工确认，保留旧 ADR 历史 |
+| 审计发现凭据或漏洞 | 仅提供脱敏摘要，不将凭据写入任何提交、Issue、PR 或日志 |
+| `gh` 查询失败 | 标明查重未完成，不断言无重复 |
+| 缺少提交钩子配置 | 按 `AGENTS.md` 执行 `git config --local core.hooksPath .githooks`，并在提交时显式使用 `--trailer` 写 `Co-authored-by:` 与 `Model:` |
 
-本次由只读 Subagent 做基线和规则场景复核；基线没有违规，因此不称 RED→GREEN，也不把模拟结果称为端到端执行。主 Agent 仍需检查指南与 Skills 的一致性和最终差异。
+## 提交、集成与收尾证据
 
-## 提交、集成和证据
-
-使用 verification-before-completion；报告命令、退出码、用例数量、检查范围、未执行项。使用 requesting-code-review 做独立审查，重要问题处理完才能集成。
-
-最终在目标主线再次运行必要检查，确认任务 commit 被包含。清理前确认无未提交成果或需要保存的忽略文件、无 Agent 占用，仅移除本任务 Worktree。完整证据应包含主线 SHA、Worktree list 和 status。不以文件数量、模板勾选或 Agent 自述替代实际验证。
+- PR 创建前完成独立审查并核实重要反馈，PR 正文写明 head/base SHA、环境、实际命令与结果、验收情况及未覆盖范围。
+- 合入 `master` 后在主工作区 `git pull --ff-only` 并执行必要主线复核，将 PR 链接、合并 SHA 和验证摘要回写原 Issue 并确认关闭，再安全清理本任务 Worktree 与已合并本地分支。不以文件数、模板勾选或口头声称代替真实命令输出。

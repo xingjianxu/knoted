@@ -36,7 +36,7 @@ Knoted 只做业务组合/数据适配；Agent 只读核查 mtone 源码与发�
    - 成功后把 Issue 编号与 URL 回写到[需求记录](../../../docs/plans/knoted-v1/mtone-requests/README.md)、关联 Knoted Issue 和受影响任务卡。
    - 该 Issue 后续被关闭为不适用或已由已有能力覆盖时，同步更新本地记录状态与理由，不据上游关闭直接解除 Knoted 消费验收。
 
-7. 记录关联任务的受影响验收与恢复条件。等待上游用技术依赖 blocked，保留 Projects 阶段；没有新增架构/权限边界不标 human-required。仅已交接不算完成。用户返回 npm 版本后核验发布、精确锁版、消费测试及正常 PR/主线/适用部署收尾，才解除相应依赖并完成任务。
+7. 将受影响验收、上游 Issue 链接（`xingjianxu/mtone#<编号>`）与恢复条件直接写回关联 Knoted Issue 评论及任务卡。仅已交接不算完成；用户返回 npm 版本后核验发布、精确锁版、消费测试及正常 PR/主线/适用部署收尾，才解除相应阻塞并完成任务。
 
 ## 输出契约
 
