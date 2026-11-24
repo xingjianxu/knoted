@@ -13,7 +13,7 @@ use std::{
 use tempfile::TempDir;
 
 fn root() -> TempDir {
-    tempfile::tempdir_in("/data/knoted-dev/tasks/t43/tmp").unwrap()
+    tempfile::tempdir().unwrap()
 }
 async fn scan(
     ctx: &AppContext,

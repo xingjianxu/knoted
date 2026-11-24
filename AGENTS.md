@@ -4,7 +4,8 @@
 
 Knoted 为 Rust 2024 workspace（`crates/knoted-core`、`knoted-api`、`knoted-worker`）加 pnpm workspace（`apps/web`、`packages/api-client`；Web 直接消费锁定的 [`@bixlab/mtone`](docs/development/ui-mtone.md#现状与目标)），以及 `services/intelligence/` 的 Python 执行服务（Docling+RapidOCR 离线解析、BGE-M3 dense 嵌入）。当前目录职责见 [架构现状](docs/architecture/README.md)，正在推进的任务从 [任务索引](docs/tasks/README.md) 领取，已完成的 v1 首版与全站 Web 重设计文档归档在 [docs/plans/](docs/plans/README.md)。不要根据项目名称推断产品需求。
 
-- 测试实例由 `@bixlab/pcwrap` + process-compose 管理：`pnpm deploy:dev`（一键部署）或 `pnpm pc up -D` / `process list` / `process restart <name>` / `process logs <name>` / `down`，控制端口 `127.0.0.1:15600`，宿主共享 Caddy 提供 HTTPS `15601`（[ADR 0005](docs/decisions/0005-https-owned-by-caddy.md)），API `127.0.0.1:15602`，内部 intelligence `127.0.0.1:15603`。数据库由宿主用户 `xingjian` 直接创建（[ADR 0004](docs/decisions/0004-database-owned-by-host-user.md)），Strata/模型共享根/ACME/运行期工具仍由 `/etc/nixos` 管理，生产实例由 NixOS 运行（[ADR 0003](docs/decisions/0003-test-instance-process-management.md)）。
+- 开发实例由 `@bixlab/pcwrap` + process-compose 管理：`pnpm deploy:dev`（一键部署）或 `pnpm pc up -D` / `process list` / `process restart <name>` / `process logs <name>` / `down`，控制端口 `127.0.0.1:15600`，宿主共享 Caddy 提供 HTTPS `15601`（[ADR 0005](docs/decisions/0005-https-owned-by-caddy.md)），API `127.0.0.1:15602`，内部 intelligence `127.0.0.1:15603`。数据库由宿主用户 `xingjian` 直接创建（[ADR 0004](docs/decisions/0004-database-owned-by-host-user.md)），Strata/模型共享根/ACME/运行期工具仍由 `/etc/nixos` 管理，生产实例由 NixOS 运行（[ADR 0003](docs/decisions/0003-test-instance-process-management.md)）。
+- 需要运行服务的程序测试使用 `/data/knoted_dev` 下的独立运行目录、测试数据库及搜索实例。未经明确要求，不使用开发实例验证会写入数据的场景。Rust 入口和浏览器夹具见 [验证方法](docs/development/validation.md)。
 - 入口目录：`.agents/skills/`（保留的项目专用 Skills 与 `git-commit`）、`docs/tasks/`（按 Issue 编号的任务索引与卡片）、`docs/development/`（操作指南与适配说明）、`docs/decisions/`（ADR）、`docs/rfcs/`（重大方案讨论）、`docs/plans/`（历史归档与跨卡设计计划）、`.worktrees/`（被 Git 忽略的唯一任务工作区父目录）。
 
 ## Issue、任务卡与 worktree
@@ -42,7 +43,7 @@ cd "$tree"
 - **提交流程与署名**：每次提交前实际读取 [git-commit skill](.agents/skills/git-commit/SKILL.md)，检查 diff、敏感信息、暂存范围与本地验证结果。新克隆或首次启用钩子时在仓库根目录执行 `git config --local core.hooksPath .githooks` 启用已有钩子（`.githooks/prepare-commit-msg` 作为 AI 署名兜底）。不得跳过 hooks。
 - **提交格式**：`<type>(<scope>): <中文摘要>`，scope 可省略，首行不超过 72 字符且末尾不加句号；正文用中文解释改动与原因；type、scope 和 footer token 用英文。Type 映射：`Feature` 通常对应 `feat`，`Bug` 对应 `fix`，`Task` 可用 `refactor/docs/test/build/ci/perf/style/chore`。提交引用 `Refs: #<编号>`；AI Agent 按 skill 在同一 trailer 块写入相邻的 `Co-authored-by:` 和 `Model:` 两条 trailer（中间不留空行）。
 - **本地验证即唯一合并门禁**：修改行为时使用适合任务的 TDD，复杂故障先定位根因再修复，不编造覆盖。仓库不使用 GitHub CI，**本地必需检查是唯一的合并门禁**，必须实际运行并留存输出（不能用叙述替代）：
-  - Rust：`cargo fmt --check`、`cargo test --workspace --locked`、`cargo clippy --workspace --all-targets -- -D warnings`
+  - Rust：`cargo fmt --check`、`bash tools/test/rust.sh`（执行 `cargo test --workspace --locked`）、`cargo clippy --workspace --all-targets -- -D warnings`
   - Web/API 契约（按改动范围）：`pnpm install --frozen-lockfile`、`pnpm api:check`、`pnpm api:verify`、`pnpm run typecheck`、`pnpm run lint`、`pnpm run test`、`pnpm test:pc`、`pnpm run build`
   - Python intelligence（改动 `services/intelligence` 时在其目录运行）：`uv run --group dev pytest`、`uv run --group dev ruff check`、`uv run --group dev ruff format --check`
   - 文档/配置/模板：YAML 1.2 解析、Markdown 链接、Skill frontmatter、脚本语法与 `git diff --check`；见 [验证方法](docs/development/validation.md)。

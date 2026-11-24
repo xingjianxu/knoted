@@ -105,7 +105,10 @@ impl PrivatePostgres {
         .await
         .unwrap();
         reference.close().await;
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempfile::Builder::new()
+            .prefix("knoted-t69-postgres-")
+            .tempdir()
+            .unwrap();
         let user = "knoted_restore_fixture".to_owned();
         let pg = directory.path().join("pg");
         assert!(

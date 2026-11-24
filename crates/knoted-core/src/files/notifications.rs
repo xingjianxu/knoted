@@ -167,7 +167,7 @@ mod tests {
     use super::*;
     #[test]
     fn t43_real_notifications_include_nested_edits() {
-        let tmp = tempfile::tempdir_in("/data/knoted-dev/tasks/t43/tmp").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("source");
         std::fs::create_dir(&source).unwrap();
         std::fs::create_dir(source.join("nested")).unwrap();
@@ -234,7 +234,7 @@ mod overflow_tests {
     }
     #[test]
     fn t43_refresh_keeps_events_that_arrived_during_scan() {
-        let tmp = tempfile::tempdir_in("/data/knoted-dev/tasks/t43/tmp").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("source");
         std::fs::create_dir(&source).unwrap();
         let identity = safe_fs::metadata(safe_fs::open_root(&source).unwrap())

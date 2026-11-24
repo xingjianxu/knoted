@@ -11,11 +11,7 @@ use knoted_core::{
 use std::{path::PathBuf, sync::Arc};
 use tempfile::TempDir;
 fn temp() -> TempDir {
-    let parent = std::env::var_os("TMPDIR").map_or_else(
-        || PathBuf::from("/data/knoted-dev/tasks/t45/tmp"),
-        PathBuf::from,
-    );
-    tempfile::tempdir_in(parent).unwrap()
+    tempfile::tempdir().unwrap()
 }
 async fn lease(ctx: &AppContext) -> knoted_core::jobs::Lease {
     let mut tx = ctx.pool().begin().await.unwrap();

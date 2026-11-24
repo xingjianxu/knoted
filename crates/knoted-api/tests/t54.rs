@@ -32,7 +32,7 @@ impl Fixture {
         let ctx = AppContext::new(db.pool.clone()).with_search(SearchConfig {
             enabled: true,
             base_url: std::env::var("KNOTED_TEST_MEILI_URL")
-                .unwrap_or_else(|_| "http://127.0.0.1:15605".into()),
+                .expect("set KNOTED_TEST_MEILI_URL or run tests via tools/test/rust.sh"),
             index_uid: format!("knoted_t54_{}", Uuid::new_v4().simple()),
             ..SearchConfig::default()
         });

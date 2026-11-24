@@ -13,7 +13,7 @@ UI 方向已确认：通用组件直接消费 npm `@bixlab/mtone`，本项目只
 
    ```bash
    cargo fmt --check
-   cargo test --workspace --locked
+   bash tools/test/rust.sh
    cargo clippy --workspace --all-targets -- -D warnings
    pnpm install --frozen-lockfile
    pnpm api:check          # OpenAPI 契约与样例
@@ -21,9 +21,9 @@ UI 方向已确认：通用组件直接消费 npm `@bixlab/mtone`，本项目只
    pnpm run typecheck && pnpm run lint && pnpm run test && pnpm test:pc && pnpm run build
    ```
 
-## 测试实例
+## 开发实例
 
-测试实例（`https://wlab.132140.xyz:15601/`）由 [pcwrap](https://www.npmjs.com/package/@bixlab/pcwrap) + process-compose 管理，控制端口 15600：
+开发实例（`https://wlab.132140.xyz:15601/`）由 [pcwrap](https://www.npmjs.com/package/@bixlab/pcwrap) + process-compose 管理，控制端口 15600：
 
 ```bash
 pnpm deploy:dev                      # 取最新主线：构建 → 切换 → 重启 → 验证
@@ -35,6 +35,10 @@ pnpm pc down                         # 停止实例（不影响 PostgreSQL 等�
 ```
 
 运行根是固定提交产物（`tools/dev/build-artifact.sh` → `/data/knoted-dev/runtime/<sha>`），配置由 `tools/dev/pc/*.tmpl` 渲染。日常发版用 `pnpm deploy:dev`（[一键部署](docs/plans/knoted-v1/development-and-deploy.md#一键部署)）。HTTPS 由宿主共享 Caddy 提供。dev 使用 `knoted_dev`，数据库由宿主用户创建。独立生产实例由 NixOS 和共享 Caddy 运行，使用另一数据库和数据根。固定发布、生产入口与回退见 [T72 交接记录](docs/plans/knoted-v1/evidence/t72-deployment.md)。[ADR 0003](docs/decisions/0003-test-instance-process-management.md) · [ADR 0004](docs/decisions/0004-database-owned-by-host-user.md) · [ADR 0005](docs/decisions/0005-https-owned-by-caddy.md)
+
+## 程序测试
+
+Rust 全量测试通过 `bash tools/test/rust.sh` 运行。文件夹具和临时 Meilisearch 位于 `/data/knoted_dev`，数据库使用 `knoted_test` 的临时 schema。浏览器集成夹具在同一测试根下启动独立 PostgreSQL、搜索和应用进程，退出后删除此次状态。依赖和命令见 [验证方法](docs/development/validation.md#程序测试环境)。
 
 ## 流程入口
 
