@@ -111,8 +111,8 @@ async fn t57_4_published_lexical_hits_keep_the_persisted_chunk_identity() {
     };
 
     let db = TestDb::create().await.unwrap();
-    let base_url =
-        std::env::var("KNOTED_TEST_MEILI_URL").unwrap_or_else(|_| "http://127.0.0.1:15605".into());
+    let base_url = std::env::var("KNOTED_TEST_MEILI_URL")
+        .expect("set KNOTED_TEST_MEILI_URL or run tests via tools/test/rust.sh");
     let ctx = AppContext::new(db.pool.clone()).with_search(SearchConfig {
         rag_chunk_index_uid: format!("knoted_t57_{}", Uuid::new_v4().simple()),
         base_url: base_url.clone(),

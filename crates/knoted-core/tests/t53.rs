@@ -2,9 +2,8 @@
 //!
 //! `t53_1`, `t53_3`, `t53_4`, `t53_5` and the cleanup case need a live
 //! Meilisearch with the full charabia tokenizers (Chinese segmentation); the
-//! address comes from `KNOTED_TEST_MEILI_URL` and defaults to the dev port
-//! `http://127.0.0.1:15605`. An unreachable engine fails the test instead of
-//! silently skipping it: the card's acceptance requires a real hit.
+//! address comes from `KNOTED_TEST_MEILI_URL` (set by tools/test/rust.sh).
+//! An unreachable engine fails the test: the card's acceptance requires a real hit.
 //!
 //! `t53_2` stubs the engine so the "task accepted is not success" window is
 //! deterministic.
@@ -21,13 +20,12 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 const MEILI_URL_ENV: &str = "KNOTED_TEST_MEILI_URL";
-const DEFAULT_MEILI_URL: &str = "http://127.0.0.1:15605";
 
 fn meili_url() -> String {
-    match std::env::var(MEILI_URL_ENV) {
-        Ok(url) if !url.trim().is_empty() => url.trim_end_matches('/').to_owned(),
-        _ => DEFAULT_MEILI_URL.to_owned(),
-    }
+    std::env::var(MEILI_URL_ENV)
+        .expect("set KNOTED_TEST_MEILI_URL or run tests via tools/test/rust.sh")
+        .trim_end_matches('/')
+        .to_owned()
 }
 
 struct Engine {

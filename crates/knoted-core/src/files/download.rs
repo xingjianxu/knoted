@@ -296,9 +296,8 @@ mod tests {
     use super::*;
     #[test]
     fn t49_2_read_in_progress_changes_are_rejected() {
-        std::fs::create_dir_all("/data/knoted-dev/tasks/t49/tmp").unwrap();
         for mode in ["overwrite", "truncate", "append", "rename", "symlink"] {
-            let dir = tempfile::tempdir_in("/data/knoted-dev/tasks/t49/tmp").unwrap();
+            let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("sample");
             let bytes = vec![b'a'; 128 * 1024];
             std::fs::write(&path, &bytes).unwrap();

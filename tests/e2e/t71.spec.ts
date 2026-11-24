@@ -42,7 +42,7 @@ test("t71_1 file citation, saved note and linked task; t71_2 stale source recove
   test.setTimeout(540_000);
   const run = process.env.T71_RUN;
   const artifact = process.env.T71_ARTIFACT;
-  if (!run || path.dirname(run) !== "/data/knoted-dev/tasks/t71/tmp" ||
+  if (!run || path.dirname(run) !== "/data/knoted_dev/t71" ||
       !path.basename(run).startsWith("instance.") || !artifact) {
     throw Error("Run the test through tests/fixtures/t71/instance.sh with a fixed T71_ARTIFACT");
   }

@@ -9,25 +9,52 @@ umask 077
 artifact=${T71_ARTIFACT:?set T71_ARTIFACT to the absolute path of a fixed release}
 pg=${T71_PG_BIN:-$(pg_config --bindir)}
 vector=${T71_PGVECTOR:?set T71_PGVECTOR to the installed pgvector prefix}
-meili=${T71_MEILI_BIN:-meilisearch}
+meili=$(command -v "${T71_MEILI_BIN:-meilisearch}")
+meili=$(realpath -e -- "$meili")
 fixtures=$(cd "$(dirname "$0")" && pwd)
-task=/data/knoted-dev/tasks/t71
-mkdir -p "$task/tmp"
-run=$(mktemp -d "$task/tmp/instance.XXXXXXXX")
+task=/data/knoted_dev/t71
+mkdir -p "$task"
+exec {lock_fd}>"$task/.instance.lock"
+flock -n "$lock_fd" || {
+  printf 'Another T71 test instance is running.\n' >&2
+  exit 2
+}
+listeners=$(ss -Hltn '( sport >= :17820 and sport <= :17829 )')
+if [[ -n "$listeners" ]]; then
+  printf 'One of the T71 test ports 17820–17829 is already in use.\n' >&2
+  exit 2
+fi
+run=$(mktemp -d "$task/instance.XXXXXXXX")
 export T71_RUN="$run"
-test -z "$(ss -Hltn '( sport >= :17820 and sport <= :17829 )')"
 pids=()
+test_pid=
 cleanup() {
   local status=$?
   trap - EXIT
+  if [[ -n "$test_pid" ]]; then
+    kill -TERM -- "-$test_pid" 2>/dev/null || true
+    wait "$test_pid" 2>/dev/null || true
+  fi
   for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null || true; done
   for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null || true; done
-  if test -s "$run/pg/postmaster.pid"; then "$pg/pg_ctl" -D "$run/pg" -m fast -w stop >/dev/null; fi
   rm -f "$run"/{model.key,meili.key,credentials.toml,tls.key}
+  if test -s "$run/pg/postmaster.pid"; then
+    if ! "$pg/pg_ctl" -D "$run/pg" -m fast -w stop >/dev/null; then
+      printf 'Cannot stop isolated PostgreSQL in %s\n' "$run" >&2
+      exit 1
+    fi
+  fi
+  if test -d "$run/files/agent-fixtures/t71"; then
+    chmod u+w "$run/files" "$run/files/agent-fixtures" "$run/files/agent-fixtures/t71"
+  fi
+  rm -rf -- "$run"
   exit "$status"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 mkdir "$run"/{socket,files,staging,assets,python,cache,tmp}
+export TMPDIR="$run/tmp"
 sample_dir="$run/files/agent-fixtures/t71"
 mkdir -p "$sample_dir"
 printf '观测记录：紫檀标本的识别词为 violetamber。\n' > "$sample_dir/observations.txt"
@@ -83,8 +110,11 @@ base_url = "http://127.0.0.1:17825"
 model = "t71-fixture"
 credential_file = "$run/model.key"
 CONFIG
-MEILI_MASTER_KEY=$(cat "$run/meili.key") "$meili" --http-addr 127.0.0.1:17824 --db-path "$run/meili" \
-  --env production --no-analytics > "$run/meili.log" 2>&1 &
+(
+  cd "$run"
+  exec env -i PATH="$PATH" HOME="$run" TMPDIR="$TMPDIR" MEILI_MASTER_KEY="$(cat "$run/meili.key")" \
+    "$meili" --http-addr 127.0.0.1:17824 --db-path "$run/meili" --env production --no-analytics
+) > "$run/meili.log" 2>&1 &
 pids+=("$!")
 node "$fixtures/search-gate.mjs" > "$run/gate.log" 2>&1 &
 pids+=("$!")
@@ -133,4 +163,7 @@ pids+=("$!")
 curl --noproxy '*' --resolve t71.knoted.test:17820:127.0.0.1 --cacert "$run/tls.crt" \
   -fsS --retry 20 --retry-all-errors --retry-delay 1 --max-time 3 https://t71.knoted.test:17820/health/ready >/dev/null
 printf 'Isolated T71 instance ready in %s\n' "$run"
-"$@"
+setsid "$@" {lock_fd}>&- &
+test_pid=$!
+wait "$test_pid"
+test_pid=

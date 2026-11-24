@@ -37,9 +37,8 @@ async fn enqueue(ctx: &AppContext, set_id: Uuid) -> Job {
 #[tokio::test]
 async fn t59_cancel_can_only_replay_batches_that_have_reached_dispatch() {
     let db = TestDb::create().await.unwrap();
-    let staging = std::path::Path::new("/data/knoted-dev/tasks/t59/tmp")
-        .join(Uuid::new_v4().simple().to_string());
-    std::fs::create_dir_all(&staging).unwrap();
+    let staging = std::env::temp_dir().join(format!("t59-{}", Uuid::new_v4()));
+    std::fs::create_dir(&staging).unwrap();
     let ctx = AppContext::new(db.pool.clone())
         .with_files(FilesConfig {
             staging_root: Some(staging.clone()),

@@ -183,8 +183,7 @@ use knoted_core::{
     files::{Sha256Hex, safe_fs},
 };
 async fn fixture() -> (TestDb, AppContext, tempfile::TempDir, Uuid) {
-    std::fs::create_dir_all("/data/knoted-dev/tasks/t49/tmp").unwrap();
-    let dir = tempfile::tempdir_in("/data/knoted-dev/tasks/t49/tmp").unwrap();
+    let dir = tempfile::tempdir().unwrap();
     let db = TestDb::create().await.unwrap();
     let ctx = AppContext::new(db.pool.clone()).with_files(FilesConfig {
         enabled: true,

@@ -5,12 +5,9 @@ use knoted_core::rag::providers::{
     ProviderConfig, ProviderError, ProviderEvent, ProviderRegistry, Role,
 };
 use serde_json::json;
-use std::{
-    path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -23,9 +20,7 @@ const LOCAL_MODEL: &str = "local-fixture";
 const REMOTE_MODEL: &str = "external-fixture";
 
 fn temporary_files() -> TempDir {
-    let root = PathBuf::from("/data/knoted-dev/tasks/t61/tmp");
-    std::fs::create_dir_all(&root).unwrap();
-    tempfile::tempdir_in(root).unwrap()
+    tempfile::tempdir().unwrap()
 }
 
 fn service(server: &MockServer, model: &str, files: &TempDir, key: &str) -> ProviderConfig {

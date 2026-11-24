@@ -305,7 +305,7 @@ async fn t62_4_completed_reply_is_searchable_and_soft_delete_is_immediate() {
     let search = SearchConfig {
         enabled: true,
         base_url: std::env::var("KNOTED_TEST_MEILI_URL")
-            .unwrap_or_else(|_| "http://127.0.0.1:15605".into()),
+            .expect("set KNOTED_TEST_MEILI_URL or run tests via tools/test/rust.sh"),
         index_uid: format!("knoted_t62_{}", Uuid::new_v4().simple()),
         ..SearchConfig::default()
     };
