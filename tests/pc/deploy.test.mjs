@@ -240,7 +240,7 @@ for argument in "$@"; do
     ;;
   https://*)
     [ "\${STUB_HTTPS_FAIL:-0}" = 1 ] && exit 22
-    printf '200'
+    printf '%s' "\${STUB_HTTPS_STATUS:-200}"
     exit 0
     ;;
   esac
@@ -348,6 +348,7 @@ function attachLauncher(context, { legacy = false } = {}) {
   }
   context.script = join(linked, "tools/dev/deploy-dev.sh");
   cpSync(deployScript, context.script);
+  cpSync(join(repoRoot, "tools/dev/pc/service.sh"), join(linked, "tools/dev/pc/service.sh"));
   return checkout;
 }
 
@@ -401,6 +402,7 @@ describe("deploy-dev.sh", () => {
     assert.equal(result.status, 0, result.stderr);
     assert.equal(currentTarget(context), join(context.runtimeParentDir, targetRevision));
     assert.deepEqual(pcArgs(context.logFile), ["pc down", "pc up -D"]);
+    assert.deepEqual(readdirSync(context.runtimeParentDir).sort(), [targetRevision, "current"].sort());
   });
 
   it("迁移集合不变只重启三个进程", () => {
@@ -431,9 +433,25 @@ describe("deploy-dev.sh", () => {
     assert.deepEqual(pcArgs(context.logFile), ["pc down"]);
   });
 
-  it("已是最新提交时不构建不重启", () => {
+  it("已是最新提交时清理历史产物，无需构建或重启", () => {
     const context = fixture({ targetMigrations: ["0001_registry.sql"] });
-    rmSync(join(context.runtimeParentDir, previousRevision), { recursive: true, force: true });
+    const old = join(context.runtimeParentDir, previousRevision);
+    const legacyRevision = "a".repeat(40);
+    const legacy = createArtifact(context.runtimeParentDir, legacyRevision);
+    renameSync(legacy, join(context.runtimeParentDir, legacyRevision.slice(0, 12)));
+    const stagedRevision = "b".repeat(40);
+    const staged = createArtifact(context.runtimeParentDir, stagedRevision);
+    renameSync(staged, join(context.runtimeParentDir, `.staging-${stagedRevision.slice(0, 12)}`));
+    const unrecognized = join(context.runtimeParentDir, "c".repeat(40));
+    mkdirSync(join(unrecognized, "share/knoted"), { recursive: true });
+    writeFileSync(join(unrecognized, "share/knoted/REVISION"), `${"c".repeat(40)}\n`);
+    const unrecognizedManifest = run("sha256sum", ["share/knoted/REVISION"], { cwd: unrecognized });
+    assert.equal(unrecognizedManifest.status, 0, unrecognizedManifest.stderr);
+    writeFileSync(join(unrecognized, "SHA256SUMS"), unrecognizedManifest.stdout);
+    writeFileSync(join(unrecognized, "keep-me"), "unrelated");
+    const alias = join(context.runtimeParentDir, "d".repeat(40));
+    symlinkSync(context.templateRoot, alias);
+    chmodSync(join(old, "share/knoted"), 0o555);
     rmSync(join(context.runtimeParentDir, "current"));
     symlinkSync(join(context.runtimeParentDir, targetRevision), join(context.runtimeParentDir, "current"));
     rmSync(context.procRoot, { recursive: true, force: true });
@@ -441,9 +459,87 @@ describe("deploy-dev.sh", () => {
     createProcFixture(context.procRoot, join(context.runtimeParentDir, targetRevision));
 
     const result = deploy(context);
+    if (existsSync(old)) chmodSync(join(old, "share/knoted"), 0o755);
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(pcArgs(context.logFile), []);
     assert.match(result.stderr, /已是最新/);
+    assert.deepEqual(readdirSync(context.runtimeParentDir).sort(), [
+      targetRevision, "current", "c".repeat(40), "d".repeat(40),
+    ].sort());
+    assert.ok(existsSync(join(context.templateRoot, "SHA256SUMS")));
+  });
+
+  it("--prune-current 只核验并清理正在运行的版本", () => {
+    const context = fixture();
+    const result = deploy(context, ["--prune-current"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
+    assert.deepEqual(readdirSync(context.runtimeParentDir).sort(), [previousRevision, "current"].sort());
+    assert.deepEqual(pcArgs(context.logFile), []);
+  });
+
+  it("当前产物的清单不完整时保留旧产物", () => {
+    const context = fixture();
+    const current = join(context.runtimeParentDir, previousRevision);
+    const manifest = join(current, "SHA256SUMS");
+    writeFileSync(manifest, readFileSync(manifest, "utf8").replace(/^.*  bin\/knoted-worker\n/m, ""));
+    appendFileSync(join(current, "bin/knoted-worker"), "# changed unlisted file\n");
+
+    const result = deploy(context, ["--prune-current"]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /SHA256SUMS/);
+    assert.ok(existsSync(join(context.runtimeParentDir, targetRevision)));
+    assert.deepEqual(pcArgs(context.logFile), []);
+  });
+
+  it("共享同一运行根的部署与清理互斥", () => {
+    const context = fixture();
+    const result = run("flock", ["--close", context.runtimeParentDir, "bash", deployScript, "--prune-current"], {
+      cwd: repoRoot,
+      env: context.env,
+    });
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /另一个部署正在使用运行根/);
+    assert.ok(existsSync(join(context.runtimeParentDir, targetRevision)));
+  });
+
+  it("运行根下有挂载点时保留产物", () => {
+    const context = fixture();
+    const bin = join(context.base, "stubs");
+    const mount = join(context.runtimeParentDir, targetRevision, "mounted");
+    writeExecutable(join(bin, "findmnt"), `#!/usr/bin/env bash
+printf '%s\\n' "$STUB_MOUNT"
+`);
+    context.env.STUB_MOUNT = mount;
+    const result = deploy(context, ["--prune-current"]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /运行根下存在挂载点/);
+    assert.ok(existsSync(join(context.runtimeParentDir, targetRevision)));
+  });
+
+  it("已是当前版本但 HTTPS 不可用时失败并保留旧产物", () => {
+    const context = fixture();
+    const target = join(context.runtimeParentDir, targetRevision);
+    rmSync(join(context.runtimeParentDir, "current"));
+    symlinkSync(target, join(context.runtimeParentDir, "current"));
+    removeProcImages(context.procRoot);
+    createProcFixture(context.procRoot, target);
+    context.env.STUB_HTTPS_FAIL = "1";
+
+    const result = deploy(context);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /HTTPS 入口不可用/);
+    assert.ok(existsSync(join(context.runtimeParentDir, previousRevision)));
+    assert.deepEqual(pcArgs(context.logFile), []);
+  });
+
+  it("HTTPS 重定向不会触发产物清理", () => {
+    const context = fixture();
+    context.env.STUB_HTTPS_STATUS = "302";
+    const result = deploy(context, ["--prune-current"]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /HTTPS 入口不可用.*302/);
+    assert.ok(existsSync(join(context.runtimeParentDir, targetRevision)));
   });
 
   it("构建失败时指针不动", () => {
@@ -480,6 +576,8 @@ describe("deploy-dev.sh", () => {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /HTTPS 入口不可用/);
     assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
+    assert.ok(existsSync(join(context.runtimeParentDir, previousRevision)));
+    assert.ok(existsSync(join(context.runtimeParentDir, targetRevision)));
     // 前三次是切到新产物的重启，之后必须再按旧指针重启一次。
     assert.deepEqual(pcArgs(context.logFile), [
       "pc process restart knoted-api",
@@ -617,7 +715,7 @@ describe("deploy-dev.sh", () => {
     assert.deepEqual(pcArgs(context.logFile), ["pc down", "pc up -D"]);
   });
 
-  it("已存在但摘要不符的产物被移到旁路后重建", () => {
+  it("摘要不符的产物在重建后清理", () => {
     const context = fixture({ targetMigrations: ["0001_registry.sql"] });
     writeDeployEnv(context.instanceRoot, runtimeVariables);
     const target = join(context.runtimeParentDir, targetRevision);
@@ -626,7 +724,7 @@ describe("deploy-dev.sh", () => {
     const result = deploy(context);
     assert.equal(result.status, 0, result.stderr);
     const quarantined = readdirSync(context.runtimeParentDir).filter((name) => name.includes(".incomplete."));
-    assert.equal(quarantined.length, 1, `quarantine: ${quarantined}`);
+    assert.deepEqual(quarantined, []);
     assert.equal(currentTarget(context), target);
   });
 

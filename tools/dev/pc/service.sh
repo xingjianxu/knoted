@@ -136,14 +136,21 @@ verify_runtime() {
     python/lib/python3.12/site-packages/onnxruntime/__init__.py; do
     test -s "$python_root/$required" || die "Python 产物缺少 $required"
   done
-  local unexpected
-  unexpected=$(cd "$runtime_root" && find bin share ! -type d ! -type f -print -quit)
+  verify_runtime_manifest
+  printf '%s' "$revision"
+}
+
+verify_runtime_manifest() {
+  local unexpected actual
+  test -f "$runtime_root/SHA256SUMS" && test -s "$runtime_root/SHA256SUMS" && test ! -L "$runtime_root/SHA256SUMS" ||
+    die "运行根缺少普通文件 SHA256SUMS"
+  unexpected=$(cd "$runtime_root" && find bin share ! -type d ! -type f -print -quit) ||
+    die "无法枚举运行根文件"
   test -z "$unexpected" || die "运行根含非普通文件（拒绝符号链接与特殊文件）：$unexpected"
-  local actual
-  actual=$(cd "$runtime_root" && find bin share -type f -print0 | sort -z | xargs -0 sha256sum)
+  actual=$(cd "$runtime_root" && find bin share -type f -print0 | sort -z | xargs -0 sha256sum) ||
+    die "无法重算运行根文件摘要"
   printf '%s\n' "$actual" | cmp -s - "$runtime_root/SHA256SUMS" ||
     die "运行根文件摘要与 SHA256SUMS 不一致（产物被改动或清单不完整）"
-  printf '%s' "$revision"
 }
 
 render_template() {
@@ -362,6 +369,7 @@ command_paths() {
 command=${1:-}
 case "$command" in
 prepare) command_prepare ;;
+verify-manifest) verify_runtime_manifest ;;
 migrate) command_migrate ;;
 api) command_api ;;
 worker) command_worker ;;
@@ -370,7 +378,7 @@ probe-intelligence) command_probe_intelligence ;;
 probe-api) command_probe_api ;;
 paths) command_paths ;;
 *)
-  echo "usage: service.sh {prepare|migrate|api|worker|intelligence|probe-api|probe-intelligence|paths}" >&2
+  echo "usage: service.sh {prepare|verify-manifest|migrate|api|worker|intelligence|probe-api|probe-intelligence|paths}" >&2
   exit 2
   ;;
 esac

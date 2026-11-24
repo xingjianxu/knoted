@@ -6,7 +6,7 @@
 #   探针    tools/dev/pc/service.sh probe-api / probe-intelligence
 #   进程    @bixlab/pcwrap（pnpm pc down / up -D / process restart）
 #
-# 用法：bash tools/dev/deploy-dev.sh [<full-40-hex-sha>]
+# 用法：bash tools/dev/deploy-dev.sh [<full-40-hex-sha> | --prune-current]
 #   无参数时先 `git fetch origin`，再部署 origin/master 的提交。
 #
 # 语义（见 docs/plans/knoted-v1/development-and-deploy.md「一键部署」）：
@@ -14,6 +14,7 @@
 #   2. 集合相同 → 只 process restart api / worker / intelligence
 #   3. 目标提交已是 current → 不构建不重启，只做验证
 #   4. 切换后验证失败 → 非迁移部署复位指针并重启；若只缺少进程版本证据则不回滚
+#   5. 验证通过才清理旧产物，--prune-current 只核验并清理现有运行根
 #
 # 运行变量：dev 实例需要一组只存在于「启动它的 shell」里的变量（两个模型根、search/vectors
 # 开关、Office origin 与凭据路径、可选的本机聊天模型）。脚本把它们持久化到
@@ -35,7 +36,7 @@
 #   KNOTED_API_PORT 15602 / KNOTED_INTELLIGENCE_PORT 15603
 #   KNOTED_HTTPS_PORT 15601 / KNOTED_HTTPS_DOMAIN wlab.132140.xyz
 #
-# 不做：数据库/assets 备份、历史产物回收、独立 --rollback、生产实例。
+# 不做：数据库/assets 备份、独立 --rollback、生产实例。
 set -euo pipefail
 # 与 build-artifact.sh 一致：清单与文件名排序必须固定字节序。
 export LC_ALL=C
@@ -93,11 +94,12 @@ fail() {
 
 usage() {
   cat <<'TEXT'
-usage: bash tools/dev/deploy-dev.sh [<full-40-hex-sha>]
+usage: bash tools/dev/deploy-dev.sh [<full-40-hex-sha> | --prune-current]
 
 无参数时 fetch origin 并部署 origin/master 的最新提交。
 脚本把 dev 固定产物构建到 <KNOTED_DEPLOY_RUNTIME_PARENT>/<sha>，原子切换 current，
-按迁移文件集合决定 down + up 还是只 restart，最后验证并报告。
+按迁移文件集合决定 down + up 还是只 restart，验证通过后清理旧产物。
+--prune-current 只核验当前运行版本并清理旧产物，无需构建、重启或迁移。
 TEXT
 }
 
@@ -123,7 +125,7 @@ guard_worktree() {
 
 require_tools() {
   local name missing=""
-  for name in git pnpm curl sha256sum flock readlink realpath find sort; do
+  for name in git pnpm curl sha256sum flock readlink realpath find findmnt sort; do
     command -v "$name" >/dev/null 2>&1 || missing="$missing $name"
   done
   if [ -n "$missing" ]; then
@@ -307,7 +309,7 @@ artifact_ok() {
     artifact_problem="缺少 SHA256SUMS"
     return 1
   }
-  (cd "$target" && sha256sum --check --quiet SHA256SUMS) || {
+  KNOTED_RUNTIME_ROOT="$target" bash "$service_script" verify-manifest || {
     artifact_problem="SHA256SUMS 校验失败"
     return 1
   }
@@ -571,10 +573,12 @@ check_processes() {
 
 https_problem=""
 check_https() {
-  curl -fsS -o /dev/null --max-time 8 "https://$domain:$https_port/" || {
-    https_problem="HTTPS 入口不可用：https://$domain:$https_port/"
+  local status
+  if ! status=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "https://$domain:$https_port/") ||
+    [[ "$status" != 200 ]]; then
+    https_problem="HTTPS 入口不可用：https://$domain:$https_port/（HTTP ${status:-未知}）"
     return 1
-  }
+  fi
 }
 
 # 切换后失败的处理分两种：迁移集合没变，回退指针并按同样方式重启是安全的；
@@ -612,28 +616,92 @@ verify_deployed() {
   log "验证通过：$revision"
 }
 
+# 只认部署工具的目录命名、匹配的版本标记及清单。清理时不需要读取旧文件的摘要。
+is_release_directory() {
+  local artifact=$1 name=${1##*/} marker recorded digest path
+  [[ -d "$artifact" && ! -L "$artifact" ]] || return 1
+  if [[ "$name" =~ ^([0-9a-f]{40})(\.incomplete\.[0-9]{8}T[0-9]{6}Z\.[0-9]+)?$ ]]; then
+    name=${BASH_REMATCH[1]}
+  elif [[ "$name" =~ ^(\.staging-)?([0-9a-f]{12})$ ]]; then
+    name=${BASH_REMATCH[2]}
+  else
+    return 1
+  fi
+
+  marker=$artifact/share/knoted/REVISION
+  [[ $(realpath -e -- "$marker" 2>/dev/null) == "$marker" && -f "$marker" ]] || return 1
+  IFS= read -r recorded <"$marker" || return 1
+  [[ "$recorded" =~ ^[0-9a-f]{40}$ && "$recorded" == "$name"* ]] || return 1
+  [[ -f "$artifact/SHA256SUMS" && ! -L "$artifact/SHA256SUMS" ]] || return 1
+  for path in "$artifact/bin/knoted-api" "$artifact/share/knoted/web/index.html"; do
+    [[ $(realpath -e -- "$path" 2>/dev/null) == "$path" && -f "$path" ]] || return 1
+  done
+  digest=$(sha256sum <"$marker") || return 1
+  grep -Fxq -- "${digest%% *}  share/knoted/REVISION" "$artifact/SHA256SUMS"
+}
+
+prune_old_artifacts() {
+  local artifact pruned=0 mounts mount
+  [[ $(readlink -f -- "$runtime_parent/current") == "$target" ]] ||
+    fail "current 已变动，跳过历史产物清理"
+  mounts=$(findmnt --kernel --noheadings --raw --output TARGET) ||
+    fail "无法核对运行根挂载点"
+  while IFS= read -r mount; do
+    printf -v mount '%b' "$mount"
+    [[ "$mount" != "$runtime_parent/"* ]] || fail "运行根下存在挂载点：$mount"
+  done <<<"$mounts"
+  for artifact in "$runtime_parent"/* "$runtime_parent"/.staging-*; do
+    [[ "$artifact" != "$target" ]] || continue
+    is_release_directory "$artifact" || continue
+    # 旧产物有将目录设为只读的情况；只向待删除的目录恢复属主写权限。
+    if ! find -P "$artifact" -xdev -type d ! -perm -u=w -exec chmod u+w -- {} + ||
+      ! rm -rf --one-file-system -- "$artifact"; then
+      fail "当前版本已验证，清理旧产物失败：$artifact"
+    fi
+    ((pruned += 1))
+  done
+  log "已清理 $pruned 份旧部署产物"
+}
+
 main() {
+  local prune_only=0
   case "${1:-}" in
   -h | --help | help)
     usage
     exit 0
     ;;
+  --prune-current)
+    [[ $# == 1 ]] || fail "--prune-current 不接受其他参数" 2
+    prune_only=1
+    ;;
   esac
   guard_worktree
   require_tools
-  resolve_revision "$@"
+  if [[ "$prune_only" == 0 ]]; then
+    resolve_revision "$@"
+  fi
   mkdir -p "$instance_root" "$runtime_parent"
   exec {lock_fd}>"$lock_file"
   flock -n "$lock_fd" || fail "另一个部署正在进行（$lock_file）" 2
+  # 不同实例配置可能指向同一运行根，按该目录加锁保护 current 和候选产物。
+  exec {runtime_lock_fd}<"$runtime_parent"
+  flock -n "$runtime_lock_fd" || fail "另一个部署正在使用运行根：$runtime_parent" 2
 
-  target=$(realpath -m -- "$runtime_parent/$revision")
   previous=$(readlink -f "$runtime_parent/current" 2>/dev/null || true)
+  if [[ "$prune_only" == 1 ]]; then
+    revision=${previous##*/}
+    [[ "$revision" =~ ^[0-9a-f]{40}$ && "$previous" == "$runtime_parent/$revision" ]] ||
+      fail "current 必须指向运行根内的完整提交目录"
+  fi
+  target=$runtime_parent/$revision
+  [[ ! -L "$target" ]] || fail "产物路径是软链接：$target"
 
   if [ "$previous" = "$target" ]; then
     log "已是最新：current 已指向 $revision，只做验证"
     verify_artifact
     wait_for_convergence "$ready_timeout" || fail "实例未收敛：${process_problem:-readiness 未通过}（pnpm pc process list / pnpm pc process logs knoted-api）"
-    verify_deployed
+    verify_deployed || return 1
+    prune_old_artifacts
     return 0
   fi
 
@@ -661,6 +729,7 @@ main() {
   # 与“三个进程映像已在目标目录”必须放进同一个收敛等待，不能探针一过就扫 /proc。
   wait_for_convergence "$ready_timeout" || fail_after_switch "${process_problem:-readiness 超时}"
   verify_deployed || fail_after_switch "验证未通过"
+  prune_old_artifacts
   log "完成：$revision 已上线（https://$domain:$https_port/）"
 }
 
