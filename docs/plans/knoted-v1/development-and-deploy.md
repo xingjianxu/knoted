@@ -55,7 +55,7 @@ schema 由编排里的 `migrate` 进程管理（`sqlx migrate run`）；库不�
 
 | 步骤 | 行为 |
 | --- | --- |
-| 前置 | 拒绝在 `.worktrees/` 路径上的实例/运行根/构建根/主检出；`flock` 防并发；缺 `git`/`pnpm`/`curl`/`sha256sum`/`flock`/`realpath` 在改动任何状态前失败。从任务 worktree 调用时，构建用被调用的那份脚本，但 `pnpm pc` 一律在主检出执行（daemon 的 cwd 决定后续 prepare/restart 用哪份 `service.sh`） |
+| 前置 | 拒绝在 `.worktrees/` 路径上的实例/运行根/构建根/主检出；对实例和运行根加 `flock` 防并发；缺 `git`/`pnpm`/`curl`/`sha256sum`/`flock`/`realpath` 在改动任何状态前失败。从任务 worktree 调用时，构建用被调用的那份脚本，但 `pnpm pc` 一律在主检出执行（daemon 的 cwd 决定后续 prepare/restart 用哪份 `service.sh`） |
 | 定版 | 校验提交存在于本地仓库；`/data/knoted-dev/runtime/<sha>` 已存在且 `SHA256SUMS` 通过就复用；已存在但校验失败（构建中断、磁盘损坏）则移到 `<sha>.incomplete.<UTC 时间>.<pid>` 后重建 |
 | 运行变量 | 调用者环境 > `<instance_root>/deploy.env`（0600）> 从活动 api/worker/intelligence 的 `/proc/<pid>/environ` 取并集；最终结果回写文件，所以下次无 shell 环境也能复现 |
 | 构建 | 在运行变量就绪之后执行——Vite 用 `KNOTED_OFFICE_ORIGIN` 决定是否编入 Office，变量必须在构建前确定 |
@@ -74,7 +74,7 @@ schema 由编排里的 `migrate` 进程管理（`sqlx migrate run`）；库不�
 1. 优先用 `/proc/<pid>/exe` 判断进程映像；读得到时不采信与之矛盾的命令行。
 2. `exe` 读不到时检查 `/proc/<pid>/cmdline`。`service.sh` 在 exec 前固定运行根，`argv[0]` 必须直接指向 `<runtime_parent>/<40 位提交 SHA>/…`；`current` 和其他符号链接别名不作为版本证据。
 
-首次部署这项修复前，先把**稳定实例的主检出**快进到包含新版 `tools/dev/pc/service.sh` 的提交。即使从任务 Worktree 运行，daemon 重启时用的仍是主检出的 launcher。旧进程只提供别名时，部署会先检查主检出的 launcher 能否固定产物路径；不能则在切换前退出。切换后若只能看见别名，脚本停止等待、不自动回滚。若此时 `current` 已指向目标，更新主检出后按 `knoted-api`、`knoted-worker`、`knoted-intelligence` 顺序各执行一次 `pnpm pc process restart <name>`，再跑 `pnpm deploy:dev <目标 SHA>` 验证；同 SHA 的部署只验证，不会代为重启。
+首次部署这项修复前，先把**稳定实例的主检出**快进到包含新版 `tools/dev/pc/service.sh` 的提交。即使从任务 Worktree 运行，daemon 重启时用的仍是主检出的 launcher。旧进程只提供别名时，部署会先检查主检出的 launcher 能否固定产物路径；不能则在切换前退出。切换后若只能看见别名，脚本停止等待、不自动回滚。若此时 `current` 已指向目标，更新主检出后按 `knoted-api`、`knoted-worker`、`knoted-intelligence` 顺序各执行一次 `pnpm pc process restart <name>`，再跑 `pnpm deploy:dev <目标 SHA>` 验证；同 SHA 的部署核验现有进程并清理历史产物。
 
 同一 ptrace 校验也可能限制 `/proc/<pid>/environ`。只从 `exe` 能确认的进程抓取变量；权限不足时优先使用已有 `deploy.env` 或显式设置所需变量。需要恢复强判据或自动抓取时，用进程主组重跑：
 
@@ -86,7 +86,9 @@ sg strata-clients -c 'pnpm deploy:dev'
 
 其它可覆盖项（默认值即本机 dev）：`KNOTED_INSTANCE_ROOT`、`KNOTED_DEPLOY_RUNTIME_PARENT`、`KNOTED_DEPLOY_PROC_ROOT`、`KNOTED_DEPLOY_BUILD_CMD`、`KNOTED_DEPLOY_READY_TIMEOUT`（默认 180s）、`KNOTED_BUILD_ROOT`、`CARGO_BUILD_JOBS`、`KNOTED_API_PORT`、`KNOTED_INTELLIGENCE_PORT`、`KNOTED_HTTPS_PORT`、`KNOTED_HTTPS_DOMAIN`。
 
-不做：数据库/assets 备份、历史产物回收（`runtime/` 下目录只增不减，需人工清理）、独立的 `--rollback`、生产实例。跨迁移发布前需要一致备份时按 [ADR 0011](../../decisions/0011-consistent-backup-and-isolated-restore.md) 单独执行。
+验证通过后，在部署锁内清理同一 `runtime/` 下带匹配版本标记和清单的历史产物，当前产物保留。缺少版本标记或清单的中断目录留待人工排查。运行根下有挂载点时，清理会停止并报告路径。失败时仍保留恢复所需的产物。已有实例可用 `pnpm deploy:dev --prune-current` 核验当前运行版本并清理历史产物，无需重启、迁移或重新构建。
+
+跨迁移发布前需要一致备份时按 [ADR 0011](../../decisions/0011-consistent-backup-and-isolated-restore.md) 单独执行。
 
 显式传一个比当前更旧、且迁移集合也不同的提交不属于支持场景：`sqlx migrate run` 会拒绝“源里缺少已应用迁移”，部署会在 readiness 预算（默认 180s）内空等后报失败并保留旧指针，需要人工恢复。
 

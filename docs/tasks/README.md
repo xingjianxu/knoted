@@ -18,3 +18,10 @@
 | [#274](274.md) | Bug | 升级 mtone 0.13.1 修复工作区顶栏与侧栏品牌区错位 | [xingjianxu/mtone#68](https://github.com/xingjianxu/mtone/issues/68)（已完成） |
 | [#276](276.md) | Feature | 布置工作区 AdminLayout 顶栏导航和操作 | 无 |
 | [#278](278.md) | Feature | 调整项目 npm 源为官方源、升级 mtone 0.13.2 并用 Splitter 重构笔记页面 | 无 |
+
+
+## 开发部署
+
+| 任务卡 | Type | 交付目标 | 直接前置 |
+|---|---|---|---|
+| [#281](281.md) | Task | 部署验证通过后只保留当前运行产物 | 无 |
