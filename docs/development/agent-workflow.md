@@ -34,7 +34,7 @@
 
 1. **开工记录**：通过 `gh issue develop` 建好关联分支与 `.worktrees/<编号>-<slug>` 后，在 Issue 评论记录分支名、Worktree 路径和默认分支起点 SHA（接续已有任务时先查 `gh issue develop <编号> --list`、`git worktree list` 与 Issue 评论，复用已有成果）。
 2. **过程记录**：影响实现方向的关键发现、反馈、外部技术阻塞（例如等待上游 `@bixlab/mtone` 发布）与恢复条件直接写回 Issue；逐行代码意见留在 PR，改变验收标准的结论同步回 Issue 与任务卡。
-3. **收尾回写**：PR 合入默认分支后，将 PR 链接、合并 SHA 和验证摘要回写原 Issue，并确认 Issue 已通过 `Closes #<编号>` 关闭。
+3. **收尾回写**：PR 合入默认分支并执行开发服务器更新后，将 PR 链接、合并 SHA、验证摘要与实际部署 SHA、健康检查结果回写原 Issue，并确认 Issue 已通过 `Closes #<编号>` 关闭。部署受阻时在 Issue 和交付报告中标明「待部署」及原因。
 
 ## 提交与审查
 
@@ -49,7 +49,8 @@
 
 ## 交付定义与远程授权
 
-- 完整完成 = 代码/文档/任务卡安全提交 + 本地必需检查通过 + 独立审查完成 + PR 合入默认分支（普通 `merge`）+ 主线复核验证 + Issue 回写并确认关闭 + 本任务干净 Worktree 与已合并本地分支安全清理。PR 创建或测试通过都不足以关闭任务。
+- 完整完成 = 代码/文档/任务卡安全提交 + 本地必需检查通过 + 独立审查完成 + PR 合入默认分支（普通 `merge`）+ 主线复核验证 + 开发服务器更新并验证 + Issue 回写并确认关闭 + 本任务干净 Worktree 与已合并本地分支安全清理。
+- 每次 Agent 任务（含纯文档任务）合入后，由主 Agent 在主工作区运行 `git pull --ff-only` 并做主线复核，再执行 `pnpm deploy:dev`。以脚本的实际输出确认部署 SHA 包含本次合并，且进程版本、API、intelligence 和 HTTPS 检查通过。部署命令用法见[一键部署](../plans/knoted-v1/development-and-deploy.md#一键部署)。
 - 常规 GitHub 操作默认已授权（Issue 建单/编辑/评论/关闭、原生 Type 与 `blocked-by`、`gh issue develop`、push 到非默认分支、PR 创建与普通合并、删除已合并远程分支）；仓库级设置（ruleset、分支保护、webhook、协作者与权限、Actions 设置、仓库可见性与删除、标签名增删）仍需逐次人工确认。
 - 上游 `xingjianxu/mtone` 仓库的默认授权仅覆盖新建 Issue 与在既有同能力 Issue 下补充评论（先查重、英文正文、仅用上游既有标签、回写编号与 URL），不含标签增删、仓库设置、PR 与 npm 发布，见 [UI 指南](ui-mtone.md)。
 - 缺少任一必需阶段、用户要求先看 PR 或遇到规则边界阻塞时，如实报告“待提交/待审查/待集成”并保留 Worktree 与成果。
