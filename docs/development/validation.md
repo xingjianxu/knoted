@@ -61,4 +61,4 @@ git status --short --untracked-files=all
 ## 提交、集成与收尾证据
 
 - PR 创建前完成独立审查并核实重要反馈，PR 正文写明 head/base SHA、环境、实际命令与结果、验收情况及未覆盖范围。
-- 合入 `master` 后在主工作区 `git pull --ff-only` 并执行必要主线复核，将 PR 链接、合并 SHA 和验证摘要回写原 Issue 并确认关闭，再安全清理本任务 Worktree 与已合并本地分支。不以文件数、模板勾选或口头声称代替真实命令输出。
+- 合入 `master` 后按 [Agent 任务工作流](agent-workflow.md#交付定义与远程授权) 同步主线、复核并更新开发服务器，将 PR 链接、合并 SHA、验证摘要和部署结果回写原 Issue。确认 Issue 已关闭且部署验证通过后，再安全清理本任务 Worktree 与已合并本地分支。不以文件数、模板勾选或口头声称代替真实命令输出。

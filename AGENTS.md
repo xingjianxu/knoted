@@ -48,7 +48,7 @@ cd "$tree"
   - Python intelligence（改动 `services/intelligence` 时在其目录运行）：`uv run --group dev pytest`、`uv run --group dev ruff check`、`uv run --group dev ruff format --check`
   - 文档/配置/模板：YAML 1.2 解析、Markdown 链接、Skill frontmatter、脚本语法与 `git diff --check`；见 [验证方法](docs/development/validation.md)。
 - **PR 与独立审查**：PR 使用 [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md)，单个或最终 PR 写 `Closes #<编号>`，中间 PR 普通引用 `#<编号>`，正文记录已验证的 PR head SHA、默认分支 base SHA、环境、命令、实际输出、验收结果与未覆盖范围。合并前发起独立审查并核实反馈；head 更新或默认分支前进时同步基线并重新验证。
-- **合并、回写与清理**：本仓库仅允许普通 merge commit（`allow_merge_commit=true`），默认授权 Agent 使用 `gh pr merge <PR> --merge --match-head-commit <已验证SHA>` 合入；用户明确要求先看 PR 时保留待合并状态。合入后回到主工作区用 `git pull --ff-only` 同步并做主线复核，将 PR 链接、合并 SHA 和验证摘要回写原 Issue 并确认关闭，再安全清理本次已合入且干净的 worktree 和本地分支。PR 创建或测试通过都不足以关闭任务。
+- **合并、回写与清理**：本仓库仅允许普通 merge commit（`allow_merge_commit=true`），默认授权 Agent 使用 `gh pr merge <PR> --merge --match-head-commit <已验证SHA>` 合入；用户明确要求先看 PR 时保留待合并状态。合入后回到主工作区用 `git pull --ff-only` 同步并做主线复核。每次 Agent 任务（含纯文档任务）收尾时，由主 Agent 在主工作区执行 `pnpm deploy:dev` 更新开发服务器，确认部署版本包含本次合并且脚本验证通过。将 PR 链接、合并 SHA、验证摘要和部署结果回写原 Issue 并确认关闭。部署验证通过后再安全清理本次已合入且干净的 worktree 和本地分支。部署受阻时在 Issue 与交付报告标明「待部署」及原因。详见 [Agent 任务工作流](docs/development/agent-workflow.md#交付定义与远程授权)。
 
 ## 规划、架构与子任务
 

@@ -86,8 +86,8 @@ gh pr view "$PR_NUMBER" --json number,url,state,headRefOid,baseRefName,mergeComm
    ```
 
    无法快进时停下调查，不 `reset`。在主线上复核必要检查并记录主线 SHA。
-3. 将 PR 链接、合并 SHA 和验证摘要回写原 GitHub Issue 评论，确认 Issue 已关闭（单次/最终 PR 由 `Closes #<编号>` 自动关闭）。
-4. 仅在主线验证通过后清理**本次任务**的 Worktree 与已合并分支：
+3. 按 [Agent 任务工作流](agent-workflow.md#交付定义与远程授权) 更新开发服务器，将 PR 链接、合并 SHA、验证摘要和部署结果回写原 GitHub Issue 评论，确认 Issue 已关闭（单次/最终 PR 由 `Closes #<编号>` 自动关闭）。
+4. 主线复核和部署验证通过后清理**本次任务**的 Worktree 与已合并分支：
 
    ```bash
    git -C "$tree" status --short --untracked-files=all
