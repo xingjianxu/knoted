@@ -230,6 +230,56 @@ export class NoteEditingSession {
     this.mutation = task.finally(() => { this.mutation = undefined; this.structural = false; this.schedule(); });
     return this.mutation;
   };
+  /** Atomically rename the active note after settling in-flight writes, without mutating the draft on failure. */
+  renameTitle = (title: string): Promise<Note> => {
+    if (this.mutation || this.restoring || this.resetting) return Promise.reject(new Error("编辑会话操作尚未完成"));
+    if (this.state.status === "conflict") return Promise.reject(new Error("当前笔记存在版本冲突，请先处理冲突后再重命名。"));
+    this.structural = true; this.clearTimer();
+    const epoch = this.state.resetEpoch;
+    const task = (async () => {
+      if (this.flight) await this.flight;
+      if (this.barrier) await this.barrier;
+      if (this.state.status === "conflict") throw new Error("当前笔记存在版本冲突，请先处理冲突后再重命名。");
+      this.assertCanWrite(this.noteId);
+      const expected_version = this.state.baseVersion;
+      const capturedRevision = this.revision;
+      const includeDocument = this.state.dirty || this.state.unresolvedWrite;
+      const body = includeDocument
+        ? { expected_version, title, document: clone(this.state.draft.document) }
+        : { expected_version, title };
+      try {
+        const { data } = await this.api.raw.PATCH("/notes/{noteId}", {
+          params: { path: { noteId: this.noteId } },
+          body,
+        });
+        if (!data) throw new Error("重命名响应缺少笔记");
+        if (this.state.resetEpoch !== epoch) return data;
+        this.confirmed = clone({ title: data.title, document: data.document });
+        const nextDraft: NoteDraft = this.revision !== capturedRevision
+          ? { title: data.title, document: clone(this.state.draft.document) }
+          : clone(this.confirmed);
+        const dirty = !equal(nextDraft, this.confirmed);
+        this.update({
+          draft: nextDraft,
+          baseVersion: data.content_version,
+          dirty,
+          unresolvedWrite: false,
+          status: dirty ? "dirty" : "saved",
+          error: null,
+        });
+        await this.cache(data);
+        return data;
+      } catch (error) {
+        const failure = asError(error);
+        if (this.state.resetEpoch === epoch && failure instanceof ApiRequestError && failure.status === 409) {
+          this.update({ serverUpdated: true });
+        }
+        throw failure;
+      }
+    })();
+    this.mutation = task.finally(() => { this.mutation = undefined; this.structural = false; this.schedule(); });
+    return this.mutation;
+  };
   /** T31 history restore owns the whole request, so late editor callbacks cannot race a PATCH or silently disappear. */
   restoreFromServer = (command: (noteId: string, baseVersion: number) => Promise<Note>): Promise<Note> => {
     if (this.restoring || this.mutation || this.resetting) return Promise.reject(new Error("编辑会话操作尚未完成"));
