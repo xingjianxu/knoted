@@ -7,7 +7,7 @@
 - Related issues: [#39](https://github.com/xingjianxu/knoted/issues/39)
 - Related PRs: [#40](https://github.com/xingjianxu/knoted/pull/40)（仅补充交付元数据，不改决策内容）
 - Supersedes: 无（替换 v1 计划的 R25/自有 UI 提案，不替代已有 Accepted ADR）
-- Superseded by: 无
+- Superseded by: [ADR 0012](0012-mtone-blockeditor-adoption.md) 部分替代第 4 条（BlockNote 编辑器核心与自建工具栏/菜单边界），其余条款继续有效
 
 ## 背景与问题
 
@@ -52,3 +52,4 @@ T17—T19 原计划在 `packages/ui` 构建基础控件、弹层、树列表。�
 
 - 2026-11-16：会话提案经用户确认后记录为 Accepted；授权实施第一阶段文档/Skill，不提前执行产品卡。
 - 2026-11-16（后续流程细化，非决策变更）：用户指示 + Knoted Issue #44 将缺口交接扩展为「提示词 + 告知用户 + 上游 Issue」，并明确缺口含「缺能力」与「既有组件需修改/扩展」两类。本节 §5 的“不修改 mtone”含义限于源码、PR 与 npm 发布，不含提 Issue；上游仓库设置、标签增删、PR 与发布仍禁止。决策正文未改写，无需新 ADR；执行细节见 [UI 指南](../development/ui-mtone.md) 与 [mtone-component-request](../../.agents/skills/mtone-component-request/SKILL.md)。
+- 2026-11-25（部分替代）：经维护者确认，[ADR 0012](0012-mtone-blockeditor-adoption.md) 部分替代本决策第 4 条，笔记编辑器改为直接消费精确锁定的 npm `@bixlab/mtone-blockeditor` 并移除 Knoted 对 `@blocknote/*` 的直接依赖与自建工具栏/菜单；本决策其余条款继续有效，原决策正文保留历史记录。

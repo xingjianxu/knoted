@@ -7,7 +7,7 @@
 | 编号 | 标题 / 文件 | 日期 | 状态 | 替代关系 |
 | --- | --- | --- | --- | --- |
 | 0001 | 模型 artifact 采用机器级共享根并按 revision 分层（[文件](0001-machine-level-model-artifact-roots.md)） | 2026-11-15 | Accepted | 无 |
-| 0002 | 通用 UI 由 mtone 提供，Knoted 直接消费 npm 包（[文件](0002-mtone-ui-ownership.md)） | 2026-11-16 | Accepted | 无；替换 v1 自有 UI 提案 |
+| 0002 | 通用 UI 由 mtone 提供，Knoted 直接消费 npm 包（[文件](0002-mtone-ui-ownership.md)） | 2026-11-16 | Accepted | 无；替换 v1 自有 UI 提案；第 4 条（BlockNote 编辑器边界）由 0012 部分替代 |
 | 0003 | 测试实例由 pcwrap 编排，NixOS 只保留外部依赖与未来生产（[文件](0003-test-instance-process-management.md)） | 2026-11-16 | Accepted | 无；替代 T21 的「测试实例由 NixOS 单元运行」边界；数据库 provisioning 部分由 0004 取代；HTTPS 部分由 0005 取代 |
 | 0004 | 开发/测试与生产数据库由宿主用户直接创建（[文件](0004-database-owned-by-host-user.md)） | 2026-11-16 | Accepted | 部分替代 0003（PostgreSQL provisioning 归属） |
 | 0005 | 测试 HTTPS 由宿主共享 Caddy 管理（[文件](0005-https-owned-by-caddy.md)） | 2026-11-16 | Accepted | 部分替代 0003（HTTPS / 续期 reload 归属） |
@@ -17,5 +17,6 @@
 | 0009 | OnlyOffice 取源只接受官方出站 JWT 请求头（[文件](0009-office-source-jwt-header.md)） | 2026-11-18 | Accepted | 部分替代 0008 的取源随机凭据 |
 | 0010 | OnlyOffice 网页使用不携带凭据的 Knoted 宿主页（[文件](0010-office-preview-credentialless-host.md)） | 2026-11-18 | Accepted | 无；细化 0008 网页边界 |
 | 0011 | 使用数据库维护锁完成一致性备份和隔离恢复（[文件](0011-consistent-backup-and-isolated-restore.md)） | 2026-11-19 | Accepted | 无 |
+| 0012 | 笔记编辑器直接消费 npm `@bixlab/mtone-blockeditor`，替代直接依赖 BlockNote（[文件](0012-mtone-blockeditor-adoption.md)） | 2026-11-25 | Accepted | 部分替代 0002 第 4 条（BlockNote 编辑器边界） |
 
 新 ADR 必须填写背景、方案、理由、正负影响、人工确认依据和关联任务。

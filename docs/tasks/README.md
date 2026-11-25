@@ -20,6 +20,7 @@
 | [#276](276.md) | Feature | 布置工作区 AdminLayout 顶栏导航和操作 | 无 |
 | [#278](278.md) | Feature | 调整项目 npm 源为官方源、升级 mtone 0.13.2 并用 Splitter 重构笔记页面 | 无 |
 | [#286](286.md) | Task | 升级 `@bixlab/mtone` 至 `0.15.2` 并迁移编辑器至 `@bixlab/mtone-blockeditor@0.2.0` | 无 |
+| [#288](288.md) | Task | 新增 ADR 0012 记录采用 `@bixlab/mtone-blockeditor` 部分替代 ADR 0002 第 4 条 | [#286](286.md)（已完成） |
 
 ## 开发部署
 
