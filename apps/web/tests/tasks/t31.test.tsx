@@ -9,6 +9,7 @@ import { createAppRouter, safeReturnTo } from "../../src/lib/router";
 import { queryKeys } from "../../src/lib/query";
 import { UiProvider } from "../../src/lib/ui-provider";
 import { pasteHtml } from "../fixtures/editor-clipboard";
+import { typeSlash } from "../fixtures/editor-input";
 
 type Note = components["schemas"]["Note"];
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -539,9 +540,13 @@ it("returning A→B→A seeds a new real editor from the saved draft, retaining 
   const editImage = await screen.findByText("编辑图片");
   fireEvent.mouseDown(editImage); fireEvent.click(editImage);
   const imageForm = await screen.findByRole("group", { name: "图片设置", hidden: true });
-  fireEvent.change(screen.getByLabelText("上传图片"), { target: { files: [new File(["public PNG fixture"], "return.png", { type: "image/png" })] } });
-  await waitFor(() => expect(screen.getByLabelText("图片地址")).toHaveValue(`${window.location.origin}/api/v1/assets/${assetId}/content`));
-  fireEvent.click(within(imageForm).getByText("应用图片"));
+  const imageFields = within(imageForm);
+  fireEvent.click(imageFields.getByText("上传", { exact: true }));
+  fireEvent.change(imageFields.getByLabelText("本地文件"), { target: { files: [new File(["public PNG fixture"], "return.png", { type: "image/png" })] } });
+  fireEvent.click(imageFields.getByText("上传并应用"));
+  await waitFor(() => expect(within(current).getByRole("img", { name: "笔记图片" })).toHaveAttribute(
+    "src", `${window.location.origin}/api/v1/assets/${assetId}/content`,
+  ));
 
   const selection = window.getSelection()!;
   await focusCode(current);
@@ -634,24 +639,21 @@ it("t67_editor refuses to insert a reclaimed image returned on upload replay", a
   await mount();
   await title();
   const pane = screen.getByRole("region", { name: "当前笔记" });
-  const blockEl = pane.querySelector<HTMLElement>('[data-node-type="blockContainer"][data-id="paragraph"]')!;
-  const contentEl = blockEl.querySelector<HTMLElement>(".bn-block-content") ?? blockEl;
-  const editorEl = pane.querySelector<HTMLElement>(".bn-editor")!;
-  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(() => new DOMRect(10, 10, 500, 30));
-  Object.defineProperty(document, "elementsFromPoint", { configurable: true, value: () => [contentEl, blockEl, editorEl] });
-  fireEvent.mouseMove(editorEl, { clientX: 20, clientY: 20 });
-  const addButton = await screen.findByRole("button", { name: "添加块", hidden: true });
-  fireEvent.mouseDown(addButton); fireEvent.click(addButton);
-  const listbox = await screen.findByRole("listbox", { name: "插入块", hidden: true });
+  const editable = pane.querySelector<HTMLElement>('[contenteditable="true"]')!;
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect());
+  await typeSlash(editable, editable.querySelector("p")!);
+  const listbox = await screen.findByLabelText("插入块", { selector: "[role=listbox]" });
   await waitFor(() => expect(listbox.querySelectorAll('[role="option"]').length).toBeGreaterThan(1));
   const imageOption = Array.from(listbox.querySelectorAll<HTMLElement>('[role="option"]')).find(el => el.textContent?.includes("图片"))!;
   fireEvent.mouseDown(imageOption); fireEvent.click(imageOption);
   const form = await new BrowserRequest("/", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: "" }).formData();
   vi.stubGlobal("FormData", form.constructor);
   vi.stubGlobal("File", NodeFile);
-  fireEvent.change(screen.getByLabelText("上传图片"), {
+  const media = within(await screen.findByRole("group", { name: "图片设置", hidden: true }));
+  fireEvent.change(media.getByLabelText("本地文件"), {
     target: { files: [new File(["public PNG fixture"], "retired.png", { type: "image/png" })] },
   });
+  fireEvent.click(media.getByText("上传并应用"));
   expect(await screen.findByText("图片已回收，请重新选择文件")).toBeInTheDocument();
   expect(screen.queryByRole("img", { name: "笔记图片" })).not.toBeInTheDocument();
   expect(calls("PATCH", id(1))).toHaveLength(0);

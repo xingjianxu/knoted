@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { NoteEditor, type NoteDocument } from "../../src/features/notes/editor";
 import { UiProvider } from "../../src/lib/ui-provider";
+import { typeSlash } from "../fixtures/editor-input";
 
 beforeAll(() => {
   vi.spyOn(window, "scrollBy").mockImplementation(() => {});
@@ -54,34 +55,31 @@ function triggerHoverSideMenu(container: HTMLElement, blockId: string) {
   fireEvent.mouseMove(editorEl, { clientX: 20, clientY: 20 });
 }
 
-async function openSlashMenu(container: HTMLElement, blockId = "p") {
-  triggerHoverSideMenu(container, blockId);
-  const addButton = await screen.findByRole("button", { name: "添加块", hidden: true });
-  fireEvent.mouseDown(addButton);
-  fireEvent.click(addButton);
-  const listbox = await screen.findByRole("listbox", { name: "插入块", hidden: true });
+async function openSlashMenu(editable: HTMLElement) {
+  await typeSlash(editable, editable.querySelector("p")!);
+  const listbox = await screen.findByLabelText("插入块", { selector: "[role=listbox]" });
   await waitFor(() => expect(listbox.querySelectorAll('[role="option"]').length).toBeGreaterThan(1));
   return listbox;
 }
 
 describe("T28 mtone BlockEditor menus and interactions", () => {
-  it("opens built-in slash menu from side add button, closes on Escape, and preserves content", async () => {
-    const { container, editable, onChange } = await mountEditor();
-    const listbox = await openSlashMenu(container, "p");
+  it("opens built-in slash menu by typing slash, closes on Escape, and preserves content", async () => {
+    const { editable, onChange } = await mountEditor();
+    const listbox = await openSlashMenu(editable);
 
     expect(listbox).toHaveTextContent("一级标题");
     expect(listbox).toHaveTextContent("代码块");
 
     onChange.mockClear();
     fireEvent.keyDown(editable, { key: "Escape" });
-    await waitFor(() => expect(screen.queryByRole("listbox", { name: "插入块", hidden: true })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByLabelText("插入块", { selector: "[role=listbox]" })).not.toBeInTheDocument());
     expect(onChange).not.toHaveBeenCalled();
     expect(editable).toHaveTextContent("first");
   });
 
   it("ignores Enter during IME composition while slash menu is open", async () => {
-    const { container, editable, onChange } = await mountEditor();
-    await openSlashMenu(container, "p");
+    const { editable, onChange } = await mountEditor();
+    await openSlashMenu(editable);
 
     onChange.mockClear();
     fireEvent.compositionStart(editable, { data: "中" });
@@ -92,15 +90,16 @@ describe("T28 mtone BlockEditor menus and interactions", () => {
   });
 
   it("inserts a supported heading block via built-in slash menu and emits valid NoteDocument", async () => {
-    const { container, onChange } = await mountEditor({
+    const { editable, onChange } = await mountEditor({
       blocks: [{ id: "p", type: "paragraph" }],
     });
-    const listbox = await openSlashMenu(container, "p");
+    const listbox = await openSlashMenu(editable);
 
     const headingOption = Array.from(listbox.querySelectorAll<HTMLElement>('[role="option"]')).find(
       (el) => el.textContent?.includes("一级标题"),
     )!;
     expect(headingOption).toBeDefined();
+    onChange.mockClear();
     fireEvent.mouseDown(headingOption);
     fireEvent.click(headingOption);
 
@@ -110,11 +109,12 @@ describe("T28 mtone BlockEditor menus and interactions", () => {
     expect(screen.queryByText(/未应用此次编辑/)).not.toBeInTheDocument();
   });
 
-  it("warns without calling onChange when inserting a block type unsupported by NoteDocument v1", async () => {
-    const { container, onChange } = await mountEditor({
+  it("warns and keeps the original document when inserting a block type unsupported by NoteDocument v1", async () => {
+    const original: NoteDocument = {
       blocks: [{ id: "p", type: "paragraph", content: [{ type: "text", text: "正文" }] }],
-    });
-    const listbox = await openSlashMenu(container, "p");
+    };
+    const { editable, onChange } = await mountEditor(original);
+    const listbox = await openSlashMenu(editable);
 
     const dividerOption = Array.from(listbox.querySelectorAll<HTMLElement>('[role="option"]')).find(
       (el) => el.textContent?.includes("分割线"),
@@ -125,7 +125,8 @@ describe("T28 mtone BlockEditor menus and interactions", () => {
     fireEvent.click(dividerOption);
 
     expect(await screen.findByText(/未应用此次编辑.*分割线/)).toBeInTheDocument();
-    expect(onChange).not.toHaveBeenCalled();
+    // The slash menu first removes the trigger text and emits the original document.
+    expect(onChange.mock.calls).toEqual([[original]]);
   });
 
   it("supports side block action menu (move down and delete block) through BlockEditor", async () => {

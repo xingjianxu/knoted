@@ -74,8 +74,8 @@ describe("t17 mtone consumption", () => {
 
   it("t17_4 removes placeholder sources and directly loads published CSS", () => {
     const pkg = JSON.parse(readFileSync(path.join(webRoot, "package.json"), "utf8"));
-    expect(pkg.dependencies["@bixlab/mtone"]).toBe("0.15.2");
-    expect(pkg.dependencies["@bixlab/mtone-blockeditor"]).toBe("0.2.0");
+    expect(pkg.dependencies["@bixlab/mtone"]).toBe("0.15.3");
+    expect(pkg.dependencies["@bixlab/mtone-blockeditor"]).toBe("0.2.1");
     expect(pkg.dependencies).not.toHaveProperty("@knoted/ui");
     expect(pkg.dependencies).not.toHaveProperty("@blocknote/core");
     expect(pkg.dependencies).not.toHaveProperty("@blocknote/react");
