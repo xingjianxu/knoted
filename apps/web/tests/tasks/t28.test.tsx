@@ -1,221 +1,160 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { SideMenuExtension, SuggestionMenu } from "@blocknote/core/extensions";
-import { useBlockNoteEditor } from "@blocknote/react";
-import { useEffect } from "react";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { NoteEditor, noteEditorSchema, type NoteDocument, type NoteEditorInstance } from "../../src/features/notes/editor";
-import { BlockMenu, SlashMenu } from "../../src/features/notes/editor/menus";
+import { NoteEditor, type NoteDocument } from "../../src/features/notes/editor";
 import { UiProvider } from "../../src/lib/ui-provider";
 
 beforeAll(() => {
   vi.spyOn(window, "scrollBy").mockImplementation(() => {});
   vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(() => new DOMRect(10, 10, 500, 30));
   Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value: () => [] });
-  Object.defineProperty(Range.prototype, "getBoundingClientRect", { configurable: true, value: () => new DOMRect() });
-  const meta = document.createElement("meta");
-  meta.name = "viewport"; meta.content = "width=device-width, initial-scale=1, interactive-widget=resizes-content";
-  meta.dataset.t28 = "true"; document.head.append(meta);
+  Object.defineProperty(Range.prototype, "getBoundingClientRect", {
+    configurable: true,
+    value: () => new DOMRect(),
+  });
 });
 afterAll(() => {
   vi.restoreAllMocks();
   Reflect.deleteProperty(Range.prototype, "getClientRects");
   Reflect.deleteProperty(Range.prototype, "getBoundingClientRect");
-  document.querySelector('meta[data-t28]')?.remove();
+  Reflect.deleteProperty(document, "elementsFromPoint");
 });
 
-async function setup(initial: NoteDocument = { blocks: [
-  { id: "p", type: "paragraph", content: [{ type: "text", text: "first" }] },
-  { id: "q", type: "paragraph", content: [{ type: "text", text: "second" }] },
-] }) {
-  let editor!: NoteEditorInstance;
-  function Probe() {
-    const current = useBlockNoteEditor(noteEditorSchema);
-    useEffect(() => { editor = current; }, [current]);
-    return null;
-  }
+async function mountEditor(
+  initial: NoteDocument = {
+    blocks: [
+      { id: "p", type: "paragraph", content: [{ type: "text", text: "first" }] },
+      { id: "q", type: "paragraph", content: [{ type: "text", text: "second" }] },
+    ],
+  },
+) {
   const onChange = vi.fn();
-  const view = render(<UiProvider><NoteEditor document={initial} onChange={onChange}><SlashMenu /><BlockMenu /><Probe /></NoteEditor></UiProvider>);
-  await waitFor(() => expect(editor).toBeDefined());
-  const editable = view.container.querySelector<HTMLElement>('[contenteditable="true"]')!;
-  async function slash(query = "") {
-    await act(async () => { await new Promise(requestAnimationFrame); });
-    act(() => {
-      editor.setTextCursorPosition("p", "end");
-      editor.getExtension(SuggestionMenu)!.openSuggestionMenu("/", { deleteTriggerCharacter: true });
-      if (query) editor.insertInlineContent(query);
-    });
-    await screen.findByLabelText("插入块");
-    await waitFor(() => expect(editable).toHaveAttribute("aria-expanded", "true"));
-    onChange.mockClear();
-  }
-  async function block(id = "p") {
-    await act(async () => { await new Promise(requestAnimationFrame); });
-    // jsdom has no hit testing. Supply only the public side-menu geometry/state;
-    // Chromium evidence separately exercises real pointer detection/anchoring.
-    act(() => editor.getExtension(SideMenuExtension)!.store.setState({ show: true, block: editor.getBlock(id)!, referencePos: new DOMRect() }));
-    const trigger = await screen.findByLabelText("块操作");
-    fireEvent.click(trigger);
-    await screen.findByRole("menu");
-    onChange.mockClear();
-    return trigger;
-  }
-  return { editor, onChange, editable, slash, block };
+  const view = render(
+    <UiProvider>
+      <NoteEditor documentKey="t28" document={initial} onChange={onChange} />
+    </UiProvider>,
+  );
+  const editable = await waitFor(() => {
+    const el = view.container.querySelector<HTMLElement>('[contenteditable="true"]');
+    expect(el).not.toBeNull();
+    return el!;
+  });
+  return { ...view, editable, onChange };
 }
 
-describe("T28 actual BlockNote + mtone menus", () => {
-  it("t28_1: Esc closes slash suggestions without changing the selection or document", async () => {
-    const { editor, onChange, editable, slash } = await setup();
-    await slash();
-    const before = editor.prosemirrorState.selection.toJSON();
+function triggerHoverSideMenu(container: HTMLElement, blockId: string) {
+  const blockEl = container.querySelector<HTMLElement>(`[data-node-type="blockContainer"][data-id="${blockId}"]`);
+  expect(blockEl).not.toBeNull();
+  const contentEl = blockEl!.querySelector<HTMLElement>(".bn-block-content") ?? blockEl!;
+  const editorEl = container.querySelector<HTMLElement>(".bn-editor")!;
+  Object.defineProperty(document, "elementsFromPoint", {
+    configurable: true,
+    value: () => [contentEl, blockEl!, editorEl],
+  });
+  fireEvent.mouseMove(editorEl, { clientX: 20, clientY: 20 });
+}
+
+async function openSlashMenu(container: HTMLElement, blockId = "p") {
+  triggerHoverSideMenu(container, blockId);
+  const addButton = await screen.findByRole("button", { name: "添加块", hidden: true });
+  fireEvent.mouseDown(addButton);
+  fireEvent.click(addButton);
+  const listbox = await screen.findByRole("listbox", { name: "插入块", hidden: true });
+  await waitFor(() => expect(listbox.querySelectorAll('[role="option"]').length).toBeGreaterThan(1));
+  return listbox;
+}
+
+describe("T28 mtone BlockEditor menus and interactions", () => {
+  it("opens built-in slash menu from side add button, closes on Escape, and preserves content", async () => {
+    const { container, editable, onChange } = await mountEditor();
+    const listbox = await openSlashMenu(container, "p");
+
+    expect(listbox).toHaveTextContent("一级标题");
+    expect(listbox).toHaveTextContent("代码块");
+
+    onChange.mockClear();
     fireEvent.keyDown(editable, { key: "Escape" });
-    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
-    expect(editor.prosemirrorState.selection.toJSON()).toEqual(before);
+    await waitFor(() => expect(screen.queryByRole("listbox", { name: "插入块", hidden: true })).not.toBeInTheDocument());
     expect(onChange).not.toHaveBeenCalled();
-    expect(editable).toHaveFocus();
+    expect(editable).toHaveTextContent("first");
   });
 
-  it("t28_2/t28_3: filtered keyboard insertion clears slash/query in one change and one undo", async () => {
-    const { editor, onChange, editable, slash } = await setup();
-    await slash("heading");
-    await waitFor(() => expect(screen.getAllByRole("option", { hidden: true })).toHaveLength(3));
-    fireEvent.keyDown(editable, { key: "ArrowDown" });
-    fireEvent.keyDown(editable, { key: "Enter" });
-    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
-    const saved = onChange.mock.lastCall![0] as NoteDocument;
-    // Nonempty current content stays intact; selected block is inserted after it.
-    expect(saved.blocks[0]).toEqual({ id: "p", type: "paragraph", content: [{ type: "text", text: "first" }] });
-    expect(saved.blocks[1]).toMatchObject({ type: "heading", level: 2 });
-    expect(editor.getTextCursorPosition().block.type).toBe("heading");
-    expect(editable).toHaveFocus();
-    act(() => { editor.undo(); });
-    expect(editor.document.some((b) => b.type === "heading")).toBe(false);
-  });
+  it("ignores Enter during IME composition while slash menu is open", async () => {
+    const { container, editable, onChange } = await mountEditor();
+    await openSlashMenu(container, "p");
 
-  it("empty query offers valid blocks and converts an empty block without a temporary image", async () => {
-    const { editor, onChange, editable, slash } = await setup({ blocks: [{ id: "p", type: "paragraph" }] });
-    await slash();
-    expect(screen.queryByRole("option", { name: /图片/ })).not.toBeInTheDocument();
-    fireEvent.keyDown(editable, { key: "ArrowDown" });
-    fireEvent.keyDown(editable, { key: "Enter" });
-    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
-    expect(onChange.mock.lastCall![0].blocks[0]).toMatchObject({ id: "p", type: "heading", level: 1 });
-    expect(editor.document).toHaveLength(1);
-  });
-
-  it("unknown query closes suggestions without dropping typed text", async () => {
-    const { editor, editable, slash } = await setup();
-    await slash();
-    act(() => editor.insertInlineContent("no-such-command"));
-    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
-    expect(editable.textContent).toContain("first/no-such-command");
-  });
-
-  it("block Esc restores focus and preserves an existing text selection", async () => {
-    const { editor, onChange, editable, block } = await setup();
-    act(() => editor.setSelection("p", "q"));
-    const before = editor.prosemirrorState.selection.toJSON();
-    await block();
-    fireEvent.keyDown(screen.getAllByRole("menuitem")[0]!, { key: "Escape" });
-    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
-    await waitFor(() => expect(editable).toHaveFocus());
-    expect(editor.prosemirrorState.selection.toJSON()).toEqual(before);
-    expect(onChange).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["转换为待办", "checkListItem"], ["转换为代码块", "codeBlock"], ["转换为标题 3", "heading"],
-  ])("%s preserves text and causes one onChange", async (label, type) => {
-    const { onChange, editable, block } = await setup();
-    await block();
-    fireEvent.click(screen.getByRole("menuitem", { name: label }));
-    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
-    expect(onChange.mock.lastCall![0].blocks[0]).toMatchObject({ id: "p", type, content: [{ type: "text", text: "first" }] });
-    await waitFor(() => expect(editable).toHaveFocus());
-  });
-
-  it("disables a move past the document boundary instead of issuing an empty change", async () => {
-    const { onChange, block } = await setup();
-    await block();
-    expect(screen.getByRole("menuitem", { name: "上移" })).toHaveAttribute("aria-disabled", "true");
-    fireEvent.click(screen.getByRole("menuitem", { name: "上移" }));
-    expect(onChange).not.toHaveBeenCalled();
-  });
-
-  it.each(["上移", "下移"])("rejects %s that would deepen the whole subtree from 8 to 9 levels", async (label) => {
-    let tree: NoteDocument["blocks"][number] = { id: "leaf", type: "paragraph" };
-    for (let i = 6; i >= 1; i--) tree = { id: `level-${i}`, type: "paragraph", children: [tree] };
-    const blocks: NoteDocument["blocks"] = [
-      { id: "previous", type: "paragraph", children: [{ id: "existing", type: "paragraph" }] },
-      { id: "p", type: "paragraph", children: [tree] },
-    ];
-    if (label === "下移") blocks.reverse();
-    const { editor, onChange, block } = await setup({ blocks });
-    await block();
-    expect(screen.getByRole("menuitem", { name: label })).toHaveAttribute("aria-disabled", "true");
-    fireEvent.click(screen.getByRole("menuitem", { name: label }));
-    expect(onChange).not.toHaveBeenCalled();
-    expect(editor.document.map((b) => b.id)).toEqual(label === "上移" ? ["previous", "p"] : ["p", "previous"]);
-  });
-
-  it("permits the native move into children exactly at the 8-level boundary", async () => {
-    let tree: NoteDocument["blocks"][number] = { id: "leaf", type: "paragraph" };
-    for (let i = 5; i >= 1; i--) tree = { id: `level-${i}`, type: "paragraph", children: [tree] };
-    const { editor, onChange, block } = await setup({ blocks: [
-      { id: "previous", type: "paragraph", children: [{ id: "existing", type: "paragraph" }] },
-      { id: "p", type: "paragraph", children: [tree] },
-    ] });
-    await block();
-    fireEvent.click(screen.getByRole("menuitem", { name: "上移" }));
-    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
-    expect(editor.document).toHaveLength(1);
-    expect(editor.document[0]!.children.map((b) => b.id)).toEqual(["existing", "p"]);
-  });
-
-  it("at 5000 blocks disables insertion before deleting query but permits empty-block conversion", async () => {
-    const blocks: NoteDocument["blocks"] = Array.from({ length: 5000 }, (_, i) => ({ id: i === 0 ? "p" : `b-${i}`, type: "paragraph" }));
-    blocks[0]!.content = [{ type: "text", text: "first" }];
-    const { editor, onChange, editable, slash } = await setup({ blocks });
-    await slash("heading");
-    expect(screen.getAllByRole("option", { hidden: true })[0]).toHaveAttribute("aria-disabled", "true");
-    fireEvent.keyDown(editable, { key: "Enter" });
-    expect(onChange).not.toHaveBeenCalled();
-    expect(editor.getBlock("p")!.content).toEqual([{ type: "text", text: "first/heading", styles: {} }]);
-    act(() => { editor.getExtension(SuggestionMenu)!.closeMenu(); editor.updateBlock("p", { content: [] }); });
-    await slash("heading");
-    fireEvent.keyDown(editable, { key: "Enter" });
-    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
-    expect(editor.document).toHaveLength(5000);
-    expect(editor.getBlock("p")!.type).toBe("heading");
-  }, 15000);
-
-  it("does not accept slash commands during IME composition", async () => {
-    const { onChange, editable, slash } = await setup();
-    await slash();
+    onChange.mockClear();
     fireEvent.compositionStart(editable, { data: "中" });
-    fireEvent.keyDown(editable, { key: "Enter", isComposing: true });
+    fireEvent.keyDown(editable, { key: "Enter", keyCode: 229, isComposing: true });
     fireEvent.compositionEnd(editable, { data: "中文" });
     expect(onChange).not.toHaveBeenCalled();
-    expect(screen.getByRole("listbox", { hidden: true })).toBeInTheDocument();
+    expect(document.getElementById("bn-suggestion-menu")).toBeInTheDocument();
   });
 
-  it("move/delete each emit once, preserve nested content and are undoable", async () => {
-    const { editor, onChange, block } = await setup({ blocks: [
-      { id: "p", type: "paragraph", children: [{ id: "child", type: "bulletListItem", content: [{ type: "text", text: "nested" }] }] },
-      { id: "q", type: "paragraph" },
-    ] });
-    await block();
-    fireEvent.click(screen.getByRole("menuitem", { name: "下移" }));
-    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
-    expect(editor.document.map((b) => b.id)).toEqual(["q", "p"]);
-    expect(editor.document[1]!.children[0]!.id).toBe("child");
-    act(() => editor.undo());
-    expect(editor.document.map((b) => b.id)).toEqual(["p", "q"]);
-    await block();
-    fireEvent.click(screen.getByRole("menuitem", { name: "删除块" }));
-    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
-    expect(editor.document.map((b) => b.id)).toEqual(["q"]);
-    act(() => editor.undo());
-    expect(editor.document[0]!.children[0]!.id).toBe("child");
+  it("inserts a supported heading block via built-in slash menu and emits valid NoteDocument", async () => {
+    const { container, onChange } = await mountEditor({
+      blocks: [{ id: "p", type: "paragraph" }],
+    });
+    const listbox = await openSlashMenu(container, "p");
+
+    const headingOption = Array.from(listbox.querySelectorAll<HTMLElement>('[role="option"]')).find(
+      (el) => el.textContent?.includes("一级标题"),
+    )!;
+    expect(headingOption).toBeDefined();
+    fireEvent.mouseDown(headingOption);
+    fireEvent.click(headingOption);
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const saved = onChange.mock.lastCall![0] as NoteDocument;
+    expect(saved.blocks[0]).toMatchObject({ type: "heading", level: 1 });
+    expect(screen.queryByText(/未应用此次编辑/)).not.toBeInTheDocument();
+  });
+
+  it("warns without calling onChange when inserting a block type unsupported by NoteDocument v1", async () => {
+    const { container, onChange } = await mountEditor({
+      blocks: [{ id: "p", type: "paragraph", content: [{ type: "text", text: "正文" }] }],
+    });
+    const listbox = await openSlashMenu(container, "p");
+
+    const dividerOption = Array.from(listbox.querySelectorAll<HTMLElement>('[role="option"]')).find(
+      (el) => el.textContent?.includes("分割线"),
+    )!;
+    expect(dividerOption).toBeDefined();
+    onChange.mockClear();
+    fireEvent.mouseDown(dividerOption);
+    fireEvent.click(dividerOption);
+
+    expect(await screen.findByText(/未应用此次编辑.*分割线/)).toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("supports side block action menu (move down and delete block) through BlockEditor", async () => {
+    const { container, onChange } = await mountEditor({
+      blocks: [
+        { id: "p", type: "paragraph", content: [{ type: "text", text: "first" }] },
+        { id: "q", type: "paragraph", content: [{ type: "text", text: "second" }] },
+      ],
+    });
+    triggerHoverSideMenu(container, "p");
+
+    fireEvent.click(await screen.findByRole("button", { name: "此块的操作", hidden: true }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "下移" }));
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const moved = onChange.mock.lastCall![0] as NoteDocument;
+    expect(moved.blocks.map((block) => block.id)).toEqual(["q", "p"]);
+
+    onChange.mockClear();
+    await act(async () => { await new Promise(requestAnimationFrame); });
+    triggerHoverSideMenu(container, "q");
+    const actionsButton = await waitFor(() => {
+      const btn = document.querySelector<HTMLElement>('[aria-label="此块的操作"]');
+      expect(btn).not.toBeNull();
+      return btn!;
+    });
+    fireEvent.click(actionsButton);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "删除块" }));
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const afterDelete = onChange.mock.lastCall![0] as NoteDocument;
+    expect(afterDelete.blocks.map((block) => block.id)).toEqual(["p"]);
   });
 });

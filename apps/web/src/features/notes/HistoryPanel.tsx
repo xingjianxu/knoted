@@ -123,7 +123,7 @@ export function HistoryPanel({ noteId, bundle, disabled = false, onClose, onRest
               </div>
               <Divider />
               <section aria-label="历史预览" className="reading-measure">
-                <NoteEditor key={selected.snapshot_id} document={selected.document} readOnly onChange={() => {}} />
+                <NoteEditor key={selected.snapshot_id} documentKey={selected.snapshot_id} document={selected.document} readOnly onChange={() => {}} />
               </section>
               <ConfirmDialog
                 open={confirm}

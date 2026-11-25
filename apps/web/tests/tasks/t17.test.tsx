@@ -74,8 +74,11 @@ describe("t17 mtone consumption", () => {
 
   it("t17_4 removes placeholder sources and directly loads published CSS", () => {
     const pkg = JSON.parse(readFileSync(path.join(webRoot, "package.json"), "utf8"));
-    expect(pkg.dependencies["@bixlab/mtone"]).toBe("0.13.2");
+    expect(pkg.dependencies["@bixlab/mtone"]).toBe("0.15.2");
+    expect(pkg.dependencies["@bixlab/mtone-blockeditor"]).toBe("0.2.0");
     expect(pkg.dependencies).not.toHaveProperty("@knoted/ui");
+    expect(pkg.dependencies).not.toHaveProperty("@blocknote/core");
+    expect(pkg.dependencies).not.toHaveProperty("@blocknote/react");
     // Old installs may leave ignored node_modules behind. The removal contract
     // concerns the workspace manifest and sources, not package-manager caches.
     expect(existsSync(path.join(repoRoot, "packages/ui/package.json"))).toBe(false);
@@ -86,7 +89,9 @@ describe("t17 mtone consumption", () => {
       .map((file) => readFileSync(path.join(webRoot, "src", file), "utf8"))
       .join("\n");
     expect(sources).not.toContain("@knoted/ui");
+    expect(sources).not.toContain("@blocknote/");
     expect(sources).toContain('@import "@bixlab/mtone/styles.css"');
+    expect(sources).toContain('@import "@bixlab/mtone-blockeditor/styles.css"');
   });
 
   it("characterizes mtone cn: joins but does not merge conflicting utilities", () => {

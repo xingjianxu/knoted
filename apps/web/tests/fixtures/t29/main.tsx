@@ -2,8 +2,7 @@ import { Button } from "@bixlab/mtone";
 import { createApiClient } from "@knoted/api-client";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import { ImageBlockControls, CodeBlockControls, NoteEditor, type NoteDocument } from "../../../src/features/notes/editor";
-import { SlashMenu, BlockMenu } from "../../../src/features/notes/editor/menus";
+import { NoteEditor, type NoteDocument } from "../../../src/features/notes/editor";
 import { UiProvider } from "../../../src/lib/ui-provider";
 import "../../../src/styles.css";
 
@@ -33,9 +32,7 @@ function Fixture() {
     } catch { setStatus("保存或重开失败"); }
   }
   return <UiProvider><main className="m-6 grid gap-4">
-    <NoteEditor key={key} document={source} onChange={(value) => { setDocument(value); setChanges((n) => n + 1); }}>
-      <SlashMenu /><BlockMenu /><ImageBlockControls client={client} /><CodeBlockControls />
-    </NoteEditor>
+    <NoteEditor key={key} documentKey={key} document={source} client={client} onChange={(value) => { setDocument(value); setChanges((n) => n + 1); }} />
     <Button disabled={!!noteId || status === "保存中"} onClick={() => void saveAndReopen()}>保存并重开验收笔记</Button>
     <output aria-label="验收状态">{status}</output><output aria-label="验收笔记 ID">{noteId}</output>
     <output aria-label="变更次数">{changes}</output><pre aria-label="保存 JSON">{JSON.stringify(document)}</pre>

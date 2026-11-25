@@ -19,7 +19,7 @@
 | [#274](274.md) | Bug | 升级 mtone 0.13.1 修复工作区顶栏与侧栏品牌区错位 | [xingjianxu/mtone#68](https://github.com/xingjianxu/mtone/issues/68)（已完成） |
 | [#276](276.md) | Feature | 布置工作区 AdminLayout 顶栏导航和操作 | 无 |
 | [#278](278.md) | Feature | 调整项目 npm 源为官方源、升级 mtone 0.13.2 并用 Splitter 重构笔记页面 | 无 |
-
+| [#286](286.md) | Task | 升级 `@bixlab/mtone` 至 `0.15.2` 并迁移编辑器至 `@bixlab/mtone-blockeditor@0.2.0` | 无 |
 
 ## 开发部署
 

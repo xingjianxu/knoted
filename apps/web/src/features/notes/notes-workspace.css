@@ -163,9 +163,8 @@
   overflow-wrap: anywhere;
 }
 
-.notes-document .bn-editor,
-.notes-history-preview .bn-editor {
-  padding-inline: clamp(1.875rem, 4vw, 3.375rem) 0.25rem;
+.notes-history-preview .mt-block-editor .bn-editor {
+  min-block-size: 8rem;
 }
 
 .notes-document pre,

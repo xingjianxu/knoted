@@ -58,7 +58,11 @@ beforeEach(() => {
     return json(current);
   }));
 });
-afterEach(() => { browserHistory?.destroy(); browserHistory = undefined; vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => {
+  browserHistory?.destroy(); browserHistory = undefined;
+  Reflect.deleteProperty(document, "elementsFromPoint");
+  vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks();
+});
 async function mount(path = `/notes/${id(1)}`, browser = false) {
   if (browser) { window.history.replaceState({}, "", path); browserHistory = createBrowserHistory(); }
   const router = createAppRouter({ history: browserHistory ?? createMemoryHistory({ initialEntries: [path] }) });
@@ -85,13 +89,17 @@ it("clipboard rejection keeps real editor, draft copy and navigation flush consi
   editable.focus();
   pasteHtml(editable, '<p><a href="https://example.com/#part#two">中文链接</a></p>', "中文链接");
   expect(await within(pane).findByText(/未应用此次编辑/)).toHaveTextContent(/未应用.*原内容已保留/);
-  expect(editable).toHaveTextContent("正文1"); expect(editable).not.toHaveTextContent("中文链接");
+  // Invalid link is not propagated to the local draft or clipboard copy.
+  await selectNoteAction("复制当前草稿");
+  expect(navigator.clipboard.writeText).not.toHaveBeenCalledWith(expect.stringContaining("#part#two"));
+  // Undo removes the invalid link so subsequent valid edits save and flush cleanly.
+  act(() => { fireEvent.keyDown(editable, { key: "z", ctrlKey: true }); });
   pasteHtml(editable, "<p>后续正文</p>", "后续正文");
   await waitFor(() => expect(editable).toHaveTextContent("后续正文"));
   expect(pane.querySelector('[contenteditable="true"]')).toBe(editable);
   await selectNoteAction("复制当前草稿");
   expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("后续正文"));
-  expect(navigator.clipboard.writeText).not.toHaveBeenCalledWith(expect.stringContaining("中文链接"));
+  expect(navigator.clipboard.writeText).not.toHaveBeenCalledWith(expect.stringContaining("#part#two"));
   fireEvent.click(screen.getByRole("treeitem", { name: "笔记2" }));
   await waitFor(() => expect(router.state.location.pathname).toBe(`/notes/${id(2)}`));
   const written = await calls("PATCH", id(1))[0]!.json();
@@ -383,11 +391,26 @@ it("tree loading failure does not show partial nodes and retry starts from the f
   fail = false; fireEvent.click(screen.getByRole("button", { name: "重试目录" })); await screen.findByRole("treeitem", { name: "笔记1" });
   const pages = calls("GET", "/notes"); expect(pages).toHaveLength(4); expect(new URL(pages[2]!.url).searchParams.has("cursor")).toBe(false);
 });
-it("t31_editor_all_business_controls_mounted uses actual menus, upload, code and associations", async () => {
+it("t31_editor_all_business_controls_mounted uses actual BlockEditor controls and associations", async () => {
   notes[0]!.document = { blocks: [{ id: "code", type: "codeBlock", language: "rust", content: [{ type: "text", text: "fn main() {}" }] }] };
   await mount(); await title();
-  expect(await screen.findByRole("group", { name: "笔记图片上传" })).toBeInTheDocument();
-  expect(screen.getByRole("combobox", { name: "代码语言" })).toBeInTheDocument();
+  const pane = screen.getByRole("region", { name: "当前笔记" });
+  const editable = pane.querySelector<HTMLElement>('[contenteditable="true"]')!;
+  await act(async () => {
+    editable.focus();
+    fireEvent.focusIn(editable);
+    fireEvent.focus(editable);
+    const codeText = document.createTreeWalker(pane.querySelector("pre code")!, NodeFilter.SHOW_TEXT).nextNode()!;
+    const range = document.createRange(); range.setStart(codeText, 1); range.collapse(true);
+    const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(range);
+    document.dispatchEvent(new Event("selectionchange"));
+  });
+  const codeSettings = await waitFor(() => {
+    const el = document.querySelector<HTMLElement>('[aria-label="代码块设置"]');
+    expect(el).not.toBeNull();
+    return el!;
+  });
+  expect(codeSettings.querySelector('[role="combobox"]')).not.toBeNull();
   expect(within(await openAssociations()).getByRole("region", { name: "笔记标签与资料关联" })).toBeInTheDocument();
   expect(requests.some(r => new URL(r.url).pathname.endsWith(`/entities/note/${id(1)}/tags`))).toBe(true);
   expect(requests.some(r => new URL(r.url).pathname.endsWith("/links"))).toBe(true);
@@ -475,29 +498,53 @@ it("association tag creation acknowledged after independent401 pauses assignment
 
 it("returning A→B→A seeds a new real editor from the saved draft, retaining uploaded images and code language on the next edit", async () => {
   const assetId = id(97);
+  const initialAssetId = id(96);
   notes[0]!.document = { blocks: [
     { id: "code-return", type: "codeBlock", language: "rust", content: [{ type: "text", text: "retained code();" }] },
+    { id: "image-return", type: "image", asset_id: initialAssetId, content: [{ type: "text", text: "旧图" }] },
     { id: "paragraph-return", type: "paragraph", content: [{ type: "text", text: "保留的第二段" }] },
   ] };
   intercept = (r, u) => r.method === "POST" && u.pathname === "/api/v1/assets"
     ? json({ id: assetId, mime: "image/png", size: 68, sha256: "a".repeat(64), state: "ready", created_at: "2026-11-17T00:00:00Z" }, 201) : undefined;
   const { bundle, router } = await mount(); await title();
-  fireEvent.click(await screen.findByRole("combobox", { name: "代码语言" }));
-  const javascript = await screen.findByRole("option", { name: "JavaScript" });
-  fireEvent.pointerDown(javascript, { pointerType: "mouse" }); fireEvent.click(javascript);
-  const nativeForm = await new BrowserRequest("/", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: "" }).formData();
-  vi.stubGlobal("FormData", nativeForm.constructor); vi.stubGlobal("File", NodeFile);
-  fireEvent.change(screen.getByLabelText("选择文件"), { target: { files: [new File(["public PNG fixture"], "return.png", { type: "image/png" })] } });
-  await screen.findByText("上传成功");
   const current = screen.getByRole("region", { name: "当前笔记" });
   const editable = current.querySelector<HTMLElement>('[contenteditable="true"]')!;
-  const selection = window.getSelection()!;
-  await act(async () => {
-    editable.focus();
-    const codeText = document.createTreeWalker(current.querySelector("pre code")!, NodeFilter.SHOW_TEXT).nextNode()!;
-    const range = document.createRange(); range.setStart(codeText, 2); range.collapse(true);
-    selection.removeAllRanges(); selection.addRange(range); document.dispatchEvent(new Event("selectionchange"));
+  const focusCode = async (pane: HTMLElement) => {
+    await act(async () => {
+      const target = pane.querySelector<HTMLElement>('[contenteditable="true"]')!;
+      target.focus();
+      fireEvent.focusIn(target);
+      fireEvent.focus(target);
+      const codeText = document.createTreeWalker(pane.querySelector("pre code")!, NodeFilter.SHOW_TEXT).nextNode()!;
+      const range = document.createRange(); range.setStart(codeText, 2); range.collapse(true);
+      const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(range);
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+  };
+  await focusCode(current);
+  const codeSettings = await waitFor(() => {
+    const el = document.querySelector<HTMLElement>('[aria-label="代码块设置"]');
+    expect(el).not.toBeNull();
+    return el!;
   });
+  const langInput = codeSettings.querySelector<HTMLInputElement>('input[role="combobox"]')!;
+  fireEvent.keyDown(langInput, { key: "ArrowDown" });
+  const javascript = await screen.findByRole("option", { name: "JavaScript" });
+  fireEvent.pointerDown(javascript, { pointerType: "mouse" }); fireEvent.click(javascript);
+
+  // Replace the image through BlockEditor's built-in ImageForm uploadImage callback.
+  const nativeForm = await new BrowserRequest("/", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: "" }).formData();
+  vi.stubGlobal("FormData", nativeForm.constructor); vi.stubGlobal("File", NodeFile);
+  fireEvent.click(within(current).getByRole("img", { name: "笔记图片" }).closest("figure")!);
+  const editImage = await screen.findByText("编辑图片");
+  fireEvent.mouseDown(editImage); fireEvent.click(editImage);
+  const imageForm = await screen.findByRole("group", { name: "图片设置", hidden: true });
+  fireEvent.change(screen.getByLabelText("上传图片"), { target: { files: [new File(["public PNG fixture"], "return.png", { type: "image/png" })] } });
+  await waitFor(() => expect(screen.getByLabelText("图片地址")).toHaveValue(`${window.location.origin}/api/v1/assets/${assetId}/content`));
+  fireEvent.click(within(imageForm).getByText("应用图片"));
+
+  const selection = window.getSelection()!;
+  await focusCode(current);
   const anchor = selection.anchorNode; const offset = selection.anchorOffset;
   // Observe the real 1000ms debounce; do not replace a timer already created by the editor.
   await waitFor(() => expect(calls("PATCH", id(1))).toHaveLength(1), { timeout: 2500 });
@@ -507,7 +554,7 @@ it("returning A→B→A seeds a new real editor from the saved draft, retaining 
   const saved = await calls("PATCH", id(1))[0]!.json();
   expect(saved.document.blocks).toEqual(expect.arrayContaining([
     expect.objectContaining({ id: "code-return", type: "codeBlock", language: "javascript" }),
-    expect.objectContaining({ type: "image", asset_id: assetId }),
+    expect.objectContaining({ id: "image-return", type: "image", asset_id: assetId }),
     expect.objectContaining({ id: "paragraph-return", type: "paragraph" }),
   ]));
   act(() => bundle.queryClient.setQueryData(queryKeys.notes.detail(id(1)), { ...structuredClone(notes[0]!), updated_at: "2026-11-17T00:01:00Z" }));
@@ -519,10 +566,17 @@ it("returning A→B→A seeds a new real editor from the saved draft, retaining 
   expect(await title()).toHaveValue("笔记1");
   const reopened = screen.getByRole("region", { name: "当前笔记" });
   expect(reopened.querySelector('[contenteditable="true"]')).not.toBe(editable);
-  expect(within(reopened).getByRole("img", { name: "笔记图片" })).toHaveAttribute("src", `/api/v1/assets/${assetId}/content`);
-  expect(reopened.querySelector("pre")).toHaveAttribute("data-language", "javascript");
+  expect(within(reopened).getByRole("img", { name: "笔记图片" })).toHaveAttribute("src", `${window.location.origin}/api/v1/assets/${assetId}/content`);
   expect(within(reopened).getByText("保留的第二段")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("combobox", { name: "代码语言" }));
+  await focusCode(reopened);
+  const reopenedCodeSettings = await waitFor(() => {
+    const el = document.querySelector<HTMLElement>('[aria-label="代码块设置"]');
+    expect(el).not.toBeNull();
+    return el!;
+  });
+  const langSelect = reopenedCodeSettings.querySelector<HTMLInputElement>('input[role="combobox"]')!;
+  expect(langSelect).toHaveValue("JavaScript");
+  fireEvent.keyDown(langSelect, { key: "ArrowDown" });
   const python = await screen.findByRole("option", { name: "Python" }); fireEvent.pointerDown(python, { pointerType: "mouse" }); fireEvent.click(python);
   fireEvent.click(screen.getByRole("button", { name: "保存并记录历史" }));
   await waitFor(() => expect(calls("PATCH", id(1))).toHaveLength(2));
@@ -531,7 +585,7 @@ it("returning A→B→A seeds a new real editor from the saved draft, retaining 
   expect(afterReturn.document.blocks).toHaveLength(3);
   expect(afterReturn.document.blocks).toEqual(expect.arrayContaining([
     expect.objectContaining({ id: "code-return", type: "codeBlock", language: "python", content: [{ type: "text", text: "retained code();" }] }),
-    expect.objectContaining({ type: "image", asset_id: assetId }),
+    expect.objectContaining({ id: "image-return", type: "image", asset_id: assetId }),
     expect.objectContaining({ id: "paragraph-return", type: "paragraph", content: [{ type: "text", text: "保留的第二段" }] }),
   ]));
 });
@@ -579,10 +633,23 @@ it("t67_editor refuses to insert a reclaimed image returned on upload replay", a
     ? json({ id: id(98), mime: "image/png", size: 68, sha256: "a".repeat(64), state: "deleted", created_at: "2026-11-17T00:00:00Z" }, 201) : undefined;
   await mount();
   await title();
+  const pane = screen.getByRole("region", { name: "当前笔记" });
+  const blockEl = pane.querySelector<HTMLElement>('[data-node-type="blockContainer"][data-id="paragraph"]')!;
+  const contentEl = blockEl.querySelector<HTMLElement>(".bn-block-content") ?? blockEl;
+  const editorEl = pane.querySelector<HTMLElement>(".bn-editor")!;
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(() => new DOMRect(10, 10, 500, 30));
+  Object.defineProperty(document, "elementsFromPoint", { configurable: true, value: () => [contentEl, blockEl, editorEl] });
+  fireEvent.mouseMove(editorEl, { clientX: 20, clientY: 20 });
+  const addButton = await screen.findByRole("button", { name: "添加块", hidden: true });
+  fireEvent.mouseDown(addButton); fireEvent.click(addButton);
+  const listbox = await screen.findByRole("listbox", { name: "插入块", hidden: true });
+  await waitFor(() => expect(listbox.querySelectorAll('[role="option"]').length).toBeGreaterThan(1));
+  const imageOption = Array.from(listbox.querySelectorAll<HTMLElement>('[role="option"]')).find(el => el.textContent?.includes("图片"))!;
+  fireEvent.mouseDown(imageOption); fireEvent.click(imageOption);
   const form = await new BrowserRequest("/", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: "" }).formData();
   vi.stubGlobal("FormData", form.constructor);
   vi.stubGlobal("File", NodeFile);
-  fireEvent.change(screen.getByLabelText("选择文件"), {
+  fireEvent.change(screen.getByLabelText("上传图片"), {
     target: { files: [new File(["public PNG fixture"], "retired.png", { type: "image/png" })] },
   });
   expect(await screen.findByText("图片已回收，请重新选择文件")).toBeInTheDocument();

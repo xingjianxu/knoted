@@ -15,8 +15,6 @@ import { createNoteDraftStore, useNoteAutosave, type Note, type NoteDraftStore, 
 import { ConflictDialog } from "./ConflictDialog";
 import { HistoryPanel } from "./HistoryPanel";
 import { NoteEditor } from "./editor";
-import { SlashMenu, BlockMenu } from "./editor/menus";
-import { ImageBlockControls, CodeBlockControls } from "./editor/blocks";
 import { NoteAssociations } from "./links/NoteAssociations";
 import { NotesNavigationBlocked } from "./navigation";
 import { descendants, noteQuery, notesTreeQuery, noteTree } from "./queries";
@@ -580,12 +578,12 @@ function NotePane({
           <div className="notes-document reading-measure" hidden={history} inert={history}>
             <NoteEditor
               key={`${initialNote.id}:${autosave.resetEpoch}`}
+              documentKey={`${initialNote.id}:${autosave.resetEpoch}`}
               document={autosave.draft.document}
               readOnly={unavailable}
+              client={bundle.api}
               onChange={document => { if (!pending.current && !expired) autosave.changeDraft({ document }); }}
-            >
-              <SlashMenu /><BlockMenu /><ImageBlockControls client={bundle.api} /><CodeBlockControls />
-            </NoteEditor>
+            />
           </div>
 
           {history && (

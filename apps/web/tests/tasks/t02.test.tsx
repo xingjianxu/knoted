@@ -84,6 +84,10 @@ describe("t02 web scaffold", () => {
         file: requireWeb.resolve("@bixlab/mtone/styles.css"),
         text: readFileSync(requireWeb.resolve("@bixlab/mtone/styles.css"), "utf8"),
       },
+      {
+        file: requireWeb.resolve("@bixlab/mtone-blockeditor/styles.css"),
+        text: readFileSync(requireWeb.resolve("@bixlab/mtone-blockeditor/styles.css"), "utf8"),
+      },
     ];
 
     const remoteFontPatterns = [

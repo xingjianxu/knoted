@@ -1,6 +1,7 @@
 @layer theme, base, mtone, components, utilities;
 @import "tailwindcss";
 @import "@bixlab/mtone/styles.css" layer(mtone);
+@import "@bixlab/mtone-blockeditor/styles.css" layer(mtone);
 
 @theme {
   --font-sans:
