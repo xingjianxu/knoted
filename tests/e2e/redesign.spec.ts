@@ -412,3 +412,98 @@ test("笔记页使用 Splitter 左右分栏，默认展示树根首篇笔记并�
   await expect(page.getByRole("textbox", { name: "笔记标题" })).toHaveValue(child.title);
   await expect(current).toContainText("子笔记正文内容");
 });
+
+test("笔记编辑器消费 mtone-blockeditor：斜杠菜单、图片上传资产映射与不支持块提示", async ({ page }) => {
+  test.skip(baseline, "改版后的编辑器回归");
+  const uploadedAssetId = id(901);
+  const pngBytes = await readFile(resolve(__dirname, "../../apps/web/tests/fixtures/t50/chinese.png"));
+  const patches: unknown[] = [];
+  let version = 2;
+
+  await fixtures(page);
+  await page.route(`**/api/v1/notes/${note.id}`, route => {
+    if (route.request().method() === "PATCH") {
+      const body = route.request().postDataJSON();
+      patches.push(body);
+      version += 1;
+      return route.fulfill({ json: { ...note, ...body, content_version: version } });
+    }
+    return route.fulfill({
+      json: {
+        ...note,
+        content_version: version,
+        document: { blocks: [{ id: id(100), type: "paragraph", content: [{ type: "text", text: "初始内容" }] }] },
+      },
+    });
+  });
+  await page.route(`**/api/v1/notes/${note.id}/snapshots`, route => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({ status: 201, json: { ...note, note_id: note.id, snapshot_id: id(51), content_version: version, reason: "flush" } });
+    }
+    return route.fallback();
+  });
+  await page.route("**/api/v1/assets", route => route.fulfill({
+    status: 201,
+    json: { id: uploadedAssetId, mime: "image/png", size: pngBytes.length, sha256: "a".repeat(64), state: "ready", created_at: now },
+  }));
+  await page.route(`**/api/v1/assets/${uploadedAssetId}/content`, route => route.fulfill({
+    body: pngBytes,
+    contentType: "image/png",
+  }));
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`http://127.0.0.1:4178/notes/${note.id}`);
+
+  const editor = page.getByRole("textbox", { name: "笔记编辑器" });
+  await expect(editor).toBeVisible();
+  await expect(page.locator(".mt-block-editor")).toBeVisible();
+  await expect(editor).toContainText("初始内容");
+
+  // Type a new line and use the built-in slash menu to insert a heading.
+  await editor.click();
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("/");
+  const slashList = page.getByRole("listbox", { name: "插入块" });
+  await expect(slashList).toBeVisible();
+  await slashList.getByRole("option", { name: "一级标题" }).click();
+  await page.keyboard.type("真实浏览器标题");
+
+  // Insert an uploaded image via built-in slash menu + ImageForm uploadImage callback.
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("/");
+  await expect(slashList).toBeVisible();
+  await slashList.getByRole("option", { name: "图片" }).click();
+  const imageSettings = page.getByRole("group", { name: "图片设置" });
+  await expect(imageSettings).toBeVisible();
+  await imageSettings.getByLabel("上传图片").setInputFiles({
+    name: "chinese.png",
+    mimeType: "image/png",
+    buffer: pngBytes,
+  });
+  await expect(imageSettings.getByLabel("图片地址")).toHaveValue(
+    `http://127.0.0.1:4178/api/v1/assets/${uploadedAssetId}/content`,
+  );
+  await imageSettings.getByRole("button", { name: "应用图片" }).click();
+  const img = page.locator(".mt-block-editor-image img");
+  await expect(img).toBeVisible();
+  await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
+
+  await page.getByRole("button", { name: "保存并记录历史" }).click();
+  await expect.poll(() => patches.length).toBeGreaterThan(0);
+  const savedPayload = JSON.stringify(patches.at(-1));
+  expect(savedPayload).toContain("真实浏览器标题");
+  expect(savedPayload).toContain(`"asset_id":"${uploadedAssetId}"`);
+  expect(savedPayload).not.toContain("/api/v1/assets/");
+
+  // Unsupported block types show a warning banner without corrupting saved drafts.
+  const patchCountBefore = patches.length;
+  await editor.click();
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("/");
+  await expect(slashList).toBeVisible();
+  await slashList.getByRole("option", { name: "分割线" }).click();
+  await expect(page.getByRole("region", { name: "笔记编辑器" }).getByRole("status")).toContainText("未应用此次编辑");
+  expect(patches).toHaveLength(patchCountBefore);
+});

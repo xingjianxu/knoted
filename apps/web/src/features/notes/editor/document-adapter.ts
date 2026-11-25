@@ -1,13 +1,88 @@
+import type { BlockEditorBlock, BlockEditorInput } from "@bixlab/mtone-blockeditor";
 import type { components } from "@knoted/api-client";
-
-import type { EditorBlock, EditorPartialBlock } from "./schema";
 
 export type NoteDocument = components["schemas"]["NoteDocument"];
 type NoteBlock = components["schemas"]["NoteBlock"];
 type InlineNode = components["schemas"]["InlineNode"];
 type Mark = components["schemas"]["InlineMark"];
+
+const MAX_BLOCKS = 5000;
+const MAX_DEPTH = 8;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const marks: Mark[] = ["bold", "italic", "underline", "strike", "code"];
-const blockTypes: NoteBlock["type"][] = ["heading", "paragraph", "bulletListItem", "numberedListItem", "checkListItem", "image", "codeBlock"];
+const blockTypes: NoteBlock["type"][] = [
+  "heading",
+  "paragraph",
+  "bulletListItem",
+  "numberedListItem",
+  "checkListItem",
+  "image",
+  "codeBlock",
+];
+const unsupportedBlockLabels: Readonly<Record<string, string>> = {
+  quote: "引用",
+  table: "表格",
+  divider: "分割线",
+  toggleListItem: "折叠块",
+  callout: "提示块",
+  video: "视频",
+  audio: "音频",
+  file: "附件",
+};
+
+function assetOrigin(): string {
+  if (typeof window !== "undefined" && /^https?:\/\//i.test(window.location.origin)) {
+    return window.location.origin;
+  }
+  return "http://localhost";
+}
+
+export function isAssetUuid(value: string): boolean {
+  return UUID_PATTERN.test(value);
+}
+
+/** Build a same-origin HTTP(S) URL accepted by @bixlab/mtone-blockeditor's safeImageUrl check. */
+export function assetIdToUrl(assetId: string): string {
+  if (!isAssetUuid(assetId)) throw new Error("图片资产 ID 无效");
+  return `${assetOrigin()}/api/v1/assets/${encodeURIComponent(assetId)}/content`;
+}
+
+/** Extract a persisted Knoted asset UUID from a same-origin asset content URL. */
+export function urlToAssetId(rawUrl: string): string | null {
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return null;
+  let pathname: string;
+  if (trimmed.startsWith("/")) {
+    if (trimmed.includes("?") || trimmed.includes("#")) return null;
+    pathname = trimmed;
+  } else {
+    let parsed: URL;
+    try {
+      parsed = new URL(trimmed);
+    } catch {
+      return null;
+    }
+    if (
+      parsed.origin !== assetOrigin()
+      || parsed.username
+      || parsed.password
+      || parsed.search
+      || parsed.hash
+    ) {
+      return null;
+    }
+    pathname = parsed.pathname;
+  }
+  const match = pathname.match(/^\/api\/v1\/assets\/([^/]+)\/content$/);
+  if (!match) return null;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(match[1]!);
+  } catch {
+    return null;
+  }
+  return isAssetUuid(decoded) ? decoded : null;
+}
 
 export function safeHref(href: string): string {
   // Match the backend's URI (not IRI) spelling contract before WHATWG URL
@@ -33,17 +108,25 @@ export function safeHref(href: string): string {
   return href;
 }
 
-/** Explicit DTO boundary: BlockNote props/styles/link.content never reach HTTP. */
-export function toEditorBlocks(document: NoteDocument): EditorPartialBlock[] {
+function plainText(nodes: readonly InlineNode[] | undefined): string {
+  return (nodes ?? []).map((node) => node.text).join("");
+}
+
+/** Explicit DTO boundary: BlockEditor props/styles/URLs never reach HTTP. */
+export function toEditorBlocks(document: NoteDocument): BlockEditorInput[] {
   const ids = new Set<string>();
   let count = 0;
-  function convert(block: NoteBlock, depth: number): EditorPartialBlock {
+
+  function convert(block: NoteBlock, depth: number): BlockEditorInput {
     if (!blockTypes.includes(block.type)) throw new Error("不支持的笔记块");
     if (!block.id || [...block.id].length > 64 || ids.has(block.id)) throw new Error("笔记块 ID 无效");
     ids.add(block.id);
-    if (++count > 5000 || depth > 8) throw new Error("笔记块超出限制");
+    if (++count > MAX_BLOCKS || depth > MAX_DEPTH) throw new Error("笔记块超出限制");
     if (block.type === "heading" && ![1, 2, 3].includes(block.level ?? 0)) throw new Error("标题级别无效");
-    if (block.type === "image" && !block.asset_id) throw new Error("图片缺少资产 ID");
+    if (block.type === "image" && (!block.asset_id || !isAssetUuid(block.asset_id))) {
+      throw new Error("图片缺少有效资产 ID");
+    }
+
     const content = (block.content ?? []).map((node) => {
       if (node.type !== "text" && node.type !== "link") throw new Error("不支持的行内格式");
       if (node.href !== undefined) safeHref(node.href);
@@ -52,58 +135,261 @@ export function toEditorBlocks(document: NoteDocument): EditorPartialBlock[] {
         if (!marks.includes(mark)) throw new Error("不支持的文字格式");
         styles[mark] = true;
       }
-      const text = { type: "text" as const, text: node.text, styles };
+      // BlockEditor uses BlockNote's default code mark (excludes: "_"), which
+      // cannot coexist with link or bold/italic/underline/strike in ProseMirror.
+      let editorStyles: Partial<Record<Mark, boolean>>;
+      if (node.type === "link") {
+        editorStyles = { ...styles };
+        delete editorStyles.code;
+      } else {
+        editorStyles = styles.code ? { code: true } : styles;
+      }
+      const text = { type: "text" as const, text: node.text, styles: editorStyles };
       return node.type === "link"
         ? { type: "link" as const, href: safeHref(node.href ?? ""), content: [text] }
         : text;
     });
-    return {
-      id: block.id,
-      type: block.type,
-      props: {
-        ...(block.level !== undefined ? { level: block.level } : {}),
-        ...(block.checked !== undefined ? { checked: block.checked } : {}),
-        ...(block.language !== undefined ? { language: block.language } : {}),
-        ...(block.asset_id !== undefined ? { assetId: block.asset_id } : {}),
-      },
-      content,
-      children: (block.children ?? []).map((child) => convert(child, depth + 1)),
-    } as EditorPartialBlock;
+
+    const children = (block.children ?? []).map((child) => convert(child, depth + 1));
+
+    switch (block.type) {
+      case "heading":
+        return {
+          id: block.id,
+          type: "heading",
+          props: { level: block.level as 1 | 2 | 3 },
+          content,
+          children,
+        };
+      case "checkListItem":
+        return {
+          id: block.id,
+          type: "checkListItem",
+          props: { checked: block.checked ?? false },
+          content,
+          children,
+        };
+      case "codeBlock": {
+        const text = plainText(block.content);
+        return {
+          id: block.id,
+          type: "codeBlock",
+          props: { language: block.language ? block.language : "text" },
+          ...(text ? { content: text } : {}),
+          children,
+        };
+      }
+      case "image":
+        return {
+          id: block.id,
+          type: "image",
+          props: {
+            url: assetIdToUrl(block.asset_id!),
+            alt: "笔记图片",
+            caption: plainText(block.content),
+          },
+          children,
+        };
+      case "paragraph":
+      case "bulletListItem":
+      case "numberedListItem":
+        return {
+          id: block.id,
+          type: block.type,
+          content,
+          children,
+        };
+    }
   }
+
   return document.blocks.map((block) => convert(block, 1));
 }
 
-// Initial sidecar data preserves unchanged inline run boundaries/mark ordering.
-// Semantic fields come exclusively from shared editor props, so native history
-// and type transitions can never resurrect an obsolete initial value.
-export function fromEditorBlocks(blocks: EditorBlock[], source?: NoteDocument): NoteDocument {
+// Initial sidecar data preserves unchanged inline run boundaries/mark ordering
+// and untouched block metadata while enforcing the NoteDocument v1 allowlist.
+export function fromEditorBlocks(
+  blocks: readonly BlockEditorBlock[],
+  source?: NoteDocument,
+): NoteDocument {
   const originals = new Map<string, NoteBlock>();
-  function remember(blocks: NoteBlock[]) {
-    for (const block of blocks) { originals.set(block.id, block); remember(block.children ?? []); }
+  function remember(list: readonly NoteBlock[]) {
+    for (const block of list) {
+      originals.set(block.id, block);
+      remember(block.children ?? []);
+    }
   }
   remember(source?.blocks ?? []);
-  function equivalent(left: InlineNode[], right: InlineNode[]) {
-    const normalize = (nodes: InlineNode[]) => {
+
+  function equivalent(left: readonly InlineNode[], right: readonly InlineNode[]) {
+    const normalize = (nodes: readonly InlineNode[]) => {
       const runs: { type: string; text: string; href?: string; marks: string }[] = [];
       for (const node of nodes) {
-        const run = { type: node.type, text: node.text,
+        const activeMarks = marks.filter((mark) => node.marks?.includes(mark));
+        const normalizedMarks = node.type === "link"
+          ? activeMarks.filter((mark) => mark !== "code")
+          : activeMarks.includes("code")
+            ? ["code"]
+            : activeMarks;
+        const run = {
+          type: node.type,
+          text: node.text,
           href: node.type === "link" ? node.href : undefined,
-          marks: marks.filter((mark) => node.marks?.includes(mark)).join(","),
+          marks: normalizedMarks.join(","),
         };
         const previous = runs.at(-1);
-        if (previous && previous.type === run.type && previous.href === run.href && previous.marks === run.marks) previous.text += run.text;
-        else if (run.text) runs.push(run);
+        if (previous && previous.type === run.type && previous.href === run.href && previous.marks === run.marks) {
+          previous.text += run.text;
+        } else if (run.text) {
+          runs.push(run);
+        }
       }
       return runs;
     };
     return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
   }
-  function convert(block: EditorBlock): NoteBlock {
+
+  function validateOriginalHrefs(original: NoteBlock | undefined) {
+    for (const node of original?.content ?? []) {
+      if (node.href !== undefined) safeHref(node.href);
+    }
+  }
+
+  const seenIds = new Set<string>();
+  let count = 0;
+
+  function convert(block: BlockEditorBlock, depth: number): NoteBlock {
+    if (++count > MAX_BLOCKS || depth > MAX_DEPTH) {
+      throw new Error("笔记块数量或嵌套层级超出保存限制（最多 5000 块、8 层嵌套）");
+    }
+    if (!block.id || [...block.id].length > 64 || seenIds.has(block.id)) {
+      throw new Error("笔记块 ID 无效");
+    }
+    seenIds.add(block.id);
+
+    const original = originals.get(block.id);
+    const sameType = original?.type === block.type;
+    const retained: Partial<NoteBlock> = sameType ? { ...original } : {};
+    delete retained.level;
+    delete retained.checked;
+    delete retained.language;
+    delete retained.asset_id;
+    delete retained.content;
+    delete retained.children;
+
+    const children = block.children.map((child) => convert(child, depth + 1));
+    const childrenField = children.length || (sameType && original?.children) ? { children } : {};
+
+    switch (block.type) {
+      case "heading": {
+        if (![1, 2, 3].includes(block.props.level)) {
+          throw new Error("暂不支持保存 4–6 级标题，请调整为 1–3 级标题后再保存");
+        }
+        const content = convertInlineContent(block.content);
+        const unchanged = sameType && equivalent(original?.content ?? [], content);
+        if (unchanged) validateOriginalHrefs(original);
+        return {
+          ...retained,
+          id: block.id,
+          type: "heading",
+          level: block.props.level as 1 | 2 | 3,
+          ...(unchanged
+            ? (original?.content ? { content: original.content } : {})
+            : (content.length || (sameType && original?.content) ? { content } : {})),
+          ...childrenField,
+        };
+      }
+      case "paragraph":
+      case "bulletListItem":
+      case "numberedListItem": {
+        const content = convertInlineContent(block.content);
+        const unchanged = sameType && equivalent(original?.content ?? [], content);
+        if (unchanged) validateOriginalHrefs(original);
+        return {
+          ...retained,
+          id: block.id,
+          type: block.type,
+          ...(unchanged
+            ? (original?.content ? { content: original.content } : {})
+            : (content.length || (sameType && original?.content) ? { content } : {})),
+          ...childrenField,
+        };
+      }
+      case "checkListItem": {
+        const content = convertInlineContent(block.content);
+        const unchanged = sameType && equivalent(original?.content ?? [], content);
+        if (unchanged) validateOriginalHrefs(original);
+        return {
+          ...retained,
+          id: block.id,
+          type: "checkListItem",
+          checked: Boolean(block.props.checked),
+          ...(unchanged
+            ? (original?.content ? { content: original.content } : {})
+            : (content.length || (sameType && original?.content) ? { content } : {})),
+          ...childrenField,
+        };
+      }
+      case "codeBlock": {
+        const text = block.content.map((node) => node.text).join("");
+        const unchanged = sameType && plainText(original?.content) === text;
+        if (unchanged) validateOriginalHrefs(original);
+        const rawLanguage = block.props.language;
+        let language: string | undefined;
+        if (sameType && rawLanguage === "text" && (original?.language === undefined || original.language === "" || original.language === "text")) {
+          language = original?.language;
+        } else {
+          language = rawLanguage === "text" ? "" : rawLanguage;
+        }
+        const content: InlineNode[] = text ? [{ type: "text", text }] : [];
+        return {
+          ...retained,
+          id: block.id,
+          type: "codeBlock",
+          ...(language !== undefined ? { language } : {}),
+          ...(unchanged
+            ? (original?.content ? { content: original.content } : {})
+            : (content.length || (sameType && original?.content) ? { content } : {})),
+          ...childrenField,
+        };
+      }
+      case "image": {
+        const assetId = urlToAssetId(block.props.url);
+        if (!assetId) {
+          throw new Error("图片需通过“上传图片”上传后才能保存，暂不支持直接保存外部图片地址");
+        }
+        const caption = block.props.caption ?? "";
+        const unchanged = sameType && plainText(original?.content) === caption;
+        if (unchanged) validateOriginalHrefs(original);
+        const content: InlineNode[] = caption ? [{ type: "text", text: caption }] : [];
+        return {
+          ...retained,
+          id: block.id,
+          type: "image",
+          asset_id: assetId,
+          ...(unchanged
+            ? (original?.content ? { content: original.content } : {})
+            : (content.length || (sameType && original?.content) ? { content } : {})),
+          ...childrenField,
+        };
+      }
+      default: {
+        const label = unsupportedBlockLabels[block.type] ?? block.type;
+        throw new Error(`当前笔记格式暂不支持保存「${label}」块，请移除或转换为支持的块类型后再保存`);
+      }
+    }
+  }
+
+  function convertInlineContent(
+    nodes: readonly (
+      | { type: "text"; text: string; styles: Partial<Record<string, unknown>> }
+      | { type: "link"; href: string; content: readonly { type: "text"; text: string; styles: Partial<Record<string, unknown>> }[] }
+    )[],
+  ): InlineNode[] {
     const content: InlineNode[] = [];
-    for (const node of block.content) {
+    for (const node of nodes) {
       const texts = node.type === "link" ? node.content : [node];
       for (const text of texts) {
-        const active = marks.filter((mark) => text.styles[mark]);
+        const active = marks.filter((mark) => Boolean(text.styles[mark]));
         content.push({
           type: node.type,
           text: text.text,
@@ -112,27 +398,8 @@ export function fromEditorBlocks(blocks: EditorBlock[], source?: NoteDocument): 
         });
       }
     }
-    const original = originals.get(block.id);
-    const unchanged = original && equivalent(original.content ?? [], content);
-    if (unchanged) {
-      for (const node of original.content ?? []) if (node.href !== undefined) safeHref(node.href);
-    }
-    const retained = { ...original };
-    delete retained.level;
-    delete retained.checked;
-    delete retained.language;
-    delete retained.asset_id;
-    return {
-      ...retained,
-      id: block.id,
-      type: block.type,
-      ...(block.props.level !== undefined ? { level: block.props.level } : {}),
-      ...(block.props.checked !== undefined ? { checked: block.props.checked } : {}),
-      ...(block.props.assetId !== undefined ? { asset_id: block.props.assetId } : {}),
-      ...(block.props.language !== undefined ? { language: block.props.language } : {}),
-      ...(unchanged ? {} : (content.length || original?.content ? { content } : {})),
-      ...(block.children.length || original?.children ? { children: block.children.map(convert) } : {}),
-    };
+    return content;
   }
-  return { blocks: blocks.map(convert) };
+
+  return { blocks: blocks.map((block) => convert(block, 1)) };
 }

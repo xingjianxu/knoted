@@ -5,8 +5,7 @@ import { createApiClient, type components } from "@knoted/api-client";
 import { createNoteDraftStore, useNoteAutosave } from "../../src/features/notes/autosave";
 
 import { useEffect, useState } from "react";
-import { useBlockNoteEditor } from "@blocknote/react";
-import { NoteEditor, noteEditorSchema, type NoteEditorInstance } from "../../src/features/notes/editor";
+import { NoteEditor } from "../../src/features/notes/editor";
 import { ConflictDialog } from "../../src/features/notes/ConflictDialog";
 import { UiProvider } from "../../src/lib/ui-provider";
 
@@ -242,33 +241,53 @@ it("t30_editor_instance_and_reset_contract preserves real editor/selection/compo
     return request.method === "PATCH" ? save.promise : request.method === "GET" ? json(note("a", 9, "remote")) : json(snapshot(2), 201);
   } });
   const queryClient = new QueryClient({ defaultOptions: { queries: { gcTime: Infinity } } });
-  const store = createNoteDraftStore({ api, queryClient }); const instances: NoteEditorInstance[] = [];
+  const store = createNoteDraftStore({ api, queryClient });
   let current!: ReturnType<typeof useNoteAutosave>;
-  function Probe() { const editor = useBlockNoteEditor(noteEditorSchema); useEffect(() => { instances.push(editor); }, [editor]); return null; }
   function Harness({ initialNote }: { initialNote: Note }) {
     const session = useNoteAutosave({ initialNote, draftStore: store });
     useEffect(() => { current = session; });
-    return <UiProvider><NoteEditor key={`${initialNote.id}:${session.resetEpoch}`} document={session.initialDocument} onChange={document => session.changeDraft({ document })}><Probe /></NoteEditor></UiProvider>;
+    return (
+      <UiProvider>
+        <NoteEditor
+          key={`${initialNote.id}:${session.resetEpoch}`}
+          documentKey={`${initialNote.id}:${session.resetEpoch}`}
+          document={session.initialDocument}
+          onChange={document => session.changeDraft({ document })}
+        />
+      </UiProvider>
+    );
   }
-  const view = render(<Harness initialNote={note()} />); await waitFor(() => expect(instances).toHaveLength(1));
-  const editor = instances[0]!; act(() => editor.setTextCursorPosition("p", "end"));
-  const editable = view.container.querySelector("[contenteditable=true]")!;
+  const view = render(<Harness initialNote={note()} />);
+  const editable = await waitFor(() => {
+    const el = view.container.querySelector<HTMLElement>("[contenteditable=true]");
+    expect(el).not.toBeNull();
+    return el!;
+  });
+  editable.focus();
   fireEvent.compositionStart(editable);
   act(() => current.changeDraft({ title: "saved title" }));
   let flush!: Promise<unknown>; act(() => { flush = current.flush(); });
   await act(async () => { save.resolve(json(note("a", 2, "saved title"))); await flush; });
-  expect(instances).toHaveLength(1); expect(editor.getTextCursorPosition().block.id).toBe("p");
+  expect(view.container.querySelector("[contenteditable=true]")).toBe(editable);
   await act(async () => { await current.runStructuralMutation(async (id, base) => {
     expect(id).toBe("a"); expect(base).toBe(2);
     return { ...note("a", 3, "saved title"), document: doc(), parent_id: "folder" };
   }); });
-  expect(instances).toHaveLength(1); expect(current.resetEpoch).toBe(0);
+  expect(view.container.querySelector("[contenteditable=true]")).toBe(editable);
+  expect(current.resetEpoch).toBe(0);
   view.rerender(<Harness initialNote={note("a", 8, "query remote")} />);
-  expect(current.baseVersion).toBe(3); expect(current.serverUpdated).toBe(true); expect(instances).toHaveLength(1); expect(editor.getBlock("p")!.content).toMatchObject([{ text: "initial" }]);
+  expect(current.baseVersion).toBe(3); expect(current.serverUpdated).toBe(true);
+  expect(view.container.querySelector("[contenteditable=true]")).toBe(editable);
+  expect(editable).toHaveTextContent("initial");
   fireEvent.compositionEnd(editable);
   await act(async () => { await current.loadServer(); });
-  await waitFor(() => expect(instances).toHaveLength(2)); expect(instances[1]).not.toBe(editor);
-  expect(current.baseVersion).toBe(9); expect(current.resetEpoch).toBe(1); expect(instances[1]!.getBlock("p")!.content).toMatchObject([{ text: "remote" }]);
+  await waitFor(() => {
+    const next = view.container.querySelector<HTMLElement>("[contenteditable=true]");
+    expect(next).not.toBeNull();
+    expect(next).not.toBe(editable);
+    expect(next).toHaveTextContent("remote");
+  });
+  expect(current.baseVersion).toBe(9); expect(current.resetEpoch).toBe(1);
 });
 it("t30_clipboard_and_dialog uses public mtone controls, blocks duplicate actions and dismisses without clearing conflict", async () => {
   vi.useFakeTimers(); const { result } = setup(async () => failure(409));

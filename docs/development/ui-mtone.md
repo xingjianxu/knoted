@@ -13,7 +13,7 @@
 
 ## 现状与目标
 
-当前精确依赖为 **`@bixlab/mtone@0.13.2`**（`apps/web/package.json` / `pnpm-lock.yaml`，仓库根目录 `.npmrc` 固定使用官方源 `https://registry.npmjs.org/`）。下文保留 T17—T19 的原始接入与各版本升级记录。
+当前精确依赖为 **`@bixlab/mtone@0.15.2`** 与 **`@bixlab/mtone-blockeditor@0.2.0`**（`apps/web/package.json` / `pnpm-lock.yaml`，仓库根目录 `.npmrc` 固定使用官方源 `https://registry.npmjs.org/`），已移除前端对 `@blocknote/core` / `@blocknote/react` 的直接依赖与自建编辑器 UI。下文保留 T17—T19 的原始接入与各版本升级记录。
 
 T17 已精确接入 npm `@bixlab/mtone@0.2.0`，迁移 App 静态类并移除 `packages/ui`；**PR #42 已普通 merge 至主线 `e3e1db2`，独立审查/主线验证/任务清理完成**。T17 接入时，生产入口使用应用层 `UiProvider` 配置公开 `MtoneProvider`，不转发控件 API；CSS 从应用样式入口导入。基础表单组合仅在测试夹具中，不建立生产演示路由或通用包装库。证据见 [T17](../plans/knoted-v1/evidence/t17.md)。
 
@@ -33,7 +33,7 @@ T19 新增生产应用游标 reducer `apps/web/src/lib/cursor-state.ts`（无 UI
 
 基础控件、可访问性、设计变量优先由 mtone 提供。应用可用 Tailwind 做布局、用 mtone 公开 tokens 定制，不另建基础控件样式体系；禁止直接包装 Base UI、复制上游源码、私有路径导入、修改 node_modules 或用 patch 绕过缺口。这里不禁止 mtone 自身的 Base UI 传递依赖。
 
-BlockNote 仍只保留编辑核心，关闭默认 UI；工具栏和菜单用 mtone 组合，命令、选区和文档模型在 Knoted。不把完整编辑器、后端或 Knoted DTO 搬进 mtone。
+笔记编辑器由公开包 `@bixlab/mtone-blockeditor` 提供 `BlockEditor` 控件及 `@bixlab/mtone-blockeditor/styles.css`；Knoted 不再直接依赖 `@blocknote/core` / `@blocknote/react` 或维护自建工具栏、斜杠菜单与块控件，只保留 `NoteDocument` v1 双向适配、安全链接/块白名单校验、`/api/v1/assets` 图片上传（`uploadImage`）及自动保存/冲突/历史业务状态。不把后端 DTO 或请求逻辑搬进 mtone。
 
 ## T17 接入与版本锁定
 
@@ -50,6 +50,13 @@ T17 实测：旧 `cn('p-2', 'p-4')` 返回 `p-4`，mtone 的 `cn` 返回 `p-2 p-
 0.2.0 在实施时距发布不足 pnpm 默认最小等待时间；`pnpm-workspace.yaml` 仅为已明确选择、检查过的精确版本添加 minimumReleaseAgeExclude，其他依赖策略保持不变。不改 workspace 通配范围。
 
 只使用 npm 已发布版本作为正式依赖；不以浮动 latest、Git、file/link、未发布 tarball 交付。不修改 API 或业务语义来迁就组件。
+
+## 0.15.2 升级与 `@bixlab/mtone-blockeditor@0.2.0` 编辑器迁移
+
+将精确依赖升级至 **`@bixlab/mtone@0.15.2`** 并新增精确依赖 **`@bixlab/mtone-blockeditor@0.2.0`**，同步更新 `pnpm-workspace.yaml` 精确等待期例外与 `pnpm-lock.yaml`（移除 `apps/web/package.json` 对 `@blocknote/core`、`@blocknote/react` 的直接依赖；新增 `shiki@4.6.0` 与 `@shikijs/engine-oniguruma@4.6.0` 传递依赖，无无关依赖漂移）。[mtone 0.15.2 元数据](https://registry.npmjs.org/@bixlab%2fmtone/0.15.2) · [mtone-blockeditor 0.2.0 元数据](https://registry.npmjs.org/@bixlab%2fmtone-blockeditor/0.2.0) · [任务卡 #286](../tasks/286.md)
+
+- **样式与公开消费**：`apps/web/src/styles.css` 在 `mtone` 层导入 `@bixlab/mtone/styles.css` 与 `@bixlab/mtone-blockeditor/styles.css`；`NoteEditor` 直接消费公开 `BlockEditor`（传入 `documentKey`、`initialContent`、`onChange`、`readOnly`、`label`、`locale="zh"`、`uploadImage`），移除原自建 `schema.tsx`、`formatting-toolbar.tsx`、`menus/*` 与 `blocks/*`。
+- **NoteDocument v1 边界适配**：`document-adapter.ts` 仅依赖 `@bixlab/mtone-blockeditor` 公开类型（`BlockEditorBlock`、`BlockEditorInput`），完成 7 类持久化块、5 种行内标记（含 `BlockEditor` 默认 `code` 互斥标记的无损兼容）、严格 URI 拼写校验与图片 `asset_id` ↔ 同源 `/api/v1/assets/{id}/content` URL 双向映射；`uploadNoteImage` 对接 `POST /api/v1/assets` 与 `Idempotency-Key`，并在 `BlockEditor` 插入后端暂不支持的块类型、外部图片地址或非法链接时给出中文告警且不污染已保存草稿。
 
 ## 0.13.2 升级与笔记页 Splitter 重构
 
