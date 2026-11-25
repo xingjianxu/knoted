@@ -283,6 +283,7 @@ test("笔记历史立即可读，保存冲突后离开及退出均保留草稿",
   if (capture) await page.screenshot({ path: `${capture}/390-note-history.png`, animations: "disabled" });
   await page.getByRole("button", { name: "关闭历史" }).click();
   await expect(history).toBeFocused();
+  await expect(page.getByRole("textbox", { name: "笔记编辑器" })).toBeEditable();
   await editor.fill("当前草稿不能丢失");
   await page.getByRole("button", { name: "更多操作" }).click();
   await page.getByRole("menuitem", { name: "退出登录" }).click();
@@ -413,33 +414,47 @@ test("笔记页使用 Splitter 左右分栏，默认展示树根首篇笔记并�
   await expect(current).toContainText("子笔记正文内容");
 });
 
-test("短笔记的可编辑区域填满桌面分栏和窄屏正文区", async ({ page }) => {
+test("笔记标题和编辑器共用居中的 Container，并随分栏和窄屏收缩", async ({ page }) => {
   test.skip(baseline, "改版后的笔记编辑器布局回归");
   await fixtures(page);
   await page.route(`**/api/v1/notes/${note.id}`, route =>
     route.fulfill({ json: { ...note, document: { blocks: document.blocks.slice(0, 1) } } }),
   );
-  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.setViewportSize({ width: 1920, height: 900 });
   await page.goto(`http://127.0.0.1:4178/notes/${note.id}`);
 
   const pane = page.getByRole("region", { name: "当前笔记" });
-  const editor = pane.getByRole("textbox", { name: "笔记编辑器" });
-  const divider = pane.getByRole("separator");
+  const container = pane.locator(".mt-container");
+  const title = container.getByRole("textbox", { name: "笔记标题" });
+  const editor = container.getByRole("textbox", { name: "笔记编辑器" });
+  const divider = container.getByRole("separator");
+  const sidebar = page.getByRole("complementary", { name: "笔记目录" });
   const expectFilled = async () => {
+    await expect(title).toHaveValue(note.title);
     await expect(editor).toBeVisible();
     await expect(divider).toBeVisible();
-    const [paneBox, editorBox, dividerBox] = await Promise.all([
-      pane.boundingBox(), editor.boundingBox(), divider.boundingBox(),
+    const [paneBox, containerBox, editorBox, dividerBox] = await Promise.all([
+      pane.boundingBox(), container.boundingBox(), editor.boundingBox(), divider.boundingBox(),
     ]);
     expect(paneBox).not.toBeNull();
+    expect(containerBox).not.toBeNull();
     expect(editorBox).not.toBeNull();
     expect(dividerBox).not.toBeNull();
-    expect(Math.abs(editorBox!.x - paneBox!.x)).toBeLessThanOrEqual(2);
-    expect(Math.abs(editorBox!.width - paneBox!.width)).toBeLessThanOrEqual(2);
+    expect(Math.abs(containerBox!.width - Math.min(960, paneBox!.width))).toBeLessThanOrEqual(2);
+    expect(Math.abs(containerBox!.x + containerBox!.width / 2 - (paneBox!.x + paneBox!.width / 2))).toBeLessThanOrEqual(2);
+    expect(Math.abs(editorBox!.x - (containerBox!.x + 16))).toBeLessThanOrEqual(2);
+    expect(Math.abs(editorBox!.width - (containerBox!.width - 32))).toBeLessThanOrEqual(2);
     expect(Math.abs(editorBox!.y - (dividerBox!.y + dividerBox!.height))).toBeLessThanOrEqual(2);
     expect(Math.abs(editorBox!.y + editorBox!.height - (paneBox!.y + paneBox!.height))).toBeLessThanOrEqual(2);
   };
 
+  await expectFilled();
+  expect((await container.boundingBox())!.x).toBeGreaterThan((await pane.boundingBox())!.x);
+  await expect(sidebar).toBeVisible();
+  await expect(container.getByRole("tree")).toHaveCount(0);
+  await expect(container.getByRole("button", { name: "历史版本" })).toHaveCount(0);
+
+  await page.setViewportSize({ width: 1280, height: 900 });
   await expectFilled();
   const before = (await editor.boundingBox())!.width;
   await page.getByRole("separator", { name: "调整分栏 1" }).press("ArrowRight");
