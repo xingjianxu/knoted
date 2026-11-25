@@ -507,3 +507,56 @@ test("笔记编辑器消费 mtone-blockeditor：斜杠菜单、图片上传资�
   await expect(page.getByRole("region", { name: "笔记编辑器" }).getByRole("status")).toContainText("未应用此次编辑");
   expect(patches).toHaveLength(patchCountBefore);
 });
+
+test("笔记编辑页标题输入框在常态、悬停与聚焦态均隐藏边框", async ({ page }) => {
+  test.skip(baseline, "改版后的样式回归");
+  await fixtures(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`http://127.0.0.1:4178/notes/${note.id}`);
+
+  const titleInput = page.getByRole("textbox", { name: "笔记标题" });
+  await expect(titleInput).toHaveValue(note.title);
+
+  const expectBorderless = async () => {
+    const styles = await titleInput.evaluate(el => {
+      const read = (node: Element) => {
+        const s = getComputedStyle(node);
+        return {
+          borderWidths: [s.borderTopWidth, s.borderRightWidth, s.borderBottomWidth, s.borderLeftWidth],
+          borderStyles: [s.borderTopStyle, s.borderRightStyle, s.borderBottomStyle, s.borderLeftStyle],
+          boxShadow: s.boxShadow,
+          outlineStyle: s.outlineStyle,
+        };
+      };
+      return {
+        input: read(el),
+        wrapper: el.parentElement ? read(el.parentElement) : null,
+      };
+    });
+
+    expect(styles.input.borderWidths).toEqual(["0px", "0px", "0px", "0px"]);
+    expect(styles.input.borderStyles).toEqual(["none", "none", "none", "none"]);
+    expect(styles.input.boxShadow).toBe("none");
+    expect(styles.input.outlineStyle).toBe("none");
+    expect(styles.wrapper?.borderWidths).toEqual(["0px", "0px", "0px", "0px"]);
+    expect(styles.wrapper?.boxShadow).toBe("none");
+    expect(styles.wrapper?.outlineStyle).toBe("none");
+  };
+
+  await expectBorderless();
+
+  await titleInput.hover();
+  await expectBorderless();
+
+  await titleInput.click();
+  await expect(titleInput).toBeFocused();
+  await expectBorderless();
+
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Shift+Tab");
+  await expect(titleInput).toBeFocused();
+  await expectBorderless();
+
+  await titleInput.fill("无边框标题验证");
+  await expect(titleInput).toHaveValue("无边框标题验证");
+});
