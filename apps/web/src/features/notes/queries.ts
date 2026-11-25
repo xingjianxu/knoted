@@ -42,7 +42,7 @@ export function noteTree(notes: Note[]): NoteTreeItem[] {
   const groups = new Map<string | null, Note[]>();
   for (const note of notes) { const siblings = groups.get(note.parent_id) ?? []; siblings.push(note); groups.set(note.parent_id, siblings); }
   for (const siblings of groups.values()) siblings.sort((a, b) => a.position - b.position || a.id.localeCompare(b.id));
-  const visit = (parent: string | null, ancestors: Set<string>): NoteTreeItem[] => (groups.get(parent) ?? []).filter(note => !ancestors.has(note.id)).map(note => ({ id: note.id, label: note.title, children: visit(note.id, new Set([...ancestors, note.id])) }));
+  const visit = (parent: string | null, ancestors: Set<string>): NoteTreeItem[] => (groups.get(parent) ?? []).filter(note => !ancestors.has(note.id)).map(note => ({ id: note.id, label: note.title.trim() || "未命名笔记", children: visit(note.id, new Set([...ancestors, note.id])) }));
   return visit(null, new Set());
 }
 export function descendants(notes: Note[], id: string): Set<string> {

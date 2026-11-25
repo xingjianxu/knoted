@@ -743,3 +743,237 @@ it("empty notes index renders the empty state and create entry without errors", 
   expect(screen.getByRole("button", { name: "新建笔记" })).toBeEnabled();
   expect(screen.queryByRole("textbox", { name: "笔记标题" })).not.toBeInTheDocument();
 });
+
+it("sidebar tree node hover actions add a child page directly under the targeted node", async () => {
+  const { router } = await mount();
+  await title();
+  const row2 = screen.getByRole("treeitem", { name: "笔记2" });
+  const hoverActions = row2.querySelectorAll('.mt-tree-action[data-visibility="hover"]');
+  expect(hoverActions).toHaveLength(2);
+
+  const addChild = within(row2).getByRole("button", { name: "新建子页面：笔记2" });
+  expect(within(row2).getByRole("button", { name: "更多页面操作：笔记2" })).toBeInTheDocument();
+  fireEvent.click(addChild);
+
+  await waitFor(() => expect(calls("POST", "/notes")).toHaveLength(1));
+  expect(await calls("POST", "/notes")[0]!.json()).toEqual({
+    title: "未命名笔记",
+    document: { blocks: [] },
+    parent_id: id(2),
+  });
+  await waitFor(() => expect(router.state.location.pathname).toBe(`/notes/${id(99)}`));
+  expect(await screen.findByRole("treeitem", { name: "未命名笔记" })).toBeInTheDocument();
+  expect(screen.getByRole("treeitem", { name: "笔记2" })).toHaveAttribute("aria-expanded", "true");
+});
+
+it("sidebar tree node menu renames inactive and active notes while preserving editor state and handling conflicts", async () => {
+  const { router } = await mount();
+  const currentTitle = await title();
+  const editor = screen.getByRole("region", { name: "当前笔记" }).querySelector('[contenteditable="true"]');
+
+  // Open note 2 once and return to note 1 so note 2 has a retained session in draftStore.
+  fireEvent.click(screen.getByRole("treeitem", { name: "笔记2" }));
+  await waitFor(() => expect(router.state.location.pathname).toBe(`/notes/${id(2)}`));
+  fireEvent.click(screen.getByRole("treeitem", { name: "笔记1" }));
+  await waitFor(() => expect(router.state.location.pathname).toBe(`/notes/${id(1)}`));
+
+  // Rename inactive note 2 from the tree menu without leaving note 1.
+  const row2 = screen.getByRole("treeitem", { name: "笔记2" });
+  fireEvent.click(within(row2).getByRole("button", { name: "更多页面操作：笔记2" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "重命名" }));
+  const renameDialog = await screen.findByRole("dialog", { name: "重命名页面" });
+  const renameInput = within(renameDialog).getByRole("textbox", { name: "页面标题" });
+  expect(renameInput).toHaveValue("笔记2");
+  fireEvent.change(renameInput, { target: { value: "已重命名笔记2" } });
+  fireEvent.click(within(renameDialog).getByRole("button", { name: "确认重命名" }));
+
+  await waitFor(() => expect(calls("PATCH", id(2))).toHaveLength(1));
+  expect(await calls("PATCH", id(2))[0]!.json()).toEqual({ expected_version: 1, title: "已重命名笔记2" });
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "重命名页面" })).not.toBeInTheDocument());
+  expect(await screen.findByRole("treeitem", { name: "已重命名笔记2" })).toBeInTheDocument();
+  expect(router.state.location.pathname).toBe(`/notes/${id(1)}`);
+
+  // Rename active note 1 while keeping the mounted editor instance.
+  const activeEditor = screen.getByRole("region", { name: "当前笔记" }).querySelector('[contenteditable="true"]');
+  expect(activeEditor).not.toBe(editor);
+  const row1 = screen.getByRole("treeitem", { name: "笔记1" });
+  fireEvent.click(within(row1).getByRole("button", { name: "更多页面操作：笔记1" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "重命名" }));
+  const activeDialog = await screen.findByRole("dialog", { name: "重命名页面" });
+  fireEvent.change(within(activeDialog).getByRole("textbox", { name: "页面标题" }), { target: { value: "当前页新标题" } });
+  fireEvent.click(within(activeDialog).getByRole("button", { name: "确认重命名" }));
+
+  await waitFor(() => expect(calls("PATCH", id(1))).toHaveLength(1));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "重命名页面" })).not.toBeInTheDocument());
+  expect(await screen.findByRole("treeitem", { name: "当前页新标题" })).toBeInTheDocument();
+  expect(screen.getByRole("textbox", { name: "笔记标题" })).toHaveValue("当前页新标题");
+  expect(screen.getByRole("region", { name: "当前笔记" }).querySelector('[contenteditable="true"]')).toBe(activeEditor);
+
+  // Switching to renamed note 2 loads the fresh version cleanly without stale session warning.
+  fireEvent.click(screen.getByRole("treeitem", { name: "已重命名笔记2" }));
+  await waitFor(() => expect(router.state.location.pathname).toBe(`/notes/${id(2)}`));
+  expect(await title()).toHaveValue("已重命名笔记2");
+  expect(screen.queryByText(/服务器内容已更新/)).not.toBeInTheDocument();
+
+  // Failed rename surfaces error inside dialog and preserves existing tree label.
+  intercept = r => r.method === "PATCH" ? failure(409) : undefined;
+  const renamedRow = screen.getByRole("treeitem", { name: "当前页新标题" });
+  fireEvent.click(within(renamedRow).getByRole("button", { name: "更多页面操作：当前页新标题" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "重命名" }));
+  const failDialog = await screen.findByRole("dialog", { name: "重命名页面" });
+  fireEvent.change(within(failDialog).getByRole("textbox", { name: "页面标题" }), { target: { value: "冲突标题" } });
+  fireEvent.click(within(failDialog).getByRole("button", { name: "确认重命名" }));
+  expect(await within(failDialog).findByText("fixture failure")).toBeInTheDocument();
+  expect(screen.getByRole("treeitem", { name: "当前页新标题", hidden: true })).toBeInTheDocument();
+  expect(currentTitle).not.toBeInTheDocument();
+});
+
+it("sidebar tree node menu duplicates, copies link, moves, and deletes an inactive note with undo receipt", async () => {
+  let deletedNote: Note | undefined;
+  intercept = (r, u) => {
+    if (r.method === "DELETE" && u.pathname.endsWith(id(2))) {
+      deletedNote = { ...notes.find(n => n.id === id(2))! };
+      notes = notes.filter(n => n.id !== id(2));
+      return new Response(null, { status: 204 });
+    }
+    if (r.method === "POST" && u.pathname.endsWith(`/notes/${id(2)}/restore`)) {
+      const restored = { ...deletedNote!, content_version: deletedNote!.content_version + 1 };
+      notes.push(restored);
+      return json(restored);
+    }
+    return undefined;
+  };
+  const { router } = await mount();
+  await title();
+
+  // Copy link for note 2.
+  const openMenuFor = async (name: string) => {
+    const row = screen.getByRole("treeitem", { name });
+    fireEvent.click(within(row).getByRole("button", { name: `更多页面操作：${name}` }));
+  };
+  await openMenuFor("笔记2");
+  fireEvent.click(await screen.findByRole("menuitem", { name: "复制链接" }));
+  await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(`${window.location.origin}/notes/${id(2)}`));
+
+  // Move inactive note 2 under note 1 without leaving note 1.
+  await openMenuFor("笔记2");
+  fireEvent.click(await screen.findByRole("menuitem", { name: "移动到…" }));
+  const moveDialog = await screen.findByRole("dialog", { name: "移动笔记" });
+  fireEvent.click(within(moveDialog).getByRole("combobox", { name: "目标父笔记" }));
+  const targetTree = await screen.findByRole("tree", { name: "目标父笔记" });
+  expect(within(targetTree).queryByRole("treeitem", { name: "笔记2" })).not.toBeInTheDocument();
+  fireEvent.click(within(targetTree).getByRole("treeitem", { name: "笔记1" }));
+  fireEvent.click(within(moveDialog).getByRole("button", { name: "确认移动" }));
+  await waitFor(() => expect(calls("POST", `/notes/${id(2)}/move`)).toHaveLength(1));
+  expect(await calls("POST", `/notes/${id(2)}/move`)[0]!.json()).toEqual({ expected_version: 1, parent_id: id(1), position: 0 });
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "移动笔记" })).not.toBeInTheDocument());
+  expect(router.state.location.pathname).toBe(`/notes/${id(1)}`);
+  expect(screen.getByRole("treeitem", { name: "笔记1" })).toHaveAttribute("aria-expanded", "true");
+
+  // Delete inactive note 2 from the tree menu and undo from the receipt banner.
+  await openMenuFor("笔记2");
+  fireEvent.click(await screen.findByRole("menuitem", { name: "删除页面" }));
+  const deleteDialog = await screen.findByRole("alertdialog", { name: "删除笔记" });
+  fireEvent.click(within(deleteDialog).getByRole("button", { name: "确认删除" }));
+  await waitFor(() => expect(calls("DELETE", id(2))).toHaveLength(1));
+  expect(router.state.location.pathname).toBe(`/notes/${id(1)}`);
+  const undoButton = await screen.findByRole("button", { name: "恢复本次删除 笔记2" });
+  fireEvent.click(undoButton);
+  await waitFor(() => expect(router.state.location.pathname).toBe(`/notes/${id(2)}`));
+  expect(await title()).toHaveValue("笔记2");
+
+  // Duplicate note 1 (now inactive) from the tree menu into a sibling copy.
+  await openMenuFor("笔记1");
+  fireEvent.click(await screen.findByRole("menuitem", { name: "创建副本" }));
+  await waitFor(() => expect(calls("POST", "/notes")).toHaveLength(1));
+  expect(await calls("POST", "/notes")[0]!.json()).toEqual({
+    title: "笔记1（副本）",
+    document: doc("正文1"),
+    parent_id: null,
+  });
+  await waitFor(() => expect(router.state.location.pathname).toBe(`/notes/${id(99)}`));
+  expect(await title()).toHaveValue("笔记1（副本）");
+});
+
+it("active-note rename waits for an in-flight autosave PATCH and never corrupts the draft on failure", async () => {
+  const inFlight = deferred();
+  let patchCount = 0;
+  intercept = (r, u) => {
+    if (r.method === "PATCH" && u.pathname.endsWith(id(1))) {
+      patchCount++;
+      if (patchCount === 1) return inFlight.promise;
+      if (patchCount === 3) return failure(503);
+    }
+    return undefined;
+  };
+  await mount();
+  const input = await title();
+
+  // Trigger an autosave PATCH and hold it in flight.
+  fireEvent.change(input, { target: { value: "编辑中标题" } });
+  await waitFor(() => expect(calls("PATCH", id(1))).toHaveLength(1), { timeout: 2500 });
+
+  // While the first PATCH is still in flight, submit a sidebar rename on the active note.
+  const row1 = screen.getByRole("treeitem", { name: "笔记1" });
+  fireEvent.click(within(row1).getByRole("button", { name: "更多页面操作：笔记1" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "重命名" }));
+  const renameDialog = await screen.findByRole("dialog", { name: "重命名页面" });
+  expect(within(renameDialog).getByRole("textbox", { name: "页面标题" })).toHaveValue("编辑中标题");
+  fireEvent.change(within(renameDialog).getByRole("textbox", { name: "页面标题" }), { target: { value: "等待后重命名" } });
+  fireEvent.click(within(renameDialog).getByRole("button", { name: "确认重命名" }));
+
+  // Resolve the first in-flight autosave PATCH (version 1 -> 2).
+  const savedFirst = { ...notes[0]!, title: "编辑中标题", content_version: 2 };
+  notes[0] = savedFirst;
+  await act(async () => inFlight.resolve(json(savedFirst)));
+
+  // Rename must follow up with expected_version 2 and persist the renamed title.
+  await waitFor(() => expect(calls("PATCH", id(1))).toHaveLength(2));
+  expect(await calls("PATCH", id(1))[1]!.json()).toEqual({ expected_version: 2, title: "等待后重命名" });
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "重命名页面" })).not.toBeInTheDocument());
+  expect(input).toHaveValue("等待后重命名");
+  expect(await screen.findByRole("treeitem", { name: "等待后重命名" })).toBeInTheDocument();
+
+  // A failed active-note rename must leave the live editor draft untouched after canceling.
+  const renamedRow = screen.getByRole("treeitem", { name: "等待后重命名" });
+  fireEvent.click(within(renamedRow).getByRole("button", { name: "更多页面操作：等待后重命名" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "重命名" }));
+  const failDialog = await screen.findByRole("dialog", { name: "重命名页面" });
+  fireEvent.change(within(failDialog).getByRole("textbox", { name: "页面标题" }), { target: { value: "失败不应写入草稿" } });
+  fireEvent.click(within(failDialog).getByRole("button", { name: "确认重命名" }));
+  expect(await within(failDialog).findByText("fixture failure")).toBeInTheDocument();
+  fireEvent.click(within(failDialog).getByRole("button", { name: "取消" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "重命名页面" })).not.toBeInTheDocument());
+  expect(input).toHaveValue("等待后重命名");
+});
+
+it("rename dialog keeps cancel enabled after 401 expiry and active duplicate captures unsaved draft", async () => {
+  await mount();
+  const input = await title();
+  fireEvent.change(input, { target: { value: "未保存的新标题" } });
+
+  // Duplicate active note captures the current unsaved draft.
+  const row1 = screen.getByRole("treeitem", { name: "笔记1" });
+  fireEvent.click(within(row1).getByRole("button", { name: "更多页面操作：笔记1" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "创建副本" }));
+  await waitFor(() => expect(calls("POST", "/notes")).toHaveLength(1));
+  expect(await calls("POST", "/notes")[0]!.json()).toMatchObject({
+    title: "未保存的新标题（副本）",
+    parent_id: null,
+  });
+
+  // 401 during rename keeps the Cancel button enabled so the user can dismiss the dialog and reauthenticate.
+  intercept = r => r.method === "PATCH" ? failure(401) : undefined;
+  const copyRow = await screen.findByRole("treeitem", { name: "未保存的新标题（副本）" });
+  fireEvent.click(within(copyRow).getByRole("button", { name: "更多页面操作：未保存的新标题（副本）" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "重命名" }));
+  const renameDialog = await screen.findByRole("dialog", { name: "重命名页面" });
+  fireEvent.change(within(renameDialog).getByRole("textbox", { name: "页面标题" }), { target: { value: "过期重命名" } });
+  fireEvent.click(within(renameDialog).getByRole("button", { name: "确认重命名" }));
+  expect(await within(renameDialog).findByText("fixture failure")).toBeInTheDocument();
+  const cancelBtn = within(renameDialog).getByRole("button", { name: "取消" });
+  expect(cancelBtn).toBeEnabled();
+  fireEvent.click(cancelBtn);
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "重命名页面" })).not.toBeInTheDocument());
+  expect(await screen.findByText("会话已失效，本地草稿已保留")).toBeInTheDocument();
+});

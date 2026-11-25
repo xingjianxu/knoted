@@ -1,12 +1,12 @@
-import { useCallback, useContext, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useBlocker, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   Alert, Button, ConfirmDialog, Dialog, Divider, Drawer, Empty, Form, Input, Link,
-  Popover, Sidebar, Spinner, Splitter, Status, Toolbar, Tooltip, Tree, TreeSelect,
+  Popover, Sidebar, Spinner, Splitter, Status, Toolbar, Tooltip, Tree, TreeSelect, useToast,
 } from "@bixlab/mtone";
 import {
-  Copy, Ellipsis, FilePlus2, FolderInput, GitCompareArrows, History, PanelLeft, Plus, Save, Trash2,
+  Copy, CopyPlus, Ellipsis, FilePlus2, FolderInput, GitCompareArrows, History, Link2, PanelLeft, Pencil, Plus, Save, Trash2,
 } from "lucide-react";
 import { ApiRequestError } from "@knoted/api-client";
 import type { QueryClientBundle } from "../../lib/query";
@@ -23,6 +23,25 @@ import "./notes-workspace.css";
 interface DeleteReceipt { id: string; title: string; originalParent: string | null; expectedVersion: number; }
 const message = (cause: unknown) => cause instanceof Error ? cause.message : "操作失败，请重试。";
 const ROOT = "root";
+const treeActionButtonStyle = { "--mt-height": "24px" } as CSSProperties;
+const displayNoteTitle = (title: string) => title.trim() || "未命名笔记";
+function duplicateNoteTitle(title: string): string {
+  const suffix = "（副本）";
+  return [...displayNoteTitle(title)].slice(0, 500 - [...suffix].length).join("") + suffix;
+}
+function captureTreeKeyboardReturnFocus(): (() => void) | undefined {
+  const activeEl = document.activeElement;
+  if (!(activeEl instanceof HTMLElement)) return undefined;
+  try {
+    if (!activeEl.matches(":focus-visible")) return undefined;
+  } catch {
+    return undefined;
+  }
+  return () => {
+    const item = document.querySelector<HTMLElement>('.notes-tree [role="treeitem"][tabindex="0"]');
+    item?.focus();
+  };
+}
 const statusLabels: Readonly<Record<SaveStatus, string>> = {
   saved: "已保存",
   dirty: "未保存",
@@ -55,6 +74,7 @@ function createNoteWriteAccess() {
 /** The notes parent route owns local sessions across note changes; Query only owns server data. */
 export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
   const navigate = useNavigate();
+  const toast = useToast();
   const notifyBlocked = useContext(NotesNavigationBlocked);
   const pathname = useRouterState({ select: state => state.location.pathname });
   // UUID identity is case-insensitive; server DTOs and retained sessions use lowercase.
@@ -81,6 +101,18 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
   const directoryHeading = useRef<HTMLHeadingElement>(null);
   const [receipts, setReceipts] = useState<DeleteReceipt[]>([]);
   const [rootRecovery, setRootRecovery] = useState<string | null>(null);
+  const [renameTarget, setRenameTarget] = useState<Note | null>(null);
+  const [renameTitle, setRenameTitle] = useState("");
+  const [renameError, setRenameError] = useState("");
+  const renameReturnFocus = useRef<(() => void) | null>(null);
+  const focusRenameError = useCallback((node: HTMLDivElement | null) => { node?.focus(); }, []);
+  const [moveTarget, setMoveTarget] = useState<Note | null>(null);
+  const [moveParent, setMoveParent] = useState<string | null>(ROOT);
+  const [moveError, setMoveError] = useState("");
+  const moveReturnFocus = useRef<(() => void) | null>(null);
+  const focusMoveError = useCallback((node: HTMLDivElement | null) => { node?.focus(); }, []);
+  const [deleteTarget, setDeleteTarget] = useState<Note | null>(null);
+  const deleteReturnFocus = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     const middleware = { onResponse: ({ response }: { response: Response }) => {
@@ -92,13 +124,16 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
   }, [bundle, writeAccess]);
 
   const tree = useQuery(notesTreeQuery(bundle));
-  // Titles can use confirmed detail responses immediately. Parent/position stay
-  // owned by the complete directory read; local drafts never enter this view.
+  // Titles, documents and versions can use confirmed detail responses immediately.
+  // Parent/position stay owned by the complete directory read; local drafts never enter this view.
   const directory = tree.data?.map(note => {
     const confirmed = bundle.queryClient.getQueryData<Note>(queryKeys.notes.detail(note.id));
-    return confirmed && confirmed.content_version >= note.content_version ? { ...note, title: confirmed.title } : note;
+    return confirmed && confirmed.content_version >= note.content_version
+      ? { ...note, title: confirmed.title, document: confirmed.document, content_version: confirmed.content_version }
+      : note;
   });
   const liveDirectory = directory?.filter(note => !writeAccess.isDeleted(note.id));
+  const noteById = new Map((liveDirectory ?? []).map(note => [note.id, note] as const));
   const treeItems = liveDirectory ? noteTree(liveDirectory) : [];
   const firstRootId = treeItems[0]?.id;
 
@@ -166,7 +201,8 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
     catch (cause) { setError(`无法离开：${message(cause)} 本地草稿仍保留。`); notifyBlocked(); return true; }
   } });
 
-  function setBusy(value: boolean) { busy.current = value; setWorking(value); }
+  const setBusy = useCallback((value: boolean) => { busy.current = value; setWorking(value); }, []);
+  const isBusy = useCallback(() => busy.current, []);
   async function refreshTree() {
     await bundle.queryClient.invalidateQueries({ queryKey: notesTreeQuery(bundle).queryKey });
   }
@@ -175,14 +211,202 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
     setBusy(true); setError("");
     try { await operation(); } catch (cause) { setError(message(cause)); } finally { setBusy(false); }
   }
+  const runCommand = useCallback(async (operation: () => Promise<void>) => {
+    if (busy.current || writeAccess.isExpired()) throw new Error("操作尚未完成或会话已失效");
+    setBusy(true); setError("");
+    try { await operation(); } catch (cause) { setError(message(cause)); throw cause; } finally { setBusy(false); }
+  }, [setBusy, writeAccess]);
+  function dropInactiveSession(id: string) {
+    draftStore.forget(id);
+    setOpened(previous => {
+      if (!(id in previous)) return previous;
+      const next = { ...previous };
+      delete next[id];
+      return next;
+    });
+  }
   async function create(parent: string | null) {
     // A create can succeed while the user keeps a failed source draft. Navigation still uses the same blocker.
     await run(async () => {
       const { data } = await bundle.api.raw.POST("/notes", { body: { title: "未命名笔记", document: { blocks: [] }, parent_id: parent } });
       if (!data) throw new Error("创建响应缺少笔记");
       bundle.queryClient.setQueryData(queryKeys.notes.detail(data.id), data);
+      if (parent) setExpanded(previous => previous.includes(parent) ? previous : [...previous, parent]);
       await refreshTree(); setBusy(false);
       await navigate({ to: "/notes/$noteId", params: { noteId: data.id } });
+    });
+  }
+  async function duplicate(target: Note) {
+    const current = noteById.get(target.id) ?? target;
+    await run(async () => {
+      assertCanWrite(current.id);
+      const activeSession = active.current?.noteId === current.id ? active.current : null;
+      const sourceDraft = activeSession ? activeSession.getSnapshot().draft : { title: current.title, document: current.document };
+      const { data } = await bundle.api.raw.POST("/notes", {
+        body: {
+          title: duplicateNoteTitle(sourceDraft.title),
+          document: sourceDraft.document,
+          parent_id: current.parent_id,
+        },
+      });
+      if (!data) throw new Error("创建副本响应缺少笔记");
+      bundle.queryClient.setQueryData(queryKeys.notes.detail(data.id), data);
+      if (current.parent_id) {
+        setExpanded(previous => previous.includes(current.parent_id!) ? previous : [...previous, current.parent_id!]);
+      }
+      await refreshTree(); setBusy(false);
+      toast.success({ title: `已创建副本「${data.title}」` });
+      await navigate({ to: "/notes/$noteId", params: { noteId: data.id } });
+    });
+  }
+  async function copyLink(target: Note) {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("浏览器不支持复制链接");
+      await navigator.clipboard.writeText(`${window.location.origin}/notes/${target.id}`);
+      toast.success({ title: "已复制页面链接" });
+    } catch (cause) {
+      setError(message(cause));
+    }
+  }
+  function openRenameDialog(target: Note, returnFocus?: () => void) {
+    const current = noteById.get(target.id) ?? target;
+    const isActive = active.current?.noteId === current.id;
+    renameReturnFocus.current = returnFocus ?? null;
+    setRenameTarget(current);
+    setRenameTitle(isActive ? active.current!.getSnapshot().draft.title : current.title);
+    setRenameError("");
+  }
+  function closeRenameDialog() {
+    setRenameTarget(null);
+    setRenameError("");
+    const restore = renameReturnFocus.current;
+    renameReturnFocus.current = null;
+    if (restore) requestAnimationFrame(restore);
+  }
+  async function submitRename(target: Note, nextTitle: string) {
+    const current = noteById.get(target.id) ?? target;
+    const trimmed = nextTitle.trim();
+    if (!trimmed || [...trimmed].length > 500 || trimmed.includes("\0")) {
+      throw new Error("标题须为 1 至 500 个字符");
+    }
+    const activeSession = active.current?.noteId === current.id ? active.current : null;
+    if (activeSession) {
+      const snapshot = activeSession.getSnapshot();
+      if (snapshot.draft.title === trimmed && !snapshot.dirty && !snapshot.unresolvedWrite && !snapshot.error) {
+        closeRenameDialog();
+        return;
+      }
+    } else if (current.title === trimmed) {
+      closeRenameDialog();
+      return;
+    }
+    await runCommand(async () => {
+      if (activeSession) {
+        await activeSession.renameTitle(trimmed);
+      } else {
+        assertCanWrite(current.id);
+        const { data } = await bundle.api.raw.PATCH("/notes/{noteId}", {
+          params: { path: { noteId: current.id } },
+          body: { expected_version: current.content_version, title: trimmed },
+        });
+        if (!data) throw new Error("重命名响应缺少笔记");
+        dropInactiveSession(data.id);
+        bundle.queryClient.setQueryData(queryKeys.notes.detail(data.id), data);
+      }
+      await refreshTree();
+      closeRenameDialog();
+    });
+  }
+  function openMoveDialog(target: Note, returnFocus?: () => void) {
+    const current = noteById.get(target.id) ?? target;
+    moveReturnFocus.current = returnFocus ?? null;
+    setMoveTarget(current);
+    setMoveParent(current.parent_id ?? ROOT);
+    setMoveError("");
+  }
+  function closeMoveDialog() {
+    setMoveTarget(null);
+    const restore = moveReturnFocus.current;
+    moveReturnFocus.current = null;
+    if (restore) requestAnimationFrame(restore);
+  }
+  async function submitMove(target: Note, selectedParent: string) {
+    const current = noteById.get(target.id) ?? target;
+    const parentId = selectedParent === ROOT ? null : selectedParent;
+    const notes = liveDirectory ?? [];
+    const position = notes.filter(note => note.parent_id === parentId && note.id !== current.id).length;
+    await runCommand(async () => {
+      const activeSession = active.current?.noteId === current.id ? active.current : null;
+      if (activeSession) {
+        await activeSession.runStructuralMutation(async (noteId, baseVersion) => {
+          const { data } = await bundle.api.raw.POST("/notes/{noteId}/move", {
+            params: { path: { noteId } },
+            body: { expected_version: baseVersion, parent_id: parentId, position },
+          });
+          if (!data) throw new Error("移动响应缺少笔记");
+          return data;
+        });
+      } else {
+        assertCanWrite(current.id);
+        const { data } = await bundle.api.raw.POST("/notes/{noteId}/move", {
+          params: { path: { noteId: current.id } },
+          body: { expected_version: current.content_version, parent_id: parentId, position },
+        });
+        if (!data) throw new Error("移动响应缺少笔记");
+        dropInactiveSession(data.id);
+        bundle.queryClient.setQueryData(queryKeys.notes.detail(data.id), data);
+      }
+      if (parentId) {
+        setExpanded(previous => previous.includes(parentId) ? previous : [...previous, parentId]);
+      }
+      await refreshTree();
+      closeMoveDialog();
+    });
+  }
+  function openDeleteDialog(target: Note, returnFocus?: () => void) {
+    const current = noteById.get(target.id) ?? target;
+    deleteReturnFocus.current = returnFocus ?? null;
+    setDeleteTarget(current);
+  }
+  async function confirmDelete(target: Note) {
+    const current = noteById.get(target.id) ?? target;
+    await runCommand(async () => {
+      const activeSession = active.current?.noteId === current.id ? active.current : null;
+      let expectedVersion: number;
+      let deletedTitle: string;
+      if (activeSession) {
+        await activeSession.flush();
+        expectedVersion = activeSession.getSnapshot().baseVersion;
+        deletedTitle = activeSession.getSnapshot().draft.title;
+      } else {
+        expectedVersion = current.content_version;
+        deletedTitle = current.title;
+      }
+      assertCanWrite(current.id);
+      await bundle.api.raw.DELETE("/notes/{noteId}", {
+        params: { path: { noteId: current.id }, query: { expected_version: expectedVersion } },
+      });
+      const receipt: DeleteReceipt = {
+        id: current.id,
+        title: deletedTitle,
+        originalParent: current.parent_id,
+        expectedVersion: expectedVersion + 1,
+      };
+      writeAccess.markDeleted(receipt.id);
+      setReceipts(previous => [...previous, receipt]);
+      if (pinnedDefaultId === receipt.id) setPinnedDefaultId(undefined);
+      if (active.current?.noteId === receipt.id) active.current = null;
+      dropInactiveSession(receipt.id);
+      bundle.queryClient.removeQueries({ queryKey: queryKeys.notes.detail(receipt.id) });
+      if (current.id === activeNoteId && pathname !== "/notes") {
+        bypass.current = "/notes";
+        try {
+          await navigate({ to: "/notes" });
+        } finally {
+          bypass.current = null;
+        }
+      }
+      await refreshTree();
     });
   }
   async function undo(receipt: DeleteReceipt, root = false) {
@@ -210,6 +434,9 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
     void navigate({ to: "/notes/$noteId", params: { noteId: id } });
   }
 
+  const unavailable = working || expired;
+  const blockedMoveParents = moveTarget ? descendants(liveDirectory ?? [], moveTarget.id) : new Set<string>();
+
   const directoryBody = (
     <div className="space-y-2">
       {tree.isFetching && <Spinner label="正在读取完整笔记树" />}
@@ -227,8 +454,9 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
           label="笔记树"
           items={treeItems}
           directory
+          showLine
           expandAction={false}
-          indent={14}
+          indent={16}
           gap={2}
           selectedKeys={activeNoteId ? [activeNoteId] : []}
           expandedKeys={expanded}
@@ -236,6 +464,98 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
           onSelect={keys => {
             const id = keys[0];
             if (typeof id === "string") selectNote(id);
+          }}
+          titleRender={node => {
+            const text = displayNoteTitle(String(node.label));
+            return <span title={text}>{text}</span>;
+          }}
+          actions={({ node }) => {
+            const target = noteById.get(String(node.id));
+            if (!target) return null;
+            const displayTitle = displayNoteTitle(target.title);
+            return [
+              {
+                visibility: "hover",
+                content: (
+                  <Button
+                    iconOnly
+                    variant="ghost"
+                    style={treeActionButtonStyle}
+                    disabled={unavailable}
+                    aria-label={`新建子页面：${displayTitle}`}
+                    title="新建子页面"
+                    onClick={() => void create(target.id)}
+                  >
+                    <Plus size={14} aria-hidden="true" />
+                  </Button>
+                ),
+              },
+              {
+                visibility: "hover",
+                content: (
+                  <Popover.Menu
+                    triggerMode="hover"
+                    align="start"
+                    label={`页面操作：${displayTitle}`}
+                    trigger={
+                      <Button
+                        iconOnly
+                        variant="ghost"
+                        style={treeActionButtonStyle}
+                        aria-label={`更多页面操作：${displayTitle}`}
+                      >
+                        <Ellipsis size={14} aria-hidden="true" />
+                      </Button>
+                    }
+                    items={[
+                      {
+                        key: "new-child",
+                        label: "新建子页面",
+                        icon: <FilePlus2 size={15} aria-hidden="true" />,
+                        disabled: unavailable,
+                        onSelect: () => void create(target.id),
+                      },
+                      {
+                        key: "rename",
+                        label: "重命名",
+                        icon: <Pencil size={15} aria-hidden="true" />,
+                        disabled: unavailable,
+                        onSelect: () => openRenameDialog(target, captureTreeKeyboardReturnFocus()),
+                      },
+                      {
+                        key: "duplicate",
+                        label: "创建副本",
+                        icon: <CopyPlus size={15} aria-hidden="true" />,
+                        disabled: unavailable,
+                        onSelect: () => void duplicate(target),
+                      },
+                      {
+                        key: "move",
+                        label: "移动到…",
+                        icon: <FolderInput size={15} aria-hidden="true" />,
+                        disabled: unavailable || (liveDirectory?.length ?? 0) === 0,
+                        onSelect: () => openMoveDialog(target, captureTreeKeyboardReturnFocus()),
+                      },
+                      {
+                        key: "copy-link",
+                        label: "复制链接",
+                        icon: <Link2 size={15} aria-hidden="true" />,
+                        onSelect: () => void copyLink(target),
+                      },
+                      { type: "divider", key: "before-delete" },
+                      {
+                        key: "delete",
+                        label: "删除页面",
+                        icon: <Trash2 size={15} aria-hidden="true" />,
+                        danger: true,
+                        disabled: unavailable,
+                        onSelect: () => openDeleteDialog(target, captureTreeKeyboardReturnFocus()),
+                      },
+                    ]}
+                  />
+                ),
+              },
+            ];
           }}
         />
       )}
@@ -258,7 +578,7 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
       >
         <div className="space-y-3">
           <div className="flex justify-end">
-            <Button size="sm" variant="outline" disabled={working || expired} onClick={() => void create(null)}>
+            <Button size="sm" variant="outline" disabled={unavailable} onClick={() => void create(null)}>
               <Plus size={14} aria-hidden="true" />
               新建根笔记
             </Button>
@@ -296,11 +616,11 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
           {receipts.map(receipt => (
             <Alert key={receipt.id} tone="info" title={`已删除：${receipt.title}`}>
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                <Button size="sm" disabled={working || expired} onClick={() => void undo(receipt)}>恢复本次删除 {receipt.title}</Button>
+                <Button size="sm" disabled={unavailable} onClick={() => void undo(receipt)}>恢复本次删除 {receipt.title}</Button>
                 {rootRecovery === receipt.id && (
                   <>
                     <span className="text-sm text-muted">原父节点不可用或恢复冲突。</span>
-                    <Button size="sm" variant="outline" disabled={working || expired} onClick={() => void undo(receipt, true)}>恢复到根 {receipt.title}</Button>
+                    <Button size="sm" variant="outline" disabled={unavailable} onClick={() => void undo(receipt, true)}>恢复到根 {receipt.title}</Button>
                   </>
                 )}
               </div>
@@ -338,7 +658,7 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
                     size="sm"
                     variant="ghost"
                     iconOnly
-                    disabled={working || expired}
+                    disabled={unavailable}
                     aria-label="新建根笔记"
                     onClick={() => void create(null)}
                   >
@@ -369,30 +689,15 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
                 notes={liveDirectory ?? []}
                 expired={expired}
                 working={working}
+                isBusy={isBusy}
+                runCommand={runCommand}
                 onCreateChild={() => void create(initialNote.id)}
+                onRequestMove={returnFocus => openMoveDialog(noteById.get(initialNote.id) ?? initialNote, returnFocus)}
+                onRequestDelete={returnFocus => openDeleteDialog(noteById.get(initialNote.id) ?? initialNote, returnFocus)}
                 onSession={registerSession}
                 assertCanWrite={() => assertCanWrite(initialNote.id)}
-                onBusy={setBusy}
                 onRefresh={refreshTree}
                 onError={setError}
-                onDeleted={async receipt => {
-                  writeAccess.markDeleted(receipt.id);
-                  setReceipts(previous => [...previous, receipt]);
-                  if (pinnedDefaultId === receipt.id) setPinnedDefaultId(undefined);
-                  if (active.current?.noteId === receipt.id) active.current = null;
-                  draftStore.forget(receipt.id);
-                  setOpened(previous => { const next = { ...previous }; delete next[receipt.id]; return next; });
-                  bundle.queryClient.removeQueries({ queryKey: queryKeys.notes.detail(receipt.id) });
-                  if (pathname !== "/notes") {
-                    bypass.current = "/notes";
-                    try {
-                      await navigate({ to: "/notes" });
-                    } finally {
-                      bypass.current = null;
-                    }
-                  }
-                  await refreshTree();
-                }}
               />
             ) : activeNoteId ? (
               <div className="notes-pane">
@@ -418,7 +723,7 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
                   <Empty
                     title="暂无笔记"
                     action={
-                      <Button size="sm" variant="solid" disabled={working || expired} onClick={() => void create(null)}>
+                      <Button size="sm" variant="solid" disabled={unavailable} onClick={() => void create(null)}>
                         <Plus size={14} aria-hidden="true" />
                         新建笔记
                       </Button>
@@ -430,6 +735,97 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
           </div>
         </Splitter.Panel>
       </Splitter>
+
+      <Dialog
+        open={renameTarget !== null}
+        onOpenChange={open => { if (!open && !busy.current) closeRenameDialog(); }}
+        title="重命名页面"
+      >
+        <Form
+          className="space-y-4"
+          onSubmit={event => {
+            event.preventDefault();
+            if (!renameTarget || unavailable) return;
+            setRenameError("");
+            void submitRename(renameTarget, renameTitle).catch(cause => setRenameError(message(cause)));
+          }}
+        >
+          {renameError && <div ref={focusRenameError} tabIndex={-1}><Alert tone="error">{renameError}</Alert></div>}
+          <Form.Item label="页面标题">
+            <Input
+              aria-label="页面标题"
+              value={renameTitle}
+              maxLength={500}
+              disabled={unavailable}
+              onChange={event => setRenameTitle(event.target.value)}
+            />
+          </Form.Item>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button type="button" disabled={working} onClick={closeRenameDialog}>取消</Button>
+            <Button type="submit" variant="solid" disabled={unavailable || !renameTitle.trim()}>确认重命名</Button>
+          </div>
+        </Form>
+      </Dialog>
+
+      <Dialog
+        open={moveTarget !== null}
+        onOpenChange={open => { if (!open && !busy.current) closeMoveDialog(); }}
+        title="移动笔记"
+        description="笔记将移到所选父节点的末尾。"
+      >
+        <Form
+          className="space-y-4"
+          onSubmit={event => {
+            event.preventDefault();
+            if (!moveTarget || unavailable || moveParent === null) return;
+            setMoveError("");
+            void submitMove(moveTarget, moveParent).catch(cause => setMoveError(message(cause)));
+          }}
+        >
+          {moveError && <div ref={focusMoveError} tabIndex={-1}><Alert tone="error">{moveError}</Alert></div>}
+          <Form.Item label="目标父笔记">
+            <TreeSelect
+              aria-label="目标父笔记"
+              value={moveParent}
+              onValueChange={value => setMoveParent(value === null ? null : String(value))}
+              disabled={unavailable}
+              searchable
+              defaultExpandAll
+              items={[{ id: ROOT, label: "根目录" }, ...noteTree((liveDirectory ?? []).filter(note => !blockedMoveParents.has(note.id)))]}
+            />
+          </Form.Item>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button type="button" disabled={working} onClick={closeMoveDialog}>取消</Button>
+            <Button type="submit" variant="solid" disabled={unavailable || moveParent === null}>确认移动</Button>
+          </div>
+        </Form>
+      </Dialog>
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={open => {
+          if (!open && !busy.current) {
+            setDeleteTarget(null);
+            const restore = deleteReturnFocus.current;
+            deleteReturnFocus.current = null;
+            if (restore) requestAnimationFrame(restore);
+          }
+        }}
+        title="删除笔记"
+        description={
+          deleteTarget && (liveDirectory ?? []).some(note => note.parent_id === deleteTarget.id)
+            ? "此笔记仍有子页。请先移动或删除子页；服务端会拒绝删除有存活子页的笔记。"
+            : deleteTarget?.id === activeNoteId
+              ? "先保存当前内容与历史，再删除；本页提供本次删除的恢复入口。"
+              : "删除后可在回收站恢复，本页也会提供本次删除的恢复入口。"
+        }
+        confirmText="确认删除"
+        danger
+        onConfirm={async () => {
+          if (!deleteTarget) return;
+          await confirmDelete(deleteTarget);
+        }}
+      />
     </div>
   );
 }
@@ -441,54 +837,39 @@ interface NotePaneProps {
   notes: Note[];
   expired: boolean;
   working: boolean;
+  isBusy: () => boolean;
+  runCommand: (operation: () => Promise<void>) => Promise<void>;
   assertCanWrite: () => void;
   onCreateChild: () => void;
+  onRequestMove: (returnFocus: () => void) => void;
+  onRequestDelete: (returnFocus: () => void) => void;
   onSession: (session: NoteEditingSession) => () => void;
-  onBusy: (busy: boolean) => void;
   onRefresh: () => Promise<void>;
   onError: (error: string) => void;
-  onDeleted: (receipt: DeleteReceipt) => Promise<void>;
 }
 
 function NotePane({
-  initialNote, draftStore, bundle, notes, expired, working,
-  onCreateChild, onSession, assertCanWrite, onBusy, onRefresh, onError, onDeleted,
+  initialNote, draftStore, bundle, notes, expired, working, isBusy, runCommand,
+  onCreateChild, onRequestMove, onRequestDelete, onSession, assertCanWrite, onRefresh, onError,
 }: NotePaneProps) {
   const autosave = useNoteAutosave({ initialNote, draftStore });
   const session = draftStore.open(initialNote);
   // Own the mounted session independently of server Query removal or background updates.
   useEffect(() => onSession(session), [session, onSession]);
-  const pending = useRef(false);
   const [history, setHistory] = useState(false);
   const historyTrigger = useRef<HTMLButtonElement>(null);
   const titleInput = useRef<HTMLInputElement>(null);
   const menuTrigger = useRef<HTMLButtonElement>(null);
-  const [moveOpen, setMoveOpen] = useState(false);
-  const [moveError, setMoveError] = useState("");
-  const focusMoveError = useCallback((node: HTMLDivElement | null) => { node?.focus(); }, []);
-  const [parent, setParent] = useState<string | null>(ROOT);
-  const [deleteOpen, setDeleteOpen] = useState(false);
   const [conflict, setConflict] = useState(false);
   const conflictTrigger = useRef<HTMLButtonElement>(null);
   const unavailable = expired || working;
 
-  async function command(operation: () => Promise<void>) {
-    if (pending.current || expired) throw new Error("操作尚未完成或会话已失效");
-    pending.current = true; onBusy(true); onError("");
-    try { await operation(); } catch (cause) { onError(message(cause)); throw cause; } finally { pending.current = false; onBusy(false); }
-  }
-
-  const blockedParents = descendants(notes, initialNote.id);
   const status = statusLabels[autosave.status];
   const hasConflictAlert = autosave.status === "conflict" || autosave.serverUpdated;
 
   function closeHistory() {
     setHistory(false);
     historyTrigger.current?.focus();
-  }
-  function closeMove() {
-    setMoveOpen(false);
-    requestAnimationFrame(() => menuTrigger.current?.focus());
   }
 
   return (
@@ -514,7 +895,7 @@ function NotePane({
                   版本与冲突处理
                 </Button>
               )}
-              <Button size="sm" variant="solid" disabled={unavailable} onClick={() => { void command(async () => { await autosave.retrySave(); await autosave.flush(); }).catch(() => {}); }}>
+              <Button size="sm" variant="solid" disabled={unavailable} onClick={() => { void runCommand(async () => { await autosave.retrySave(); await autosave.flush(); }).catch(() => {}); }}>
                 <Save size={14} aria-hidden="true" />
                 保存并记录历史
               </Button>
@@ -540,13 +921,13 @@ function NotePane({
                 }
                 items={[
                   { key: "new-child", label: "新建子笔记", icon: <FilePlus2 size={15} aria-hidden="true" />, disabled: unavailable, onSelect: onCreateChild },
-                  { key: "move", label: "移动笔记", icon: <FolderInput size={15} aria-hidden="true" />, disabled: unavailable || notes.length === 0, onSelect: () => { setParent(ROOT); setMoveError(""); setMoveOpen(true); } },
+                  { key: "move", label: "移动笔记", icon: <FolderInput size={15} aria-hidden="true" />, disabled: unavailable || notes.length === 0, onSelect: () => onRequestMove(() => menuTrigger.current?.focus()) },
                   { key: "copy", label: "复制当前草稿", icon: <Copy size={15} aria-hidden="true" />, onSelect: () => { void autosave.copyDraft().catch(cause => onError(message(cause))); } },
                   ...(hasConflictAlert ? [] : [
                     { key: "conflict", label: "版本与冲突处理", icon: <GitCompareArrows size={15} aria-hidden="true" />, disabled: unavailable, onSelect: () => setConflict(true) },
                   ]),
                   { type: "divider", key: "before-delete" },
-                  { key: "delete", label: "删除笔记", icon: <Trash2 size={15} aria-hidden="true" />, danger: true, disabled: unavailable, onSelect: () => setDeleteOpen(true) },
+                  { key: "delete", label: "删除笔记", icon: <Trash2 size={15} aria-hidden="true" />, danger: true, disabled: unavailable, onSelect: () => onRequestDelete(() => menuTrigger.current?.focus()) },
                 ]}
               />
             </>
@@ -570,7 +951,7 @@ function NotePane({
             maxLength={500}
             disabled={working}
             readOnly={expired}
-            onChange={event => { if (!pending.current && !expired) autosave.changeDraft({ title: event.target.value }); }}
+            onChange={event => { if (!isBusy() && !expired) autosave.changeDraft({ title: event.target.value }); }}
           />
           <Divider />
 
@@ -582,7 +963,7 @@ function NotePane({
               document={autosave.draft.document}
               readOnly={unavailable}
               client={bundle.api}
-              onChange={document => { if (!pending.current && !expired) autosave.changeDraft({ document }); }}
+              onChange={document => { if (!isBusy() && !expired) autosave.changeDraft({ document }); }}
             />
           </div>
 
@@ -593,7 +974,7 @@ function NotePane({
               disabled={unavailable}
               onClose={closeHistory}
               onRestore={async snapshot => {
-                await command(async () => {
+                await runCommand(async () => {
                   await autosave.restoreFromServer(async (noteId, baseVersion) => {
                     const { data } = await bundle.api.raw.POST("/notes/{noteId}/snapshots/{snapshotId}/restore", { params: { path: { noteId, snapshotId: snapshot.snapshot_id } }, body: { expected_version: baseVersion } });
                     if (!data) throw new Error("恢复响应缺少笔记");
@@ -609,62 +990,6 @@ function NotePane({
         </div>
       </div>
 
-      <Dialog open={moveOpen} onOpenChange={open => { if (!open && !pending.current) closeMove(); }} title="移动笔记" description="笔记将移到所选父节点的末尾。">
-        <Form
-          className="space-y-4"
-          onSubmit={event => {
-            event.preventDefault();
-            if (unavailable || parent === null) return;
-            setMoveError("");
-            void command(async () => {
-              const parentId = parent === ROOT ? null : parent;
-              const position = notes.filter(note => note.parent_id === parentId && note.id !== initialNote.id).length;
-              await autosave.runStructuralMutation(async (noteId, baseVersion) => {
-                const { data } = await bundle.api.raw.POST("/notes/{noteId}/move", { params: { path: { noteId } }, body: { expected_version: baseVersion, parent_id: parentId, position } });
-                if (!data) throw new Error("移动响应缺少笔记");
-                return data;
-              });
-              await onRefresh();
-              closeMove();
-            }).catch(cause => setMoveError(message(cause)));
-          }}
-        >
-          {moveError && <div ref={focusMoveError} tabIndex={-1}><Alert tone="error">{moveError}</Alert></div>}
-          <Form.Item label="目标父笔记">
-            <TreeSelect
-              aria-label="目标父笔记"
-              value={parent}
-              onValueChange={value => setParent(value === null ? null : String(value))}
-              disabled={unavailable}
-              searchable
-              defaultExpandAll
-              items={[{ id: ROOT, label: "根目录" }, ...noteTree(notes.filter(note => !blockedParents.has(note.id)))]}
-            />
-          </Form.Item>
-          <div className="flex flex-wrap justify-end gap-2">
-            <Button type="button" disabled={unavailable} onClick={closeMove}>取消</Button>
-            <Button type="submit" variant="solid" disabled={unavailable || parent === null}>确认移动</Button>
-          </div>
-        </Form>
-      </Dialog>
-
-      <ConfirmDialog
-        open={deleteOpen}
-        onOpenChange={open => { setDeleteOpen(open); if (!open) requestAnimationFrame(() => menuTrigger.current?.focus()); }}
-        title="删除笔记"
-        description={notes.some(note => note.parent_id === initialNote.id) ? "此笔记仍有子页。请先移动或删除子页；服务端会拒绝删除有存活子页的笔记。" : "先保存当前内容与历史，再删除；本页提供本次删除的恢复入口。"}
-        confirmText="确认删除"
-        danger
-        onConfirm={() => command(async () => {
-          await autosave.flush();
-          const expectedVersion = session.getSnapshot().baseVersion;
-          assertCanWrite();
-          await bundle.api.raw.DELETE("/notes/{noteId}", { params: { path: { noteId: initialNote.id }, query: { expected_version: expectedVersion } } });
-          const metadata = notes.find(note => note.id === initialNote.id) ?? initialNote;
-          await onDeleted({ id: initialNote.id, title: session.getSnapshot().draft.title, originalParent: metadata.parent_id, expectedVersion: expectedVersion + 1 });
-        })}
-      />
-
       <ConflictDialog
         open={conflict}
         onOpenChange={open => {
@@ -672,9 +997,9 @@ function NotePane({
           if (!open) requestAnimationFrame(() => (conflictTrigger.current ?? menuTrigger.current)?.focus());
         }}
         draft={autosave.draft}
-        readOnly={expired}
-        onLoadServer={() => command(async () => { await autosave.loadServer(); })}
-        onSaveCopy={title => command(async () => { await autosave.saveCopy(title); await onRefresh(); })}
+        readOnly={unavailable}
+        onLoadServer={() => runCommand(async () => { await autosave.loadServer(); })}
+        onSaveCopy={title => runCommand(async () => { await autosave.saveCopy(title); await onRefresh(); })}
         onCopyDraft={autosave.copyDraft}
       />
     </section>

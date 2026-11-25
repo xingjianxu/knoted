@@ -560,3 +560,183 @@ test("笔记编辑页标题输入框在常态、悬停与聚焦态均隐藏边�
   await titleInput.fill("无边框标题验证");
   await expect(titleInput).toHaveValue("无边框标题验证");
 });
+
+test("笔记左侧 Tree 节点右侧按钮仅在悬停时显示，支持添加子页面与悬停弹出常用操作菜单", async ({ page }) => {
+  test.skip(baseline, "改版后的笔记侧栏 Tree 回归");
+  await fixtures(page);
+  const secondNote = {
+    ...note,
+    id: id(16),
+    title: "方案备忘",
+    position: 1,
+    content_version: 1,
+    document: { blocks: [{ id: id(160), type: "paragraph", content: [{ type: "text", text: "方案备忘正文", styles: {} }] }] },
+  };
+  let treeNotes = [
+    { ...note },
+    { ...note, id: id(15), title: "后续问题", parent_id: note.id, position: 0 },
+    secondNote,
+  ];
+  let createdSeq = 200;
+
+  await page.addInitScript(() => {
+    const copied: string[] = [];
+    (window as unknown as { __copiedLinks?: string[] }).__copiedLinks = copied;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => { copied.push(text); },
+      },
+    });
+  });
+
+  await page.route("**/api/v1/notes**", async route => {
+    const req = route.request();
+    const url = new URL(req.url());
+    const rel = url.pathname.replace("/api/v1", "");
+    if (rel === "/notes" && req.method() === "GET") {
+      return route.fulfill({ json: list(treeNotes) });
+    }
+    if (rel === "/notes" && req.method() === "POST") {
+      const body = req.postDataJSON();
+      const created = {
+        ...note,
+        id: id(++createdSeq),
+        title: body.title,
+        parent_id: body.parent_id ?? null,
+        document: body.document,
+        position: treeNotes.filter(item => item.parent_id === (body.parent_id ?? null)).length,
+        content_version: 1,
+      };
+      treeNotes = [...treeNotes, created];
+      return route.fulfill({ status: 201, json: created });
+    }
+    const match = rel.match(/^\/notes\/([0-9a-f-]+)(?:\/(move|snapshots))?$/i);
+    if (match) {
+      const targetId = match[1]!;
+      const sub = match[2];
+      const existing = treeNotes.find(item => item.id === targetId);
+      if (sub === "snapshots") {
+        if (req.method() === "POST" && existing) {
+          return route.fulfill({ status: 201, json: { ...existing, note_id: existing.id, snapshot_id: id(51), reason: "flush" } });
+        }
+        return route.fulfill({ json: list([]) });
+      }
+      if (!existing) return route.fulfill({ status: 404, json: { code: "not_found", message: "not found" } });
+      if (req.method() === "GET") return route.fulfill({ json: existing });
+      if (req.method() === "PATCH") {
+        const body = req.postDataJSON();
+        const updated = { ...existing, ...body, content_version: existing.content_version + 1 };
+        treeNotes = treeNotes.map(item => item.id === targetId ? updated : item);
+        return route.fulfill({ json: updated });
+      }
+      if (sub === "move" && req.method() === "POST") {
+        const body = req.postDataJSON();
+        const updated = { ...existing, parent_id: body.parent_id, position: body.position, content_version: existing.content_version + 1 };
+        treeNotes = treeNotes.map(item => item.id === targetId ? updated : item);
+        return route.fulfill({ json: updated });
+      }
+      if (req.method() === "DELETE") {
+        treeNotes = treeNotes.filter(item => item.id !== targetId);
+        return route.fulfill({ status: 204 });
+      }
+    }
+    return route.fallback();
+  });
+  await page.route(/\/api\/v1\/entities\/note\/[^/]+\/tags/, route => route.fulfill({ json: list([]) }));
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("http://127.0.0.1:4178/notes");
+
+  const sidebar = page.getByRole("complementary", { name: "笔记目录" });
+  const secondRow = sidebar.getByRole("treeitem", { name: "方案备忘" });
+  await expect(secondRow).toBeVisible();
+
+  // Move pointer away from sidebar so tree actions are hidden at rest.
+  const titleInput = page.getByRole("textbox", { name: "笔记标题" });
+  await titleInput.click();
+  await titleInput.hover();
+
+  const readActionStyles = (row: Locator) => row.locator('.mt-tree-action[data-visibility="hover"]').evaluateAll(nodes =>
+    nodes.map(el => {
+      const style = getComputedStyle(el);
+      return { opacity: style.opacity, pointerEvents: style.pointerEvents };
+    }),
+  );
+
+  expect(await readActionStyles(secondRow)).toEqual([
+    { opacity: "0", pointerEvents: "none" },
+    { opacity: "0", pointerEvents: "none" },
+  ]);
+
+  // Hovering the row reveals both the "+" add-subpage button and the "..." menu trigger.
+  await secondRow.hover();
+  await expect.poll(() => readActionStyles(secondRow)).toEqual([
+    { opacity: "1", pointerEvents: "auto" },
+    { opacity: "1", pointerEvents: "auto" },
+  ]);
+
+  const addSubpageBtn = secondRow.getByRole("button", { name: "新建子页面：方案备忘" });
+  const moreBtn = secondRow.getByRole("button", { name: "更多页面操作：方案备忘" });
+  await expect(addSubpageBtn).toBeVisible();
+  await expect(moreBtn).toBeVisible();
+
+  // Hovering the "..." button pops open the action menu without needing a click.
+  await moreBtn.hover();
+  const menu = page.getByRole("menu", { name: "页面操作：方案备忘" });
+  await expect(menu).toBeVisible();
+  for (const label of ["新建子页面", "重命名", "创建副本", "移动到…", "复制链接", "删除页面"]) {
+    await expect(menu.getByRole("menuitem", { name: label })).toBeVisible();
+  }
+
+  // Copy link via the hover-opened menu.
+  await menu.getByRole("menuitem", { name: "复制链接" }).click();
+  await expect(page.getByText("已复制页面链接")).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as { __copiedLinks?: string[] }).__copiedLinks)).toEqual([
+    `http://127.0.0.1:4178/notes/${secondNote.id}`,
+  ]);
+
+  // Rename via the hover-opened menu.
+  await secondRow.hover();
+  await moreBtn.hover();
+  await expect(menu).toBeVisible();
+  await menu.getByRole("menuitem", { name: "重命名" }).click();
+  const renameDialog = page.getByRole("dialog", { name: "重命名页面" });
+  await expect(renameDialog).toBeVisible();
+  await renameDialog.getByRole("textbox", { name: "页面标题" }).fill("方案备忘 v2");
+  await renameDialog.getByRole("button", { name: "确认重命名" }).click();
+  await expect(renameDialog).toBeHidden();
+  const renamedRow = sidebar.getByRole("treeitem", { name: "方案备忘 v2", exact: true });
+  await expect(renamedRow).toBeVisible();
+
+  // Duplicate via the hover-opened menu.
+  await renamedRow.hover();
+  await renamedRow.getByRole("button", { name: "更多页面操作：方案备忘 v2" }).hover();
+  const renamedMenu = page.getByRole("menu", { name: "页面操作：方案备忘 v2" });
+  await expect(renamedMenu).toBeVisible();
+  await renamedMenu.getByRole("menuitem", { name: "创建副本" }).click();
+  await expect(page.getByRole("textbox", { name: "笔记标题" })).toHaveValue("方案备忘 v2（副本）");
+  const copyRow = sidebar.getByRole("treeitem", { name: "方案备忘 v2（副本）", exact: true });
+  await expect(copyRow).toBeVisible();
+
+  // Add a subpage directly via the hover "+" button.
+  await renamedRow.hover();
+  await renamedRow.getByRole("button", { name: "新建子页面：方案备忘 v2" }).click();
+  await expect(page.getByRole("textbox", { name: "笔记标题" })).toHaveValue("未命名笔记");
+  await expect(renamedRow).toHaveAttribute("aria-expanded", "true");
+  await expect(sidebar.getByRole("treeitem", { name: "未命名笔记", exact: true })).toBeVisible();
+
+  // Delete an inactive page via the hover-opened menu and confirm undo receipt appears.
+  await copyRow.hover();
+  await copyRow.getByRole("button", { name: "更多页面操作：方案备忘 v2（副本）" }).hover();
+  const copyMenu = page.getByRole("menu", { name: "页面操作：方案备忘 v2（副本）" });
+  await expect(copyMenu).toBeVisible();
+  await copyMenu.getByRole("menuitem", { name: "删除页面" }).click();
+  const confirmDialog = page.getByRole("alertdialog", { name: "删除笔记" });
+  await expect(confirmDialog).toBeVisible();
+  await confirmDialog.getByRole("button", { name: "确认删除" }).click();
+  await expect(copyRow).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "恢复本次删除 方案备忘 v2（副本）" })).toBeVisible();
+
+  expect(await page.getByRole("main").evaluate(main => main.scrollWidth - main.clientWidth)).toBeLessThanOrEqual(1);
+});
