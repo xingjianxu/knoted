@@ -2,7 +2,7 @@ import { useCallback, useContext, useEffect, useRef, useState, type CSSPropertie
 import { useQuery } from "@tanstack/react-query";
 import { useBlocker, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
-  Alert, Button, ConfirmDialog, Dialog, Divider, Drawer, Empty, Form, Input, Link,
+  Alert, Button, ConfirmDialog, Container, Dialog, Divider, Drawer, Empty, Form, Input, Link,
   Popover, Sidebar, Spinner, Splitter, Status, Toolbar, Tooltip, Tree, TreeSelect, useToast,
 } from "@bixlab/mtone";
 import {
@@ -936,7 +936,7 @@ function NotePane({
       </div>
 
       <div className="notes-body-scroll">
-        <div className={history ? "notes-body-inner space-y-4" : "notes-body-editor"}>
+        <Container className={history ? "notes-body-inner space-y-4" : "notes-body-editor"}>
           <div className="notes-document-heading space-y-4">
             {autosave.error && <Alert tone="error">{autosave.error.message}</Alert>}
             {autosave.historyError && <Alert tone="error">历史保存失败：{autosave.historyError.message}</Alert>}
@@ -990,7 +990,7 @@ function NotePane({
               }}
             />
           )}
-        </div>
+        </Container>
       </div>
 
       <ConflictDialog

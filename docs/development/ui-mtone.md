@@ -13,7 +13,7 @@
 
 ## 现状与目标
 
-当前精确依赖为 **`@bixlab/mtone@0.15.3`** 与 **`@bixlab/mtone-blockeditor@0.2.1`**（`apps/web/package.json` / `pnpm-lock.yaml`，仓库根目录 `.npmrc` 固定使用官方源 `https://registry.npmjs.org/`），已移除前端对 `@blocknote/core` / `@blocknote/react` 的直接依赖与自建编辑器 UI。下文保留 T17—T19 的原始接入与各版本升级记录。
+当前精确依赖为 **`@bixlab/mtone@0.15.4`** 与 **`@bixlab/mtone-blockeditor@0.2.1`**（`apps/web/package.json` / `pnpm-lock.yaml`，仓库根目录 `.npmrc` 固定使用官方源 `https://registry.npmjs.org/`），已移除前端对 `@blocknote/core` / `@blocknote/react` 的直接依赖与自建编辑器 UI。笔记标题与编辑器通过 mtone 的 `Container` 统一居中限宽，见[任务卡 #298](../tasks/298.md)。下文保留 T17—T19 的原始接入与各版本升级记录。
 
 T17 已精确接入 npm `@bixlab/mtone@0.2.0`，迁移 App 静态类并移除 `packages/ui`；**PR #42 已普通 merge 至主线 `e3e1db2`，独立审查/主线验证/任务清理完成**。T17 接入时，生产入口使用应用层 `UiProvider` 配置公开 `MtoneProvider`，不转发控件 API；CSS 从应用样式入口导入。基础表单组合仅在测试夹具中，不建立生产演示路由或通用包装库。证据见 [T17](../plans/knoted-v1/evidence/t17.md)。
 

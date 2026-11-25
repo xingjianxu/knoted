@@ -25,6 +25,7 @@
 | [#292](292.md) | Feature | 笔记侧栏目录采用 mtone Tree 节点操作并补充悬停操作菜单 | 无 |
 | [#294](294.md) | Task | 升级 `@bixlab/mtone` 至 `0.15.3` 与 `@bixlab/mtone-blockeditor` 至 `0.2.1` | 无 |
 | [#296](296.md) | Feature | 笔记编辑器填满正文区 | 无 |
+| [#298](298.md) | Feature | 升级 mtone 并用 Container 布局笔记编辑区 | 无 |
 
 ## 开发部署
 
