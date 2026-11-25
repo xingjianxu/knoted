@@ -159,11 +159,38 @@ afterAll(() => {
 });
 
 describe("T27 mtone BlockEditor integration & NoteDocument v1 adapter", () => {
-  it("t27_2: preserves all seven blocks, five marks, marked links, nesting, code whitespace and asset IDs", () => {
+  it("t27_2: preserves all seven blocks, five marks, marked links, nesting, code whitespace and asset IDs through the real editor", async () => {
     const roundTrip = fromEditorBlocks(makeEditorBlocks(fullDocument), fullDocument);
     expect(roundTrip).toEqual(fullDocument);
     expect(JSON.stringify(roundTrip)).not.toContain("/assets/");
     expect(JSON.stringify(roundTrip)).not.toContain("/api/");
+
+    // Also round-trip through a real editable BlockEditor instance: editing a
+    // trailing block must preserve every untouched block verbatim via onChange.
+    const seeded: NoteDocument = {
+      blocks: [
+        { id: "tail", type: "paragraph", content: [{ type: "text", text: "起点" }] },
+        ...fullDocument.blocks,
+      ],
+    };
+    const onChange = vi.fn();
+    const view = render(
+      <UiProvider>
+        <NoteEditor documentKey="roundtrip-real" document={seeded} onChange={onChange} />
+      </UiProvider>,
+    );
+    const editable = await waitFor(() => {
+      const el = view.container.querySelector<HTMLElement>('[contenteditable="true"]');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    editable.focus();
+    pastePlainText(editable, "补充");
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const emitted = onChange.mock.lastCall![0] as NoteDocument;
+    expect(emitted.blocks.slice(1)).toEqual(fullDocument.blocks);
+    expect(JSON.stringify(emitted)).not.toContain("/assets/");
+    expect(JSON.stringify(emitted)).not.toContain("/api/");
   });
 
   it("maps asset_id to same-origin HTTP(S) asset URL and rejects foreign origins or query strings", () => {
@@ -325,6 +352,41 @@ describe("T27 mtone BlockEditor integration & NoteDocument v1 adapter", () => {
     await waitFor(() => expect(JSON.stringify(onChange.mock.lastCall?.[0])).toContain("后续正文"));
     expect(JSON.stringify(onChange.mock.lastCall?.[0])).not.toContain("#part#two");
     expect(screen.queryByText(/未应用此次编辑/)).not.toBeInTheDocument();
+  });
+
+  it("clears stale inputError when switching documentKey without remounting NoteEditor", async () => {
+    const onChange = vi.fn();
+    const initial: NoteDocument = {
+      blocks: [{ id: "p", type: "paragraph", content: [{ type: "text", text: "旧文档" }] }],
+    };
+    const view = render(
+      <UiProvider>
+        <NoteEditor documentKey="doc-a" document={initial} onChange={onChange} />
+      </UiProvider>,
+    );
+    const editable = await waitFor(() => {
+      const el = view.container.querySelector<HTMLElement>('[contenteditable="true"]');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    editable.focus();
+    pasteHtml(editable, '<p><a href="https://example.com/#part#two">非法链接</a></p>', "非法链接");
+    expect(await screen.findByText(/未应用此次编辑/)).toBeInTheDocument();
+
+    view.rerender(
+      <UiProvider>
+        <NoteEditor
+          documentKey="doc-b"
+          document={{ blocks: [{ id: "q", type: "paragraph", content: [{ type: "text", text: "新文档" }] }] }}
+          onChange={onChange}
+        />
+      </UiProvider>,
+    );
+    expect(screen.queryByText(/未应用此次编辑/)).not.toBeInTheDocument();
+    await waitFor(() => {
+      const next = view.container.querySelector<HTMLElement>('[contenteditable="true"]');
+      expect(next).toHaveTextContent("新文档");
+    });
   });
 
   it("t27_1: preserves the editable DOM and focus across composition and parent rerenders", async () => {

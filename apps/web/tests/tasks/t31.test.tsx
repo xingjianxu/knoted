@@ -58,7 +58,11 @@ beforeEach(() => {
     return json(current);
   }));
 });
-afterEach(() => { browserHistory?.destroy(); browserHistory = undefined; vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => {
+  browserHistory?.destroy(); browserHistory = undefined;
+  Reflect.deleteProperty(document, "elementsFromPoint");
+  vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks();
+});
 async function mount(path = `/notes/${id(1)}`, browser = false) {
   if (browser) { window.history.replaceState({}, "", path); browserHistory = createBrowserHistory(); }
   const router = createAppRouter({ history: browserHistory ?? createMemoryHistory({ initialEntries: [path] }) });

@@ -212,23 +212,47 @@ it("refuses saving an unuploaded external image URL entered into ImageForm", asy
   expect(onChange).not.toHaveBeenCalled();
 });
 
-it("aborts in-flight image upload when NoteEditor unmounts or switches documentKey", async () => {
-  const pending = deferred();
-  let signal!: AbortSignal;
-  const { onChange, unmount } = await setup(initial, async (input) => {
-    signal = (input as Request).signal;
-    return pending.promise;
-  });
-  await openImageEditForm();
-  const file = new File(["public PNG fixture"], "late.png", { type: "image/png" });
-  fireEvent.change(screen.getByLabelText("上传图片"), { target: { files: [file] } });
-  await waitFor(() => expect(signal).toBeDefined());
+it.each(["unmount", "switch", "readOnly"] as const)(
+  "aborts in-flight image upload when NoteEditor triggers %s",
+  async (mode) => {
+    const pending = deferred();
+    let signal!: AbortSignal;
+    const { onChange, unmount, rerender, client } = await setup(initial, async (input) => {
+      signal = (input as Request).signal;
+      return pending.promise;
+    });
+    await openImageEditForm();
+    const file = new File(["public PNG fixture"], "late.png", { type: "image/png" });
+    fireEvent.change(screen.getByLabelText("上传图片"), { target: { files: [file] } });
+    await waitFor(() => expect(signal).toBeDefined());
 
-  unmount();
-  await act(async () => { pending.resolve(response()); });
-  expect(signal.aborted).toBe(true);
-  expect(onChange).not.toHaveBeenCalled();
-});
+    if (mode === "unmount") {
+      unmount();
+    } else if (mode === "switch") {
+      rerender(
+        <UiProvider>
+          <NoteEditor
+            documentKey="t29-next"
+            document={{ blocks: [{ id: "fresh", type: "paragraph", content: [{ type: "text", text: "新笔记" }] }] }}
+            client={client}
+            onChange={onChange}
+          />
+        </UiProvider>,
+      );
+    } else {
+      rerender(
+        <UiProvider>
+          <NoteEditor documentKey="t29" document={initial} readOnly client={client} onChange={onChange} />
+        </UiProvider>,
+      );
+    }
+
+    await act(async () => { pending.resolve(response()); });
+    expect(signal.aborted).toBe(true);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.queryByText(/图片上传已取消/)).not.toBeInTheDocument();
+  },
+);
 
 it("uploadNoteImage rejects non-ready responses and invalid asset IDs", async () => {
   await stubMultipartGlobals();

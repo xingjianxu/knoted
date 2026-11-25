@@ -29,21 +29,27 @@ export function NoteEditor({
   // Deliberately independent of props while documentKey is unchanged: parent
   // save/query rerenders must never replace the editor view, selection or IME.
   const [seed, setSeed] = useState(() => ({ key: documentKey, document }));
-  if (seed.key !== documentKey) {
+  const [inputError, setInputError] = useState("");
+  if (!Object.is(seed.key, documentKey)) {
     setSeed({ key: documentKey, document });
+    if (inputError) setInputError("");
   }
   const initialDocument = seed.document;
-  const [inputError, setInputError] = useState("");
   const lifetime = useRef<AbortController | null>(null);
 
   useEffect(() => {
+    if (readOnly) {
+      lifetime.current?.abort();
+      lifetime.current = null;
+      return;
+    }
     const controller = new AbortController();
     lifetime.current = controller;
     return () => {
       controller.abort();
       if (lifetime.current === controller) lifetime.current = null;
     };
-  }, [documentKey]);
+  }, [documentKey, readOnly]);
 
   const initialContent = useMemo(
     () => (initialDocument.blocks.length ? toEditorBlocks(initialDocument) : undefined),
@@ -56,7 +62,7 @@ export function NoteEditor({
       const signal = lifetime.current?.signal;
       try {
         const url = await uploadNoteImage(client, file, signal);
-        setInputError("");
+        if (!signal?.aborted) setInputError("");
         return url;
       } catch (cause) {
         if (!signal?.aborted) {

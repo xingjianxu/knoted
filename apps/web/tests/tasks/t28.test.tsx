@@ -17,6 +17,7 @@ afterAll(() => {
   vi.restoreAllMocks();
   Reflect.deleteProperty(Range.prototype, "getClientRects");
   Reflect.deleteProperty(Range.prototype, "getBoundingClientRect");
+  Reflect.deleteProperty(document, "elementsFromPoint");
 });
 
 async function mountEditor(
