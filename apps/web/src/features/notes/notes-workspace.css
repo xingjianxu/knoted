@@ -141,6 +141,17 @@
   min-width: 0;
 }
 
+.notes-body-editor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.notes-body-editor > .notes-document-heading {
+  flex: none;
+  padding: 1.25rem 1rem 0;
+}
+
 .notes-pane .notes-title-input {
   font-size: clamp(1.5rem, 1.35rem + 0.6vw, 2rem);
   font-weight: 650;
@@ -180,6 +191,12 @@
 .notes-history-preview {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.notes-document:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 0px;
 }
 
 .notes-history-preview .mt-block-editor .bn-editor {
@@ -225,6 +242,10 @@
 
   .notes-body-inner {
     padding: 1.75rem 2.5rem 3.5rem;
+  }
+
+  .notes-body-editor > .notes-document-heading {
+    padding: 1.75rem 2.5rem 0;
   }
 }
 
