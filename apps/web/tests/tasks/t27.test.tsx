@@ -445,7 +445,9 @@ describe("T27 mtone BlockEditor integration & NoteDocument v1 adapter", () => {
     expect(view.container.querySelector('[contenteditable="true"]')).toBeNull();
     expect(view.container.querySelector('[class*="mantine"], [data-radix-popper-content-wrapper]')).toBeNull();
     expect(screen.getByText("中文标题")).toBeInTheDocument();
-    expect(screen.getByText("图注")).toBeInTheDocument();
+    const figure = screen.getByRole("figure");
+    fireEvent.focus(figure);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("图注");
     expect(onChange).not.toHaveBeenCalled();
   });
 });

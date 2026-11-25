@@ -100,13 +100,22 @@ async function openImageEditForm() {
   return screen.findByRole("group", { name: "图片设置", hidden: true });
 }
 
+function selectLocalImage(form: HTMLElement, file: File) {
+  const fields = within(form);
+  fireEvent.click(fields.getByText("上传", { exact: true }));
+  fireEvent.change(fields.getByLabelText("本地文件"), { target: { files: [file] } });
+  return fields.getByText("上传并应用");
+}
+
 it("t29_1: reopening persisted asset_id renders authenticated same-origin content and retains the caption", async () => {
   await setup();
   expect(screen.getByRole("img", { name: "笔记图片" })).toHaveAttribute(
     "src",
     `${window.location.origin}/api/v1/assets/${assetId}/content`,
   );
-  expect(screen.getByText("caption")).toBeInTheDocument();
+  const figure = screen.getByRole("figure");
+  fireEvent.focus(figure);
+  expect(await screen.findByRole("tooltip")).toHaveTextContent("caption");
 });
 
 it("t29_2: code special characters remain text, with custom language represented and editable via CodeControls", async () => {
@@ -156,16 +165,11 @@ it("t29_3: uploads replacement image via BlockEditor ImageForm with multipart/CS
 
   const formGroup = await openImageEditForm();
   const file = new File(["public PNG fixture"], "pixel.png", { type: "image/png" });
-  fireEvent.change(screen.getByLabelText("上传图片"), { target: { files: [file] } });
-
-  await waitFor(() =>
-    expect(screen.getByLabelText("图片地址")).toHaveValue(
-      `${window.location.origin}/api/v1/assets/${asset.id}/content`,
-    ),
-  );
+  const submit = selectLocalImage(formGroup, file);
   expect(onChange).not.toHaveBeenCalled();
+  expect(requests).toHaveLength(0);
 
-  fireEvent.click(within(formGroup).getByText("应用图片"));
+  fireEvent.click(submit);
   await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
   const saved = onChange.mock.lastCall![0] as NoteDocument;
   expect(saved.blocks[0]).toEqual({ ...initial.blocks[0], asset_id: asset.id });
@@ -189,13 +193,14 @@ it("failed upload or reclaimed asset keeps old image, shows feedback, and never 
       headers: { "Content-Type": "application/json" },
     });
   const { onChange } = await setup(initial, fetcher);
-  await openImageEditForm();
+  const form = await openImageEditForm();
   const file = new File(["public PNG fixture"], "retired.png", { type: "image/png" });
-  fireEvent.change(screen.getByLabelText("上传图片"), { target: { files: [file] } });
+  fireEvent.click(selectLocalImage(form, file));
 
   expect(await screen.findByText("图片已回收，请重新选择文件")).toBeInTheDocument();
-  expect(screen.getByLabelText("图片地址")).toHaveValue(
-    `${window.location.origin}/api/v1/assets/${assetId}/content`,
+  expect(within(form).getByText("重试上传")).toBeEnabled();
+  expect(screen.getByRole("img", { name: "笔记图片" })).toHaveAttribute(
+    "src", `${window.location.origin}/api/v1/assets/${assetId}/content`,
   );
   expect(onChange).not.toHaveBeenCalled();
 });
@@ -221,9 +226,9 @@ it.each(["unmount", "switch", "readOnly"] as const)(
       signal = (input as Request).signal;
       return pending.promise;
     });
-    await openImageEditForm();
+    const form = await openImageEditForm();
     const file = new File(["public PNG fixture"], "late.png", { type: "image/png" });
-    fireEvent.change(screen.getByLabelText("上传图片"), { target: { files: [file] } });
+    fireEvent.click(selectLocalImage(form, file));
     await waitFor(() => expect(signal).toBeDefined());
 
     if (mode === "unmount") {

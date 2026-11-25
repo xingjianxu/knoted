@@ -4,6 +4,6 @@ packages:
 # Inspected mtone releases and their required Splitter dependency only;
 # retain the age policy for all other packages and versions.
 minimumReleaseAgeExclude:
-  - '@bixlab/mtone@0.15.2'
-  - '@bixlab/mtone-blockeditor@0.2.0'
+  - '@bixlab/mtone@0.15.3'
+  - '@bixlab/mtone-blockeditor@0.2.1'
   - react-resizable-panels@4.24.0

@@ -442,10 +442,15 @@ test("笔记编辑器消费 mtone-blockeditor：斜杠菜单、图片上传资�
     }
     return route.fallback();
   });
-  await page.route("**/api/v1/assets", route => route.fulfill({
-    status: 201,
-    json: { id: uploadedAssetId, mime: "image/png", size: pngBytes.length, sha256: "a".repeat(64), state: "ready", created_at: now },
-  }));
+  let assetUploads = 0;
+  await page.route("**/api/v1/assets", route => {
+    expect(route.request().method()).toBe("POST");
+    assetUploads += 1;
+    return route.fulfill({
+      status: 201,
+      json: { id: uploadedAssetId, mime: "image/png", size: pngBytes.length, sha256: "a".repeat(64), state: "ready", created_at: now },
+    });
+  });
   await page.route(`**/api/v1/assets/${uploadedAssetId}/content`, route => route.fulfill({
     body: pngBytes,
     contentType: "image/png",
@@ -476,18 +481,18 @@ test("笔记编辑器消费 mtone-blockeditor：斜杠菜单、图片上传资�
   await slashList.getByRole("option", { name: "图片" }).click();
   const imageSettings = page.getByRole("group", { name: "图片设置" });
   await expect(imageSettings).toBeVisible();
-  await imageSettings.getByLabel("上传图片").setInputFiles({
+  await imageSettings.getByLabel("本地文件").setInputFiles({
     name: "chinese.png",
     mimeType: "image/png",
     buffer: pngBytes,
   });
-  await expect(imageSettings.getByLabel("图片地址")).toHaveValue(
-    `http://127.0.0.1:4178/api/v1/assets/${uploadedAssetId}/content`,
-  );
-  await imageSettings.getByRole("button", { name: "应用图片" }).click();
+  await expect(imageSettings.getByText("chinese.png")).toBeVisible();
+  expect(assetUploads).toBe(0);
+  await imageSettings.getByRole("button", { name: "上传并应用" }).click();
   const img = page.locator(".mt-block-editor-image img");
   await expect(img).toBeVisible();
   await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
+  expect(assetUploads).toBe(1);
 
   await page.getByRole("button", { name: "保存并记录历史" }).click();
   await expect.poll(() => patches.length).toBeGreaterThan(0);
