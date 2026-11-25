@@ -413,6 +413,59 @@ test("笔记页使用 Splitter 左右分栏，默认展示树根首篇笔记并�
   await expect(current).toContainText("子笔记正文内容");
 });
 
+test("短笔记的可编辑区域填满桌面分栏和窄屏正文区", async ({ page }) => {
+  test.skip(baseline, "改版后的笔记编辑器布局回归");
+  await fixtures(page);
+  await page.route(`**/api/v1/notes/${note.id}`, route =>
+    route.fulfill({ json: { ...note, document: { blocks: document.blocks.slice(0, 1) } } }),
+  );
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`http://127.0.0.1:4178/notes/${note.id}`);
+
+  const pane = page.getByRole("region", { name: "当前笔记" });
+  const editor = pane.getByRole("textbox", { name: "笔记编辑器" });
+  const divider = pane.getByRole("separator");
+  const expectFilled = async () => {
+    await expect(editor).toBeVisible();
+    await expect(divider).toBeVisible();
+    const [paneBox, editorBox, dividerBox] = await Promise.all([
+      pane.boundingBox(), editor.boundingBox(), divider.boundingBox(),
+    ]);
+    expect(paneBox).not.toBeNull();
+    expect(editorBox).not.toBeNull();
+    expect(dividerBox).not.toBeNull();
+    expect(Math.abs(editorBox!.x - paneBox!.x)).toBeLessThanOrEqual(2);
+    expect(Math.abs(editorBox!.width - paneBox!.width)).toBeLessThanOrEqual(2);
+    expect(Math.abs(editorBox!.y - (dividerBox!.y + dividerBox!.height))).toBeLessThanOrEqual(2);
+    expect(Math.abs(editorBox!.y + editorBox!.height - (paneBox!.y + paneBox!.height))).toBeLessThanOrEqual(2);
+  };
+
+  await expectFilled();
+  const before = (await editor.boundingBox())!.width;
+  await page.getByRole("separator", { name: "调整分栏 1" }).press("ArrowRight");
+  await expect.poll(async () => (await editor.boundingBox())?.width ?? before).toBeLessThan(before);
+  await expectFilled();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole("button", { name: "目录", exact: true })).toBeVisible();
+  await expectFilled();
+});
+
+test("长笔记在正文区滚动时保留工具栏", async ({ page }) => {
+  test.skip(baseline, "改版后的笔记编辑器布局回归");
+  await fixtures(page);
+  await page.setViewportSize({ width: 390, height: 540 });
+  await page.goto(`http://127.0.0.1:4178/notes/${note.id}`);
+
+  const editor = page.getByRole("textbox", { name: "笔记编辑器" });
+  const lastParagraph = editor.getByText(/^调研记录第 14 段/);
+  await expect(lastParagraph).toBeAttached();
+  await expect(lastParagraph).not.toBeInViewport();
+  await lastParagraph.scrollIntoViewIfNeeded();
+  await expect(lastParagraph).toBeInViewport();
+  await expect(page.getByRole("button", { name: "历史版本" })).toBeInViewport();
+});
+
 test("笔记编辑器消费 mtone-blockeditor：斜杠菜单、图片上传资产映射与不支持块提示", async ({ page }) => {
   test.skip(baseline, "改版后的编辑器回归");
   const uploadedAssetId = id(901);

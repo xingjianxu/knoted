@@ -936,31 +936,34 @@ function NotePane({
       </div>
 
       <div className="notes-body-scroll">
-        <div className="notes-body-inner space-y-4">
-          {autosave.error && <Alert tone="error">{autosave.error.message}</Alert>}
-          {autosave.historyError && <Alert tone="error">历史保存失败：{autosave.historyError.message}</Alert>}
-          {autosave.serverUpdated && <Alert tone="warning">服务器内容已更新；本地草稿仍保留。</Alert>}
+        <div className={history ? "notes-body-inner space-y-4" : "notes-body-editor"}>
+          <div className="notes-document-heading space-y-4">
+            {autosave.error && <Alert tone="error">{autosave.error.message}</Alert>}
+            {autosave.historyError && <Alert tone="error">历史保存失败：{autosave.historyError.message}</Alert>}
+            {autosave.serverUpdated && <Alert tone="warning">服务器内容已更新；本地草稿仍保留。</Alert>}
 
-          <Input
-            ref={titleInput}
-            variant="borderless"
-            aria-label="笔记标题"
-            placeholder="未命名笔记"
-            className="notes-title-input"
-            value={autosave.draft.title}
-            maxLength={500}
-            disabled={working}
-            readOnly={expired}
-            onChange={event => { if (!isBusy() && !expired) autosave.changeDraft({ title: event.target.value }); }}
-          />
-          <Divider />
+            <Input
+              ref={titleInput}
+              variant="borderless"
+              aria-label="笔记标题"
+              placeholder="未命名笔记"
+              className="notes-title-input"
+              value={autosave.draft.title}
+              maxLength={500}
+              disabled={working}
+              readOnly={expired}
+              onChange={event => { if (!isBusy() && !expired) autosave.changeDraft({ title: event.target.value }); }}
+            />
+            <Divider className={history ? undefined : "mb-0"} />
+          </div>
 
           {/* The same editor and selection survive history and drawer interactions. */}
-          <div className="notes-document reading-measure" hidden={history} inert={history}>
+          <div className="notes-document" hidden={history} inert={history}>
             <NoteEditor
               key={`${initialNote.id}:${autosave.resetEpoch}`}
               documentKey={`${initialNote.id}:${autosave.resetEpoch}`}
               document={autosave.draft.document}
+              fillHeight
               readOnly={unavailable}
               client={bundle.api}
               onChange={document => { if (!isBusy() && !expired) autosave.changeDraft({ document }); }}

@@ -12,6 +12,7 @@ export type NoteEditorProps = {
   /** Initial value only. Key the component or change documentKey to open another note. */
   document: NoteDocument;
   onChange: (document: NoteDocument) => void;
+  fillHeight?: boolean;
   readOnly?: boolean;
   /** Optional API client enabling image uploads via BlockEditor's built-in image dialog. */
   client?: ApiClient;
@@ -22,6 +23,7 @@ export function NoteEditor({
   documentKey,
   document,
   onChange,
+  fillHeight = false,
   readOnly = false,
   client,
   className,
@@ -93,18 +95,21 @@ export function NoteEditor({
   );
 
   return (
-    <section aria-label="笔记编辑器" className="space-y-2">
+    <section aria-label="笔记编辑器" className={fillHeight ? "flex flex-1 flex-col gap-2" : "space-y-2"}>
       {inputError && <Alert tone="warning">{inputError}</Alert>}
-      <BlockEditor
-        documentKey={documentKey}
-        initialContent={initialContent}
-        onChange={handleChange}
-        readOnly={readOnly}
-        label="笔记编辑器"
-        locale="zh"
-        className={className}
-        uploadImage={handleUploadImage}
-      />
+      <div className={fillHeight ? "flex-1" : undefined}>
+        <BlockEditor
+          documentKey={documentKey}
+          initialContent={initialContent}
+          onChange={handleChange}
+          fillHeight={fillHeight}
+          readOnly={readOnly}
+          label="笔记编辑器"
+          locale="zh"
+          className={className}
+          uploadImage={handleUploadImage}
+        />
+      </div>
     </section>
   );
 }
