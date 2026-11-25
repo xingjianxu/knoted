@@ -1,6 +1,6 @@
 # UI 开发：消费 mtone，不在 Knoted 建通用库
 
-依据：[ADR 0002](../decisions/0002-mtone-ui-ownership.md)。适用于全部前端任务，尤其 T17—T20、T27—T29 与后续业务页面。新增或扩展组件前使用 [mtone-component-request Skill](../../.agents/skills/mtone-component-request/SKILL.md)。
+依据：[ADR 0002](../decisions/0002-mtone-ui-ownership.md)、[ADR 0012](../decisions/0012-mtone-blockeditor-adoption.md)。适用于全部前端任务，尤其 T17—T20、T27—T29 与后续业务页面。新增或扩展组件前使用 [mtone-component-request Skill](../../.agents/skills/mtone-component-request/SKILL.md)。
 
 ## 布局与界面文案
 
