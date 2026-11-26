@@ -1,10 +1,10 @@
 # 笔记表格保存
 
 - 日期 2026-11-26
-- 状态 In Review
+- 状态 Resolved
 - 决策人 项目维护者
 - 相关记录 [Issue #308](https://github.com/xingjianxu/knoted/issues/308) · [ADR 0012](../decisions/0012-mtone-blockeditor-adoption.md)
-- 决策记录 待确认
+- 决策记录 [ADR 0013](../decisions/0013-note-table-persistence.md)，现行契约直接交付，旧版应用和服务无兼容路径。
 
 ## 问题与目标
 

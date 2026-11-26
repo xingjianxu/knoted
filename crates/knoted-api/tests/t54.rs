@@ -281,6 +281,41 @@ async fn t54_4_note_save_persists_latest_plain_text_projection_once() {
 }
 
 #[tokio::test]
+async fn table_cell_text_is_searchable_through_the_note_outbox() {
+    let fixture = Fixture::new().await;
+    let note = notes::create(&fixture.ctx, CreateNote {
+        title: "周会记录".into(),
+        parent_id: None,
+        document_json: json!({"blocks":[{
+            "id":"table","type":"table","table":{
+                "header_rows":1,
+                "rows":[
+                    {"cells":[[{"type":"text","text":"项目"}],[{"type":"text","text":"负责人"}]]},
+                    {"cells":[[{"type":"text","text":"quartzbridge"}],[]]}
+                ]
+            }
+        }]}).to_string(),
+    }).await.unwrap();
+    assert_eq!(
+        knoted_core::search::service::project_pending(&fixture.ctx)
+            .await
+            .unwrap(),
+        1
+    );
+    fixture.run_publication().await;
+    let result = fixture.search("q=quartzbridge").await;
+    fixture.finish().await;
+    assert_eq!(result.0, StatusCode::OK);
+    assert_eq!(result.1["items"][0]["id"], note.id.to_string());
+    assert!(
+        result.1["items"][0]["snippet"]
+            .as_str()
+            .unwrap()
+            .contains("quartzbridge")
+    );
+}
+
+#[tokio::test]
 async fn t54_5_repeated_tag_filters_follow_current_associations() {
     use knoted_core::links::service::{
         ChangeEntityTag, CreateTag, Entity, EntityType, assign_tag, create_tag, remove_tag,

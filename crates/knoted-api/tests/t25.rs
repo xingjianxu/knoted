@@ -175,6 +175,59 @@ async fn t25_3_http_restore_preserves_current_and_can_reverse() {
     assert_eq!(h.flush(&p).await["content_version"], 4);
 }
 
+#[tokio::test]
+async fn table_save_conflict_validation_and_snapshot_restore() {
+    let h = Harness::new().await;
+    let p = h.create("table note").await;
+    let table = json!({"blocks":[{
+        "id":"table","type":"table","table":{
+            "header_rows":1,"column_widths":[140,null],
+            "rows":[
+                {"cells":[[{"type":"text","text":"项目"}],[]]},
+                {"cells":[[{"type":"link","text":"详情","href":"https://example.com/"}],[]]}
+            ]
+        }
+    }]});
+    let patch = json!({"expected_version":1,"document":table});
+    let saved = h.send("PATCH", &p, patch.clone()).await;
+    assert_eq!(saved.0, StatusCode::OK, "{}", saved.2);
+    assert_eq!(saved.2["document"], table);
+    assert_eq!(h.send("PATCH", &p, patch).await.0, StatusCode::CONFLICT);
+    assert_eq!(h.send("GET", &p, Value::Null).await.2["document"], table);
+    let snapshot = h.flush(&p).await;
+    assert_eq!(snapshot["document"], table);
+
+    let mut invalid = table.clone();
+    invalid["blocks"][0]["table"]["rows"][1]["cells"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    let before = h.state().await;
+    assert_eq!(
+        h.send(
+            "PATCH",
+            &p,
+            json!({"expected_version":2,"document":invalid})
+        )
+        .await
+        .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(h.state().await, before);
+
+    let empty = json!({"blocks":[]});
+    assert_eq!(
+        h.send("PATCH", &p, json!({"expected_version":2,"document":empty}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let restored = h.restore(&p, &snapshot, 3).await;
+    assert_eq!(restored.0, StatusCode::OK);
+    assert_eq!(restored.2["document"], table);
+    assert_eq!(h.send("GET", &p, Value::Null).await.2["document"], table);
+}
+
 // Stale CAS, cross-note IDs and write failures must not preserve phantom history.
 #[tokio::test]
 async fn t25_http_rejected_restores_have_no_effects_and_database_failure_rolls_back() {

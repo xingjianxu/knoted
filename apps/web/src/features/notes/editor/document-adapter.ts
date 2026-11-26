@@ -3,11 +3,16 @@ import type { components } from "@knoted/api-client";
 
 export type NoteDocument = components["schemas"]["NoteDocument"];
 type NoteBlock = components["schemas"]["NoteBlock"];
+type NoteTable = components["schemas"]["NoteTable"];
 type InlineNode = components["schemas"]["InlineNode"];
 type Mark = components["schemas"]["InlineMark"];
 
 const MAX_BLOCKS = 5000;
 const MAX_DEPTH = 8;
+const MAX_TABLE_ROWS = 1000;
+const MAX_TABLE_COLUMNS = 100;
+const MAX_DOCUMENT_CELLS = 10_000;
+const MAX_COLUMN_WIDTH = 10_000;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const marks: Mark[] = ["bold", "italic", "underline", "strike", "code"];
 const blockTypes: NoteBlock["type"][] = [
@@ -18,10 +23,10 @@ const blockTypes: NoteBlock["type"][] = [
   "checkListItem",
   "image",
   "codeBlock",
+  "table",
 ];
 const unsupportedBlockLabels: Readonly<Record<string, string>> = {
   quote: "引用",
-  table: "表格",
   divider: "分割线",
   toggleListItem: "折叠块",
   callout: "提示块",
@@ -84,17 +89,24 @@ export function urlToAssetId(rawUrl: string): string | null {
   return isAssetUuid(decoded) ? decoded : null;
 }
 
+export class NoteLinkError extends Error {}
+
 export function safeHref(href: string): string {
   // Match the backend's URI (not IRI) spelling contract before WHATWG URL
   // parsing can normalize invalid percent escapes, Unicode or missing slashes.
   if (!/^(?:[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=]|%[0-9A-Fa-f]{2})*$/.test(href)
-    || href.split("#").length > 2) throw new Error("链接地址无效");
-  const url = new URL(href);
+    || href.split("#").length > 2) throw new NoteLinkError("链接地址无效");
+  let url: URL;
+  try {
+    url = new URL(href);
+  } catch {
+    throw new NoteLinkError("链接地址无效");
+  }
   if (url.protocol === "mailto:") {
-    if (!url.pathname || /[[\]]/.test(href.slice(href.indexOf(":") + 1))) throw new Error("邮件链接无效");
+    if (!url.pathname || /[[\]]/.test(href.slice(href.indexOf(":") + 1))) throw new NoteLinkError("邮件链接无效");
   } else if (url.protocol === "http:" || url.protocol === "https:") {
     const remainder = href.slice(href.indexOf(":") + 1);
-    if (!remainder.startsWith("//") || !url.hostname) throw new Error("链接地址无效");
+    if (!remainder.startsWith("//") || !url.hostname) throw new NoteLinkError("链接地址无效");
     const rest = remainder.slice(2);
     const end = rest.search(/[/?#]/);
     const authority = end < 0 ? rest : rest.slice(0, end);
@@ -103,8 +115,8 @@ export function safeHref(href: string): string {
     const userinfo = at < 0 ? "" : authority.slice(0, at);
     const host = at < 0 ? authority : authority.slice(at + 1);
     if (!authority || /[[\]]/.test(suffix) || /[[\]@]/.test(userinfo)
-      || (!host.startsWith("[") && /[[\]]/.test(host))) throw new Error("链接地址无效");
-  } else throw new Error("链接协议不受支持");
+      || (!host.startsWith("[") && /[[\]]/.test(host))) throw new NoteLinkError("链接地址无效");
+  } else throw new NoteLinkError("链接协议不受支持");
   return href;
 }
 
@@ -112,10 +124,57 @@ function plainText(nodes: readonly InlineNode[] | undefined): string {
   return (nodes ?? []).map((node) => node.text).join("");
 }
 
+function validateTable(table: NoteTable, previousCells: number): number {
+  const rows = table.rows.length;
+  const columns = table.rows[0]?.cells.length ?? 0;
+  if (!columns || table.rows.some(row => row.cells.length !== columns)) {
+    throw new Error("表格至少需要一行一列，且每行的列数必须相同");
+  }
+  const cells = previousCells + rows * columns;
+  if (rows > MAX_TABLE_ROWS || columns > MAX_TABLE_COLUMNS || cells > MAX_DOCUMENT_CELLS) {
+    throw new Error("表格超出保存限制（每表最多 1000 行、100 列，每篇笔记最多 10000 个单元格）");
+  }
+  const headerRows = table.header_rows ?? 0;
+  const headerColumns = table.header_columns ?? 0;
+  if (!Number.isInteger(headerRows) || headerRows < 0 || headerRows > rows
+    || !Number.isInteger(headerColumns) || headerColumns < 0 || headerColumns > columns) {
+    throw new Error("表格的表头超出行列范围");
+  }
+  const widths = table.column_widths;
+  if (widths && (widths.length !== columns || widths.some(width =>
+    width !== null && (!Number.isInteger(width) || width < 1 || width > MAX_COLUMN_WIDTH)))) {
+    throw new Error("表格列宽无效");
+  }
+  return cells;
+}
+
+function toEditorInline(nodes: readonly InlineNode[]) {
+  return nodes.map((node) => {
+    if (node.type !== "text" && node.type !== "link") throw new Error("不支持的行内格式");
+    if (node.href !== undefined) safeHref(node.href);
+    const styles: Partial<Record<Mark, boolean>> = {};
+    for (const mark of node.marks ?? []) {
+      if (!marks.includes(mark)) throw new Error("不支持的文字格式");
+      styles[mark] = true;
+    }
+    // BlockEditor's code mark excludes links and all other marks.
+    if (node.type === "link") {
+      delete styles.code;
+      return {
+        type: "link" as const,
+        href: safeHref(node.href ?? ""),
+        content: [{ type: "text" as const, text: node.text, styles }],
+      };
+    }
+    return { type: "text" as const, text: node.text, styles: styles.code ? { code: true } : styles };
+  });
+}
+
 /** Explicit DTO boundary: BlockEditor props/styles/URLs never reach HTTP. */
 export function toEditorBlocks(document: NoteDocument): BlockEditorInput[] {
   const ids = new Set<string>();
   let count = 0;
+  let cells = 0;
 
   function convert(block: NoteBlock, depth: number): BlockEditorInput {
     if (!blockTypes.includes(block.type)) throw new Error("不支持的笔记块");
@@ -127,32 +186,32 @@ export function toEditorBlocks(document: NoteDocument): BlockEditorInput[] {
       throw new Error("图片缺少有效资产 ID");
     }
 
-    const content = (block.content ?? []).map((node) => {
-      if (node.type !== "text" && node.type !== "link") throw new Error("不支持的行内格式");
-      if (node.href !== undefined) safeHref(node.href);
-      const styles: Partial<Record<Mark, boolean>> = {};
-      for (const mark of node.marks ?? []) {
-        if (!marks.includes(mark)) throw new Error("不支持的文字格式");
-        styles[mark] = true;
-      }
-      // BlockEditor uses BlockNote's default code mark (excludes: "_"), which
-      // cannot coexist with link or bold/italic/underline/strike in ProseMirror.
-      let editorStyles: Partial<Record<Mark, boolean>>;
-      if (node.type === "link") {
-        editorStyles = { ...styles };
-        delete editorStyles.code;
-      } else {
-        editorStyles = styles.code ? { code: true } : styles;
-      }
-      const text = { type: "text" as const, text: node.text, styles: editorStyles };
-      return node.type === "link"
-        ? { type: "link" as const, href: safeHref(node.href ?? ""), content: [text] }
-        : text;
-    });
+    if (block.type !== "table" && block.table !== undefined) throw new Error("表格块类型无效");
+    const content = toEditorInline(block.content ?? []);
 
     const children = (block.children ?? []).map((child) => convert(child, depth + 1));
 
     switch (block.type) {
+      case "table": {
+        if (!block.table || content.length || block.level !== undefined || block.checked !== undefined
+          || block.asset_id !== undefined || block.language !== undefined) {
+          throw new Error("表格块格式无效");
+        }
+        const table = block.table;
+        cells = validateTable(table, cells);
+        return {
+          id: block.id,
+          type: "table",
+          content: {
+            type: "tableContent",
+            rows: table.rows.map(row => ({ cells: row.cells.map(toEditorInline) })),
+            columnWidths: table.column_widths?.map(width => width ?? undefined) ?? [],
+            headerRows: table.header_rows ?? 0,
+            headerCols: table.header_columns ?? 0,
+          },
+          children,
+        };
+      }
       case "heading":
         return {
           id: block.id,
@@ -248,14 +307,15 @@ export function fromEditorBlocks(
     return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
   }
 
-  function validateOriginalHrefs(original: NoteBlock | undefined) {
-    for (const node of original?.content ?? []) {
+  function validateOriginalHrefs(nodes: readonly InlineNode[] | undefined) {
+    for (const node of nodes ?? []) {
       if (node.href !== undefined) safeHref(node.href);
     }
   }
 
   const seenIds = new Set<string>();
   let count = 0;
+  let cells = 0;
 
   function convert(block: BlockEditorBlock, depth: number): NoteBlock {
     if (++count > MAX_BLOCKS || depth > MAX_DEPTH) {
@@ -274,19 +334,49 @@ export function fromEditorBlocks(
     delete retained.language;
     delete retained.asset_id;
     delete retained.content;
+    delete retained.table;
     delete retained.children;
 
     const children = block.children.map((child) => convert(child, depth + 1));
     const childrenField = children.length || (sameType && original?.children) ? { children } : {};
 
     switch (block.type) {
+      case "table": {
+        const previous = original?.table;
+        const rows = block.content.rows.map((row, rowIndex) => ({
+          cells: row.cells.map((cell, column) => {
+            if (!Array.isArray(cell)
+              && ((cell.props.colspan ?? 1) !== 1 || (cell.props.rowspan ?? 1) !== 1)) {
+              throw new Error("暂不支持保存带合并单元格的表格，请拆分单元格后重试");
+            }
+            const content = convertInlineContent(Array.isArray(cell) ? cell : cell.content);
+            const prior = previous?.rows[rowIndex]?.cells[column];
+            if (prior && equivalent(prior, content)) {
+              validateOriginalHrefs(prior);
+              return prior;
+            }
+            return content;
+          }),
+        }));
+        const widths = (rows[0]?.cells ?? []).map((_, column) => block.content.columnWidths[column] ?? null);
+        const headerRows = block.content.headerRows ?? 0;
+        const headerColumns = block.content.headerCols ?? 0;
+        const table: NoteTable = {
+          rows,
+          ...(headerRows || previous?.header_rows !== undefined ? { header_rows: headerRows } : {}),
+          ...(headerColumns || previous?.header_columns !== undefined ? { header_columns: headerColumns } : {}),
+          ...(widths.some(width => width !== null) || previous?.column_widths ? { column_widths: widths } : {}),
+        };
+        cells = validateTable(table, cells);
+        return { id: block.id, type: "table", table, ...childrenField };
+      }
       case "heading": {
         if (![1, 2, 3].includes(block.props.level)) {
           throw new Error("暂不支持保存 4–6 级标题，请调整为 1–3 级标题后再保存");
         }
         const content = convertInlineContent(block.content);
         const unchanged = sameType && equivalent(original?.content ?? [], content);
-        if (unchanged) validateOriginalHrefs(original);
+        if (unchanged) validateOriginalHrefs(original?.content);
         return {
           ...retained,
           id: block.id,
@@ -303,7 +393,7 @@ export function fromEditorBlocks(
       case "numberedListItem": {
         const content = convertInlineContent(block.content);
         const unchanged = sameType && equivalent(original?.content ?? [], content);
-        if (unchanged) validateOriginalHrefs(original);
+        if (unchanged) validateOriginalHrefs(original?.content);
         return {
           ...retained,
           id: block.id,
@@ -317,7 +407,7 @@ export function fromEditorBlocks(
       case "checkListItem": {
         const content = convertInlineContent(block.content);
         const unchanged = sameType && equivalent(original?.content ?? [], content);
-        if (unchanged) validateOriginalHrefs(original);
+        if (unchanged) validateOriginalHrefs(original?.content);
         return {
           ...retained,
           id: block.id,
@@ -332,7 +422,7 @@ export function fromEditorBlocks(
       case "codeBlock": {
         const text = block.content.map((node) => node.text).join("");
         const unchanged = sameType && plainText(original?.content) === text;
-        if (unchanged) validateOriginalHrefs(original);
+        if (unchanged) validateOriginalHrefs(original?.content);
         const rawLanguage = block.props.language;
         let language: string | undefined;
         if (sameType && rawLanguage === "text" && (original?.language === undefined || original.language === "" || original.language === "text")) {
@@ -359,7 +449,7 @@ export function fromEditorBlocks(
         }
         const caption = block.props.caption ?? "";
         const unchanged = sameType && plainText(original?.content) === caption;
-        if (unchanged) validateOriginalHrefs(original);
+        if (unchanged) validateOriginalHrefs(original?.content);
         const content: InlineNode[] = caption ? [{ type: "text", text: caption }] : [];
         return {
           ...retained,

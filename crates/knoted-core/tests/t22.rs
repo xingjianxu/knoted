@@ -48,6 +48,87 @@ fn rejected(ctx: &AppContext, raw: &str, status: u16) {
 }
 
 #[tokio::test]
+async fn table_cells_round_trip_and_extract_in_row_order() {
+    let ctx = context();
+    let table = json!({
+        "id": "table",
+        "type": "table",
+        "table": {
+            "rows": [
+                {"cells": [[{"type":"text","text":"标题","marks":["bold"]}], []]},
+                {"cells": [[{"type":"text","text":"左"}],
+                    [{"type":"link","text":"右","href":"https://example.com/cell"}]]}
+            ],
+            "header_rows": 1,
+            "header_columns": 1,
+            "column_widths": [120, null]
+        },
+        "children": [paragraph("child", "子块")]
+    });
+    let raw = json!({"blocks": [paragraph("before", "前"), table]}).to_string();
+    assert_eq!(validate(&ctx, &raw).unwrap().document_json(), raw);
+    let plain = extract(&ctx, &raw);
+    assert_eq!(plain.text, "前\n标题\t\n左\t右\n子块");
+    assert_eq!(plain.blocks[1].block_id, "table");
+    assert_eq!(plain.blocks[1].path, vec![1]);
+    assert_eq!(plain.blocks[2].path, vec![1, 0]);
+}
+
+#[tokio::test]
+async fn table_validation_rejects_invalid_shapes_and_links() {
+    let ctx = context();
+    for table in [
+        json!(null),
+        json!({"rows":[]}),
+        json!({"rows":[{"cells":[]}]}),
+        json!({"rows":[{"cells":[[]]},{"cells":[[],[]]}]}),
+        json!({"rows":[{"cells":[[]]}],"header_rows":2}),
+        json!({"rows":[{"cells":[[]]}],"header_columns":2}),
+        json!({"rows":[{"cells":[[]]}],"column_widths":[1,2]}),
+        json!({"rows":[{"cells":[[]]}],"column_widths":[0]}),
+        json!({"rows":[{"cells":[[]]}],"column_widths":[10001]}),
+        json!({"rows":[{"cells":[[]],"rowspan":2}]}),
+        json!({"rows":[{"cells":[[{"type":"link","text":"bad","href":"/relative"}]]}]}),
+    ] {
+        rejected(
+            &ctx,
+            &document(json!({"id":"t","type":"table","table":table})),
+            422,
+        );
+    }
+    for block in [
+        json!({"id":"t","type":"table"}),
+        json!({"id":"p","type":"paragraph","table":{"rows":[{"cells":[[]]}]}}),
+        json!({"id":"t","type":"table","table":{"rows":[{"cells":[[]]}]},
+            "content":[{"type":"text","text":"ambiguous"}]}),
+    ] {
+        rejected(&ctx, &document(block), 422);
+    }
+}
+
+#[tokio::test]
+async fn table_dimensions_and_document_cell_count_are_bounded() {
+    let ctx = context();
+    let table = |id: &str, rows: usize, columns: usize| {
+        json!({"id":id,"type":"table","table":{"rows":vec![
+            json!({"cells":vec![json!([]); columns]}); rows
+        ]}})
+    };
+    let first = table("first", 500, 10);
+    let second = table("second", 50, 100);
+    let exact = json!({"blocks": [first, second]});
+    assert!(validate(&ctx, &exact.to_string()).is_ok());
+    let mut oversized = exact;
+    oversized["blocks"]
+        .as_array_mut()
+        .unwrap()
+        .push(table("extra", 1, 1));
+    rejected(&ctx, &oversized.to_string(), 413);
+    rejected(&ctx, &document(table("wide", 1, 101)), 413);
+    rejected(&ctx, &document(table("tall", 1001, 1)), 413);
+}
+
+#[tokio::test]
 async fn t22_1_unknown_format_version_is_422() {
     let ctx = context();
     for version in [0, 2, u32::MAX] {

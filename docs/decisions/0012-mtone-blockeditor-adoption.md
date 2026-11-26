@@ -7,7 +7,7 @@
 - Related issues: [#286](https://github.com/xingjianxu/knoted/issues/286)、[#288](https://github.com/xingjianxu/knoted/issues/288)
 - Related PRs: [#287](https://github.com/xingjianxu/knoted/pull/287)（编辑器迁移实现）；本 ADR PR 见 [#288](https://github.com/xingjianxu/knoted/issues/288)
 - Supersedes: 部分替代 [ADR 0002](0002-mtone-ui-ownership.md) 第 4 条（BlockNote 编辑器核心与自建 mtone 组合工具栏/菜单边界）；ADR 0002 其余条款继续有效
-- Superseded by: 无
+- Superseded by: [ADR 0013](0013-note-table-persistence.md) 部分替代普通表格的持久化限制
 
 ## 背景与问题
 
