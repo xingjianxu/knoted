@@ -73,6 +73,12 @@ async function mount(path = `/notes/${id(1)}`, browser = false) {
 }
 const calls = (method: string, suffix: string) => requests.filter(r => r.method === method && new URL(r.url).pathname.endsWith(suffix));
 async function title() { return screen.findByRole("textbox", { name: "笔记标题" }); }
+function dragAfter(source: HTMLElement, target: HTMLElement) {
+  expect(source).toHaveAttribute("draggable", "true");
+  vi.spyOn(target, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 200, 32));
+  fireEvent.dragStart(source);
+  fireEvent(target, new MouseEvent("drop", { bubbles: true, cancelable: true, clientY: 29 }));
+}
 async function selectNoteAction(name: string) {
   fireEvent.click(await screen.findByRole("button", { name: "更多笔记操作" }));
   fireEvent.click(await screen.findByRole("menuitem", { name }));
@@ -218,6 +224,43 @@ it("t31_current_move_advances_own_base_without_remount uses fresh save version a
   fireEvent.change(input, { target: { value: "移动后新稿" } }); fireEvent.click(screen.getByRole("button", { name: "保存并记录历史" }));
   await waitFor(() => expect(calls("PATCH", id(1))).toHaveLength(2));
   expect(await calls("PATCH", id(1))[1]!.json()).toMatchObject({ expected_version: 3, title: "移动后新稿" });
+});
+it("sorts the active note with the version confirmed after saving its draft", async () => {
+  const { router } = await mount("/notes");
+  const input = await title();
+  const editor = screen.getByRole("region", { name: "当前笔记" }).querySelector('[contenteditable="true"]');
+  fireEvent.change(input, { target: { value: "拖动前新稿" } });
+
+  dragAfter(screen.getByRole("treeitem", { name: "笔记1" }), screen.getByRole("treeitem", { name: "笔记2" }));
+
+  await waitFor(() => expect(screen.getAllByRole("treeitem").map(item => item.textContent)).toEqual(["笔记2", "拖动前新稿"]));
+  expect(calls("POST", `/notes/${id(1)}/snapshots`)).toHaveLength(1);
+  const moves = calls("POST", `/notes/${id(1)}/move`);
+  expect(moves).toHaveLength(1);
+  expect(await moves[0]!.json()).toEqual({ expected_version: 2, parent_id: null, position: 1 });
+  expect(router.state.location.pathname).toBe("/notes");
+  expect(screen.getByRole("treeitem", { name: "拖动前新稿" })).toHaveAttribute("aria-selected", "true");
+  expect(input).toHaveValue("拖动前新稿");
+  expect(screen.getByRole("region", { name: "当前笔记" }).querySelector('[contenteditable="true"]')).toBe(editor);
+});
+it("refreshes the directory instead of dragging a note back to its former parent", async () => {
+  notes.push(note(3));
+  const reparented = { ...notes[0]!, parent_id: id(3), position: 0, content_version: 2 };
+  intercept = (request, url) => {
+    if (request.method === "GET" && url.pathname.endsWith(id(1))) return json(reparented);
+    if (request.method === "POST" && url.pathname.endsWith(`/notes/${id(1)}/snapshots`)) return json(snapshot(reparented), 201);
+    if (url.pathname === "/api/v1/notes" && calls("GET", "/notes").length > 1) {
+      return json({ items: [reparented, ...notes.slice(1)], next_cursor: null });
+    }
+  };
+  await mount();
+  await title();
+  dragAfter(screen.getByRole("treeitem", { name: "笔记1" }), screen.getByRole("treeitem", { name: "笔记2" }));
+
+  await waitFor(() => expect(calls("GET", "/notes")).toHaveLength(2));
+  expect(calls("POST", "/move")).toHaveLength(0);
+  expect(await screen.findByText("笔记所在目录已变化，请重新拖动排序。")).toBeVisible();
+  expect(screen.getByRole("treeitem", { name: "笔记3" })).toHaveAttribute("aria-expanded");
 });
 it("t31_2_history_restore_new_document_and_version flushes then atomically replaces title/body/base", async () => {
   const pending = deferred(); intercept = (_r, url) => url.pathname.includes("/snapshots/") && url.pathname.endsWith("/restore") ? pending.promise : undefined;

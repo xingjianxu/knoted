@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useBlocker, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   Alert, Button, ConfirmDialog, Container, Dialog, Divider, Drawer, Empty, Form, Input, Link,
-  Popover, Sidebar, Spinner, Splitter, Status, Toolbar, Tooltip, Tree, TreeSelect, useToast,
+  Popover, Sidebar, Spinner, Splitter, Status, Toolbar, Tooltip, Tree, TreeSelect, useToast, type TreeDropInfo,
 } from "@bixlab/mtone";
 import {
   Copy, CopyPlus, Ellipsis, FilePlus2, FolderInput, GitCompareArrows, History, Link2, PanelLeft, Pencil, Plus, Save, Trash2,
@@ -17,7 +17,7 @@ import { HistoryPanel } from "./HistoryPanel";
 import { NoteEditor } from "./editor";
 import { NoteAssociations } from "./links/NoteAssociations";
 import { NotesNavigationBlocked } from "./navigation";
-import { descendants, noteQuery, notesTreeQuery, noteTree } from "./queries";
+import { compareNotePositions, descendants, noteQuery, notesTreeQuery, noteTree } from "./queries";
 import "./notes-workspace.css";
 
 interface DeleteReceipt { id: string; title: string; originalParent: string | null; expectedVersion: number; }
@@ -330,29 +330,31 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
     moveReturnFocus.current = null;
     if (restore) requestAnimationFrame(restore);
   }
-  async function submitMove(target: Note, selectedParent: string) {
-    const current = noteById.get(target.id) ?? target;
-    const parentId = selectedParent === ROOT ? null : selectedParent;
-    const notes = liveDirectory ?? [];
-    const position = notes.filter(note => note.parent_id === parentId && note.id !== current.id).length;
+  async function moveNote(current: Note, parentId: string | null, position: number, directoryVersion?: number) {
+    async function persistMove(noteId: string, expectedVersion: number) {
+      const { data } = await bundle.api.raw.POST("/notes/{noteId}/move", {
+        params: { path: { noteId } },
+        body: { expected_version: expectedVersion, parent_id: parentId, position },
+      });
+      if (!data) throw new Error("移动响应缺少笔记");
+      return data;
+    }
     await runCommand(async () => {
       const activeSession = active.current?.noteId === current.id ? active.current : null;
+      const expectedVersion = activeSession?.getSnapshot().baseVersion ?? current.content_version;
+      // Reordering uses the directory's parent. A newer CAS version must confirm that parent.
+      if (directoryVersion !== undefined && expectedVersion > directoryVersion) {
+        const confirmed = bundle.queryClient.getQueryData<Note>(queryKeys.notes.detail(current.id));
+        if (confirmed?.content_version !== expectedVersion || confirmed.parent_id !== parentId) {
+          await refreshTree();
+          throw new Error("笔记所在目录已变化，请重新拖动排序。");
+        }
+      }
       if (activeSession) {
-        await activeSession.runStructuralMutation(async (noteId, baseVersion) => {
-          const { data } = await bundle.api.raw.POST("/notes/{noteId}/move", {
-            params: { path: { noteId } },
-            body: { expected_version: baseVersion, parent_id: parentId, position },
-          });
-          if (!data) throw new Error("移动响应缺少笔记");
-          return data;
-        });
+        await activeSession.runStructuralMutation(persistMove);
       } else {
         assertCanWrite(current.id);
-        const { data } = await bundle.api.raw.POST("/notes/{noteId}/move", {
-          params: { path: { noteId: current.id } },
-          body: { expected_version: current.content_version, parent_id: parentId, position },
-        });
-        if (!data) throw new Error("移动响应缺少笔记");
+        const data = await persistMove(current.id, expectedVersion);
         dropInactiveSession(data.id);
         bundle.queryClient.setQueryData(queryKeys.notes.detail(data.id), data);
       }
@@ -360,8 +362,28 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
         setExpanded(previous => previous.includes(parentId) ? previous : [...previous, parentId]);
       }
       await refreshTree();
-      closeMoveDialog();
     });
+  }
+  async function submitMove(target: Note, selectedParent: string) {
+    const current = noteById.get(target.id) ?? target;
+    const parentId = selectedParent === ROOT ? null : selectedParent;
+    const notes = liveDirectory ?? [];
+    const position = notes.filter(note => note.parent_id === parentId && note.id !== current.id).length;
+    await moveNote(current, parentId, position);
+    closeMoveDialog();
+  }
+  function reorderNote({ node, dragNode, dropPosition }: TreeDropInfo) {
+    const source = noteById.get(String(dragNode.id));
+    const target = noteById.get(String(node.id));
+    if (!source || !target) return;
+    const directoryVersion = tree.data?.find(note => note.id === source.id)?.content_version;
+    if (directoryVersion === undefined) return;
+    const siblings = [...noteById.values()].filter(note => note.parent_id === source.parent_id).sort(compareNotePositions);
+    const sourceIndex = siblings.indexOf(source);
+    const targetIndex = siblings.indexOf(target);
+    // The move endpoint expects the destination index after removing the source.
+    const position = targetIndex + (dropPosition === 1 ? 1 : 0) - (sourceIndex < targetIndex ? 1 : 0);
+    if (position !== sourceIndex) void moveNote(source, source.parent_id, position, directoryVersion).catch(() => {});
   }
   function openDeleteDialog(target: Note, returnFocus?: () => void) {
     const current = noteById.get(target.id) ?? target;
@@ -435,6 +457,7 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
   }
 
   const unavailable = working || expired;
+  const canReorder = !unavailable && !tree.isFetching && !tree.error;
   const blockedMoveParents = moveTarget ? descendants(liveDirectory ?? [], moveTarget.id) : new Set<string>();
 
   const directoryBody = (
@@ -458,6 +481,13 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
           expandAction={false}
           indent={16}
           gap={2}
+          draggable={canReorder}
+          allowDrop={({ dragNode, dropNode, dropPosition }) => {
+            const source = noteById.get(String(dragNode.id));
+            const target = noteById.get(String(dropNode.id));
+            return canReorder && dropPosition !== 0 && !!source && source.parent_id === target?.parent_id;
+          }}
+          onDrop={reorderNote}
           selectedKeys={activeNoteId ? [activeNoteId] : []}
           expandedKeys={expanded}
           onExpand={keys => setExpanded(keys.map(String))}
