@@ -95,9 +95,9 @@ export function NoteEditor({
   );
 
   return (
-    <section aria-label="笔记编辑器" className={fillHeight ? "flex flex-1 flex-col gap-2" : "space-y-2"}>
+    <section aria-label="笔记编辑器" className={fillHeight ? "flex min-w-0 flex-[1_0_auto] flex-col gap-2" : "space-y-2"}>
       {inputError && <Alert tone="warning">{inputError}</Alert>}
-      <div className={fillHeight ? "flex-1" : undefined}>
+      <div className={fillHeight ? "flex min-w-0 flex-[1_0_auto] flex-col" : undefined}>
         <BlockEditor
           documentKey={documentKey}
           initialContent={initialContent}
@@ -106,7 +106,7 @@ export function NoteEditor({
           readOnly={readOnly}
           label="笔记编辑器"
           locale="zh"
-          className={className}
+          className={fillHeight ? (className ? `flex-[1_0_auto] ${className}` : "flex-[1_0_auto]") : className}
           uploadImage={handleUploadImage}
         />
       </div>
