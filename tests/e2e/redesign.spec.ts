@@ -693,7 +693,7 @@ test("笔记编辑页标题输入框在常态、悬停与聚焦态均隐藏边�
   await expect(titleInput).toHaveValue("无边框标题验证");
 });
 
-test("笔记侧栏原生拖放排序，保存失败可重试且刷新保留顺序", async ({ page }) => {
+test("笔记侧栏原生拖放时目录保持稳定，支持嵌套、失败回退和刷新", async ({ page }) => {
   test.skip(baseline, "改版后的笔记侧栏 Tree 回归");
   await fixtures(page);
   const treeNotes = [
@@ -705,24 +705,48 @@ test("笔记侧栏原生拖放排序，保存失败可重试且刷新保留顺�
     { ...note, id: id(18), title: "调研附件", parent_id: note.id, position: 1 },
   ].map(item => ({ ...item }));
   const moves: unknown[] = [];
-  let failMove = true;
+  let failMove = false;
+  let unblockFailedMove: (() => void) | undefined;
+  let pauseRefresh = false;
+  let unblockRefresh: (() => void) | undefined;
   await page.route("**/api/v1/notes**", async route => {
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
-    if (pathname === "/api/v1/notes") return route.fulfill({ json: list(treeNotes) });
+    if (pathname === "/api/v1/notes") {
+      if (pauseRefresh) {
+        pauseRefresh = false;
+        await new Promise<void>(resolve => { unblockRefresh = resolve; });
+      }
+      return route.fulfill({ json: list(treeNotes) });
+    }
     const moved = treeNotes.find(item => pathname === `/api/v1/notes/${item.id}/move`);
+    if (request.method() === "GET") {
+      const detail = treeNotes.find(item => pathname === `/api/v1/notes/${item.id}`);
+      if (detail) return route.fulfill({ json: detail });
+    }
+    if (request.method() === "POST" && pathname === `/api/v1/notes/${note.id}/snapshots`) {
+      return route.fulfill({ json: { ...treeNotes[0], note_id: note.id, snapshot_id: id(51), reason: "flush" } });
+    }
     if (!moved || request.method() !== "POST") return route.fallback();
 
     const body = request.postDataJSON();
     moves.push({ id: moved.id, ...body });
     if (failMove) {
       failMove = false;
+      await new Promise<void>(resolve => { unblockFailedMove = resolve; });
       return route.fulfill({ status: 503, json: { code: "dependency_unavailable", message: "排序暂时失败" } });
     }
+    const previousParent = moved.parent_id;
+    moved.parent_id = body.parent_id;
     const siblings = treeNotes.filter(item => item.parent_id === moved.parent_id && item !== moved)
       .sort((a, b) => a.position - b.position);
     siblings.splice(body.position, 0, moved);
     siblings.forEach((item, index) => { item.position = index; });
+    if (previousParent !== moved.parent_id) {
+      treeNotes.filter(item => item.parent_id === previousParent)
+        .sort((a, b) => a.position - b.position)
+        .forEach((item, index) => { item.position = index; });
+    }
     moved.content_version++;
     return route.fulfill({ json: moved });
   });
@@ -740,33 +764,80 @@ test("笔记侧栏原生拖放排序，保存失败可重试且刷新保留顺�
   await expect(row("会议记录")).toHaveAttribute("draggable", "true");
   await row("调研手记").press("ArrowRight");
   await expect(row("后续问题")).toBeVisible();
-  await drag("会议记录", "方案备忘", 0.5);
-  await drag("会议记录", "后续问题", 0.1);
+  await drag("调研手记", "后续问题", 0.5);
   await drag("会议记录", "方案备忘", 0.9);
 
-  const forward = { id: id(17), expected_version: 2, parent_id: null, position: 1 };
-  await drag("会议记录", "方案备忘", 0.1);
-  await expect(page.getByText("排序暂时失败")).toBeVisible();
-  await expectOrder(1, ["调研手记", "方案备忘", "会议记录", "访谈大纲"]);
-  expect(moves).toEqual([forward]);
+  expect(moves).toEqual([]);
+  const tree = sidebar.getByRole("tree", { name: "笔记树" });
+  const top = (await tree.boundingBox())!.y;
+  pauseRefresh = true;
+  try {
+    await drag("会议记录", "方案备忘", 0.1);
+    await expect.poll(() => Boolean(unblockRefresh)).toBe(true);
+    await expect(row("会议记录")).toHaveAttribute("draggable", "false");
+    expect((await tree.boundingBox())!.y).toBe(top);
+    await expectOrder(1, ["调研手记", "会议记录", "方案备忘", "访谈大纲"]);
+  } finally {
+    unblockRefresh?.();
+  }
+  await expect(row("会议记录")).toHaveAttribute("draggable", "true");
 
-  await drag("会议记录", "方案备忘", 0.1);
+  failMove = true;
+  try {
+    await drag("会议记录", "访谈大纲", 0.9);
+    await expect.poll(() => Boolean(unblockFailedMove)).toBe(true);
+    await expectOrder(1, ["调研手记", "方案备忘", "访谈大纲", "会议记录"]);
+  } finally {
+    unblockFailedMove?.();
+  }
+  await expect(page.getByText("排序暂时失败")).toBeVisible();
   await expectOrder(1, ["调研手记", "会议记录", "方案备忘", "访谈大纲"]);
+  await expect(row("会议记录")).toHaveAttribute("draggable", "true");
+
   await drag("会议记录", "访谈大纲", 0.9);
   await expectOrder(1, ["调研手记", "方案备忘", "访谈大纲", "会议记录"]);
+  await expect(row("后续问题")).toHaveAttribute("draggable", "true");
   await drag("后续问题", "调研附件", 0.9);
   await expectOrder(2, ["调研附件", "后续问题"]);
+  await expect(row("会议记录")).toHaveAttribute("draggable", "true");
+
+  await drag("会议记录", "方案备忘", 0.5);
+  await expect(row("方案备忘")).toHaveAttribute("aria-expanded", "true");
+  await expect(row("会议记录")).toHaveAttribute("aria-level", "2");
+  await expect(row("会议记录")).toHaveAttribute("draggable", "true");
+  await expect(row("方案备忘").locator(".mt-tree-icon .lucide-file")).toBeVisible();
+  await expect(row("会议记录").locator(".mt-tree-icon .lucide-file")).toBeVisible();
+
+  await drag("会议记录", "调研附件", 0.1);
+  await expectOrder(2, ["会议记录", "调研附件", "后续问题"]);
+  await expect(row("方案备忘")).not.toHaveAttribute("aria-expanded", /.+/);
+  await expect(row("会议记录")).toHaveAttribute("draggable", "true");
+
+  await drag("调研手记", "方案备忘", 0.5);
+  await expectOrder(1, ["方案备忘", "访谈大纲"]);
+  await expect(row("调研手记")).toHaveAttribute("aria-level", "2");
+  await expect(row("调研附件")).toHaveAttribute("aria-level", "3");
+  await expect(row("调研手记")).toHaveAttribute("draggable", "true");
+
+  await drag("调研手记", "方案备忘", 0.1);
+  await expectOrder(1, ["调研手记", "方案备忘", "访谈大纲"]);
+  await expectOrder(2, ["会议记录", "调研附件", "后续问题"]);
+  await expect(row("调研手记")).toHaveAttribute("draggable", "true");
   expect(moves).toEqual([
-    forward,
-    forward,
+    { id: id(17), expected_version: 2, parent_id: null, position: 1 },
+    { id: id(17), expected_version: 3, parent_id: null, position: 3 },
     { id: id(17), expected_version: 3, parent_id: null, position: 3 },
     { id: id(15), expected_version: 2, parent_id: note.id, position: 1 },
+    { id: id(17), expected_version: 4, parent_id: id(16), position: 0 },
+    { id: id(17), expected_version: 5, parent_id: note.id, position: 0 },
+    { id: note.id, expected_version: 2, parent_id: id(16), position: 0 },
+    { id: note.id, expected_version: 3, parent_id: null, position: 0 },
   ]);
 
   await page.reload();
-  await expectOrder(1, ["调研手记", "方案备忘", "访谈大纲", "会议记录"]);
+  await expectOrder(1, ["调研手记", "方案备忘", "访谈大纲"]);
   await row("调研手记").press("ArrowRight");
-  await expectOrder(2, ["调研附件", "后续问题"]);
+  await expectOrder(2, ["会议记录", "调研附件", "后续问题"]);
 });
 
 test("笔记左侧 Tree 节点右侧按钮仅在悬停时显示，支持添加子页面与悬停弹出常用操作菜单", async ({ page }) => {
