@@ -672,6 +672,7 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
 
       <Splitter
         orientation="horizontal"
+        bordered
         className={activeNoteId ? "notes-splitter notes-splitter--detail" : "notes-splitter"}
       >
         <Splitter.Panel
