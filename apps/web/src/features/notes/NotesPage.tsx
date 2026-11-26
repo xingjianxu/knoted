@@ -977,6 +977,7 @@ function NotePane({
               variant="borderless"
               aria-label="笔记标题"
               placeholder="未命名笔记"
+              wrapperClassName="m-0"
               className="notes-title-input"
               value={autosave.draft.title}
               maxLength={500}
@@ -985,7 +986,7 @@ function NotePane({
               onChange={event => { if (!isBusy() && !expired) autosave.changeDraft({ title: event.target.value }); }}
             />
           </div>
-          {history && <Divider className="my-0" />}
+          {history && <Divider />}
 
           {/* The same editor and selection survive history and drawer interactions. */}
           <div className="notes-document" hidden={history} inert={history}>

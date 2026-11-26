@@ -275,6 +275,16 @@ test("笔记历史立即可读，保存冲突后离开及退出均保留草稿",
   const editor = page.getByRole("textbox", { name: "笔记标题" });
   const history = page.getByRole("button", { name: "历史版本" });
   await history.click();
+  const historyDivider = page.getByRole("region", { name: "当前笔记" }).locator(".mt-container > hr.mt-divider");
+  const historySection = page.getByRole("region", { name: "笔记历史" });
+  await expect(historyDivider).toBeVisible();
+  const [historyDividerBox, historySectionBox] = await Promise.all([
+    historyDivider.boundingBox(),
+    historySection.boundingBox(),
+  ]);
+  expect(historyDividerBox).not.toBeNull();
+  expect(historySectionBox).not.toBeNull();
+  expect(historySectionBox!.y - (historyDividerBox!.y + historyDividerBox!.height)).toBeGreaterThanOrEqual(8);
   await page.getByRole("button", { name: /预览 历史调研手记/ }).click();
   await expect(page.getByRole("heading", { name: "历史调研手记" })).toBeInViewport();
   const preview = page.getByRole("region", { name: "历史预览" });
