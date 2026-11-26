@@ -365,6 +365,9 @@ test("笔记目录选中新笔记和切换到宽屏后焦点仍在可见界面",
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`http://127.0.0.1:4178/notes/${note.id}`);
   await expect(page.getByRole("complementary", { name: "笔记目录" })).toBeHidden();
+  const splitter = page.locator(".notes-splitter");
+  await expect(splitter).toHaveCSS("border-width", "1px");
+  await expect(splitter).toHaveCSS("border-style", "solid");
   const opener = page.getByRole("button", { name: "目录", exact: true });
   await opener.click();
   const dialog = page.getByRole("dialog", { name: "笔记目录" });
@@ -397,6 +400,9 @@ test("笔记页使用 Splitter 左右分栏，默认展示树根首篇笔记并�
   await expect(rootItem).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("textbox", { name: "笔记标题" })).toHaveValue(note.title);
   await expect(current).toContainText("调研记录第 1 段");
+  const splitter = page.locator(".notes-splitter");
+  await expect(splitter).toHaveCSS("border-width", "1px");
+  await expect(splitter).toHaveCSS("border-style", "solid");
 
   const [beforeSidebar, beforeContent] = await Promise.all([sidebar.boundingBox(), current.boundingBox()]);
   expect(beforeSidebar).toBeTruthy();
