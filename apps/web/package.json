@@ -11,7 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@bixlab/mtone": "0.15.5",
+    "@bixlab/mtone": "0.15.6",
     "@bixlab/mtone-blockeditor": "0.2.2",
     "@hookform/resolvers": "7.0.6",
     "@knoted/api-client": "workspace:*",

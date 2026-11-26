@@ -840,7 +840,10 @@ test("笔记侧栏原生拖放时目录保持稳定，支持嵌套、失败回�
     const box = await target.boundingBox();
     await row(from).dragTo(target, { sourcePosition: { x: 80, y: 16 }, targetPosition: { x: 80, y: box!.height * ratio } });
   };
-  await expect(row("会议记录")).toHaveAttribute("draggable", "true");
+  const draggableNote = row("会议记录");
+  await expect(draggableNote).toHaveAttribute("draggable", "true");
+  await draggableNote.hover();
+  await expect.poll(() => draggableNote.evaluate(node => getComputedStyle(node, "::before").content)).toBe("none");
   await row("调研手记").press("ArrowRight");
   await expect(row("后续问题")).toBeVisible();
   await drag("调研手记", "后续问题", 0.5);

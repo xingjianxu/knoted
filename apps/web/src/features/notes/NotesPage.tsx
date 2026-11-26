@@ -496,6 +496,7 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
           indent={16}
           gap={2}
           draggable={canDragNotes}
+          showDragHandle={false}
           allowReparent
           onDrop={dropNote}
           selectedKeys={activeNoteId ? [activeNoteId] : []}

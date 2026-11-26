@@ -31,6 +31,7 @@
 | [#303](303.md) | Task | 升级 `@bixlab/mtone` 至 `0.15.5` 与 `@bixlab/mtone-blockeditor` 至 `0.2.2` | 无 |
 | [#306](306.md) | Bug | 修复笔记目录拖放抖动并支持嵌套移动 | 无 |
 | [#308](308.md) | Bug | 修复笔记表格无法保存 | [ADR 0013](../decisions/0013-note-table-persistence.md)（已确认） |
+| [#310](310.md) | Task | 升级 mtone 0.15.6 并复核笔记侧栏拖动句柄控制 | 无 |
 
 ## 开发部署
 
