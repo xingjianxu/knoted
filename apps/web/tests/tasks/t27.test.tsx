@@ -159,7 +159,7 @@ afterAll(() => {
 });
 
 describe("T27 mtone BlockEditor integration & NoteDocument v1 adapter", () => {
-  it("t27_2: preserves all seven blocks, five marks, marked links, nesting, code whitespace and asset IDs through the real editor", async () => {
+  it("t27_2: preserves persisted blocks, inline formats and table headers through the real editor", async () => {
     const roundTrip = fromEditorBlocks(makeEditorBlocks(fullDocument), fullDocument);
     expect(roundTrip).toEqual(fullDocument);
     expect(JSON.stringify(roundTrip)).not.toContain("/assets/");
@@ -167,10 +167,18 @@ describe("T27 mtone BlockEditor integration & NoteDocument v1 adapter", () => {
 
     // Also round-trip through a real editable BlockEditor instance: editing a
     // trailing block must preserve every untouched block verbatim via onChange.
+    const untouched: NoteDocument["blocks"] = [...fullDocument.blocks, {
+      id: "headings", type: "table",
+      table: {
+        rows: [{ cells: [[{ type: "text", text: "标题" }], []] }],
+        header_rows: 1,
+        column_widths: [120, null],
+      },
+    }];
     const seeded: NoteDocument = {
       blocks: [
         { id: "tail", type: "paragraph", content: [{ type: "text", text: "起点" }] },
-        ...fullDocument.blocks,
+        ...untouched,
       ],
     };
     const onChange = vi.fn();
@@ -188,7 +196,7 @@ describe("T27 mtone BlockEditor integration & NoteDocument v1 adapter", () => {
     pastePlainText(editable, "补充");
     await waitFor(() => expect(onChange).toHaveBeenCalled());
     const emitted = onChange.mock.lastCall![0] as NoteDocument;
-    expect(emitted.blocks.slice(1)).toEqual(fullDocument.blocks);
+    expect(emitted.blocks.slice(1)).toEqual(untouched);
     expect(JSON.stringify(emitted)).not.toContain("/assets/");
     expect(JSON.stringify(emitted)).not.toContain("/api/");
   });
@@ -318,6 +326,52 @@ describe("T27 mtone BlockEditor integration & NoteDocument v1 adapter", () => {
       children: [],
     };
     expect(() => fromEditorBlocks([merged])).toThrow(/合并单元格/);
+  });
+
+  it.each([{ header_rows: 1 }, { header_columns: 2 }])(
+    "keeps the recorded header axes when the editor reports the same all-header cells: %j",
+    (headers) => {
+      const block: BlockEditorBlock = {
+        id: "t", type: "table", props: { textColor: "default" }, children: [],
+        content: {
+          type: "tableContent",
+          rows: [{ cells: [[], []] }],
+          columnWidths: [undefined, undefined],
+          headerRows: 1,
+          headerCols: 2,
+        },
+      };
+      const source: NoteDocument = {
+        blocks: [{ id: "t", type: "table", table: { ...headers, rows: [{ cells: [[], []] }] } }],
+      };
+      expect(fromEditorBlocks([block], source)).toEqual(source);
+      expect(fromEditorBlocks([block]).blocks[0]?.table).toEqual({ rows: [{ cells: [[], []] }], header_rows: 1 });
+    },
+  );
+
+  it("retains original formatting when an unchanged cell moves after row and column edits", () => {
+    const original = { type: "text" as const, text: "原始格式", marks: ["bold", "code"] as const };
+    const source: NoteDocument = {
+      blocks: [{
+        id: "t", type: "table",
+        table: { rows: [
+          { cells: [[{ type: "text", text: "另一行" }], []] },
+          { cells: [[], [{ ...original, marks: [...original.marks] }]] },
+        ] },
+      }],
+    };
+    const block: BlockEditorBlock = {
+      id: "t", type: "table", props: { textColor: "default" }, children: [],
+      content: {
+        type: "tableContent",
+        columnWidths: [undefined, undefined, undefined],
+        rows: [
+          { cells: [[], [], []] },
+          { cells: [[], [], [{ type: "text", text: original.text, styles: { code: true } }]] },
+        ],
+      },
+    };
+    expect(fromEditorBlocks([block], source).blocks[0]?.table?.rows[1]?.cells[2]).toEqual([original]);
   });
 
   it("rejects unsupported BlockEditor block types, heading level > 3, external images and limit violations", () => {

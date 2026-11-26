@@ -279,37 +279,67 @@ export function fromEditorBlocks(
   }
   remember(source?.blocks ?? []);
 
-  function equivalent(left: readonly InlineNode[], right: readonly InlineNode[]) {
-    const normalize = (nodes: readonly InlineNode[]) => {
-      const runs: { type: string; text: string; href?: string; marks: string }[] = [];
-      for (const node of nodes) {
-        const activeMarks = marks.filter((mark) => node.marks?.includes(mark));
-        const normalizedMarks = node.type === "link"
-          ? activeMarks.filter((mark) => mark !== "code")
-          : activeMarks.includes("code")
-            ? ["code"]
-            : activeMarks;
-        const run = {
-          type: node.type,
-          text: node.text,
-          href: node.type === "link" ? node.href : undefined,
-          marks: normalizedMarks.join(","),
-        };
-        const previous = runs.at(-1);
-        if (previous && previous.type === run.type && previous.href === run.href && previous.marks === run.marks) {
-          previous.text += run.text;
-        } else if (run.text) {
-          runs.push(run);
-        }
+  function inlineKey(nodes: readonly InlineNode[]) {
+    const runs: { type: string; text: string; href?: string; marks: string }[] = [];
+    for (const node of nodes) {
+      const activeMarks = marks.filter((mark) => node.marks?.includes(mark));
+      const normalizedMarks = node.type === "link"
+        ? activeMarks.filter((mark) => mark !== "code")
+        : activeMarks.includes("code")
+          ? ["code"]
+          : activeMarks;
+      const run = {
+        type: node.type,
+        text: node.text,
+        href: node.type === "link" ? node.href : undefined,
+        marks: normalizedMarks.join(","),
+      };
+      const previous = runs.at(-1);
+      if (previous && previous.type === run.type && previous.href === run.href && previous.marks === run.marks) {
+        previous.text += run.text;
+      } else if (run.text) {
+        runs.push(run);
       }
-      return runs;
-    };
-    return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
+    }
+    return JSON.stringify(runs);
+  }
+
+  function equivalent(left: readonly InlineNode[], right: readonly InlineNode[]) {
+    return inlineKey(left) === inlineKey(right);
   }
 
   function validateOriginalHrefs(nodes: readonly InlineNode[] | undefined) {
     for (const node of nodes ?? []) {
       if (node.href !== undefined) safeHref(node.href);
+    }
+  }
+
+  function retainTableCells(rows: NoteTable["rows"], previous: NoteTable): void {
+    const originalByKey = new Map<string, InlineNode[] | null>();
+    const originalKeys = previous.rows.map(row => row.cells.map(cell => {
+      const key = inlineKey(cell);
+      originalByKey.set(key, originalByKey.has(key) ? null : cell);
+      return key;
+    }));
+    const keyCounts = new Map<string, number>();
+    const keys = rows.map(row => row.cells.map(cell => {
+      const key = inlineKey(cell);
+      keyCounts.set(key, (keyCounts.get(key) ?? 0) + 1);
+      return key;
+    }));
+    // Cells have no IDs. After a shape change, only match content that occurs
+    // once before and once after the edit.
+    const sameShape = rows.length === previous.rows.length && rows[0]?.cells.length === previous.rows[0]?.cells.length;
+    for (const [rowIndex, rowKeys] of keys.entries()) {
+      for (const [column, key] of rowKeys.entries()) {
+        const prior = sameShape && originalKeys[rowIndex]?.[column] === key
+          ? previous.rows[rowIndex]?.cells[column]
+          : keyCounts.get(key) === 1 ? originalByKey.get(key) : undefined;
+        if (prior) {
+          validateOriginalHrefs(prior);
+          rows[rowIndex]!.cells[column] = prior;
+        }
+      }
     }
   }
 
@@ -343,24 +373,30 @@ export function fromEditorBlocks(
     switch (block.type) {
       case "table": {
         const previous = original?.table;
-        const rows = block.content.rows.map((row, rowIndex) => ({
-          cells: row.cells.map((cell, column) => {
+        const rows = block.content.rows.map(row => ({
+          cells: row.cells.map(cell => {
             if (!Array.isArray(cell)
               && ((cell.props.colspan ?? 1) !== 1 || (cell.props.rowspan ?? 1) !== 1)) {
               throw new Error("暂不支持保存带合并单元格的表格，请拆分单元格后重试");
             }
-            const content = convertInlineContent(Array.isArray(cell) ? cell : cell.content);
-            const prior = previous?.rows[rowIndex]?.cells[column];
-            if (prior && equivalent(prior, content)) {
-              validateOriginalHrefs(prior);
-              return prior;
-            }
-            return content;
+            return convertInlineContent(Array.isArray(cell) ? cell : cell.content);
           }),
         }));
         const widths = (rows[0]?.cells ?? []).map((_, column) => block.content.columnWidths[column] ?? null);
-        const headerRows = block.content.headerRows ?? 0;
-        const headerColumns = block.content.headerCols ?? 0;
+        let headerRows = block.content.headerRows ?? 0;
+        let headerColumns = block.content.headerCols ?? 0;
+        // When every cell is a header, BlockEditor reports both axes as full.
+        // Keep the saved axes if they still describe the same header cells.
+        if (headerRows > 0 && headerColumns > 0 && headerRows === rows.length && headerColumns === widths.length) {
+          const priorRows = previous?.header_rows ?? 0;
+          const priorColumns = previous?.header_columns ?? 0;
+          if (priorRows >= headerRows || priorColumns >= headerColumns) {
+            headerRows = Math.min(priorRows, headerRows);
+            headerColumns = Math.min(priorColumns, headerColumns);
+          } else {
+            headerColumns = 0;
+          }
+        }
         const table: NoteTable = {
           rows,
           ...(headerRows || previous?.header_rows !== undefined ? { header_rows: headerRows } : {}),
@@ -368,6 +404,7 @@ export function fromEditorBlocks(
           ...(widths.some(width => width !== null) || previous?.column_widths ? { column_widths: widths } : {}),
         };
         cells = validateTable(table, cells);
+        if (previous) retainTableCells(rows, previous);
         return { id: block.id, type: "table", table, ...childrenField };
       }
       case "heading": {

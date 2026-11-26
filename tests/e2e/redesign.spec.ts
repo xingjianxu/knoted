@@ -681,6 +681,9 @@ test("笔记表格可自动保存、刷新重开并在历史中预览", async ({
     }),
   });
   await expect.poll(() => saved.document.blocks).toContainEqual(table("插入的项目"));
+  await inserted.locator("td").last().click();
+  await page.getByRole("group", { name: "表格操作" }).getByRole("button", { name: "添加行", exact: true }).click();
+  await expect(inserted.locator("tr")).toHaveCount(3);
 
   await editor.getByText("粘贴位置", { exact: true }).click();
   await page.keyboard.press("End");
@@ -705,6 +708,7 @@ test("笔记表格可自动保存、刷新重开并在历史中预览", async ({
 
   await page.reload();
   await expect(editor.locator("table")).toHaveCount(2);
+  await expect(inserted.locator("tr")).toHaveCount(3);
   await expect(editor.locator("table").last().locator("th")).toHaveText(["项目", "负责人"]);
   await expect(editor.locator("table").last().locator("td")).toHaveText(["粘贴的项目", ""]);
   await page.getByRole("button", { name: "历史版本", exact: true }).click();
