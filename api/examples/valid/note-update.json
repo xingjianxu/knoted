@@ -1,4 +1,20 @@
 {
   "expected_version": 3,
-  "title": "周会纪要"
+  "title": "周会纪要",
+  "document": {
+    "blocks": [
+      {
+        "id": "meeting-table",
+        "type": "table",
+        "table": {
+          "header_rows": 1,
+          "column_widths": [120, null],
+          "rows": [
+            { "cells": [[{ "type": "text", "text": "事项" }], [{ "type": "text", "text": "负责人" }]] },
+            { "cells": [[{ "type": "text", "text": "整理纪要" }], []] }
+          ]
+        }
+      }
+    ]
+  }
 }

@@ -3,7 +3,7 @@ import { BlockEditor, type BlockEditorBlock } from "@bixlab/mtone-blockeditor";
 import type { ApiClient } from "@knoted/api-client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { fromEditorBlocks, toEditorBlocks, type NoteDocument } from "./document-adapter";
+import { fromEditorBlocks, NoteLinkError, toEditorBlocks, type NoteDocument } from "./document-adapter";
 import { uploadNoteImage } from "./image-upload";
 
 export type NoteEditorProps = {
@@ -86,9 +86,8 @@ export function NoteEditor({
         const detail = cause instanceof Error
           ? cause.message.replace(/。+$/, "")
           : "内容含有无法保存的链接或格式";
-        setInputError(
-          `未应用此次编辑：${detail}，原内容已保留。请修正或撤销后重试；也可仅以纯文本粘贴链接名称文字。`,
-        );
+        const recovery = cause instanceof NoteLinkError ? "也可仅以纯文本粘贴链接名称文字。" : "";
+        setInputError(`未应用此次编辑：${detail}，原内容已保留。请修正或撤销后重试。${recovery}`);
       }
     },
     [initialDocument, onChange, readOnly],

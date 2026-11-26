@@ -15,6 +15,10 @@ use crate::context::AppContext;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 const MAX_BLOCKS: usize = 5000;
 const MAX_DEPTH: usize = 8;
+const MAX_TABLE_ROWS: usize = 1000;
+const MAX_TABLE_COLUMNS: usize = 100;
+const MAX_DOCUMENT_CELLS: usize = 10_000;
+const MAX_COLUMN_WIDTH: u32 = 10_000;
 
 /// The version is stored alongside the document, as in the HTTP contract.
 #[derive(Debug)]
@@ -170,6 +174,8 @@ struct NoteBlock {
     #[serde(default)]
     checked: Optional<bool>,
     #[serde(default)]
+    table: Optional<NoteTable>,
+    #[serde(default)]
     children: Vec<NoteBlock>,
 }
 
@@ -183,6 +189,25 @@ enum BlockType {
     CheckListItem,
     Image,
     CodeBlock,
+    Table,
+}
+
+#[derive(Debug, Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct NoteTable {
+    rows: Vec<NoteTableRow>,
+    #[serde(default)]
+    header_rows: Optional<usize>,
+    #[serde(default)]
+    header_columns: Optional<usize>,
+    #[serde(default)]
+    column_widths: Optional<Vec<Option<u32>>>,
+}
+
+#[derive(Debug, Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct NoteTableRow {
+    cells: Vec<Vec<InlineNode>>,
 }
 
 #[derive(Debug, Deserialize, serde::Serialize)]
@@ -232,15 +257,23 @@ pub fn validate_document(
         serde_json::from_str(&input.document_json).map_err(|_| invalid("$"))?;
     let mut ids = HashSet::new();
     let mut count = 0;
-    validate_blocks(&document.blocks, 1, "$.blocks", &mut ids, &mut count)?;
+    let mut cells = 0;
+    validate_blocks(
+        &document.blocks,
+        1,
+        "$.blocks",
+        &mut ids,
+        &mut count,
+        &mut cells,
+    )?;
     Ok(ValidatedDocument {
         document,
         source: input.document_json,
     })
 }
 
-// A valid depth-eight schema needs at most 20 JSON containers (including inline
-// marks). This generous bound is checked iteratively before serde allocates a
+// This bound accommodates depth-eight blocks, table rows, cells and inline
+// marks. It is checked iteratively before serde allocates a
 // recursive tree, bounding parsing, validation and drop stack usage even for
 // malicious input. Braces inside strings and escaped quotes are not containers.
 fn check_json_nesting(raw: &str) -> Result<(), DomainError> {
@@ -279,6 +312,7 @@ fn validate_blocks<'a>(
     path: &str,
     ids: &mut HashSet<&'a str>,
     count: &mut usize,
+    cells: &mut usize,
 ) -> Result<(), DomainError> {
     if !blocks.is_empty() && depth > MAX_DEPTH {
         return Err(limit(path));
@@ -304,13 +338,20 @@ fn validate_blocks<'a>(
         if block.kind == BlockType::Image && block.asset_id.as_ref().is_none() {
             return Err(invalid(&format!("{path}.asset_id")));
         }
-        for (index, inline) in block.content.iter().enumerate() {
-            let href_path = format!("{path}.content[{index}].href");
-            match inline.href.as_ref() {
-                Some(href) if !safe_href(href) => return Err(invalid(&href_path)),
-                None if inline.kind == InlineType::Link => return Err(invalid(&href_path)),
-                _ => {}
+        match (block.kind == BlockType::Table, block.table.as_ref()) {
+            (true, Some(table)) => {
+                if !block.content.is_empty()
+                    || block.level.as_ref().is_some()
+                    || block.asset_id.as_ref().is_some()
+                    || block.language.as_ref().is_some()
+                    || block.checked.as_ref().is_some()
+                {
+                    return Err(invalid(&path));
+                }
+                validate_table(table, &format!("{path}.table"), cells)?;
             }
+            (false, None) => validate_inline(&block.content, &format!("{path}.content"))?,
+            _ => return Err(invalid(&format!("{path}.table"))),
         }
         validate_blocks(
             &block.children,
@@ -318,7 +359,75 @@ fn validate_blocks<'a>(
             &format!("{path}.children"),
             ids,
             count,
+            cells,
         )?;
+    }
+    Ok(())
+}
+
+fn validate_table(
+    table: &NoteTable,
+    path: &str,
+    document_cells: &mut usize,
+) -> Result<(), DomainError> {
+    let rows = table.rows.len();
+    if rows > MAX_TABLE_ROWS {
+        return Err(limit(&format!("{path}.rows")));
+    }
+    let columns = table.rows.first().map_or(0, |row| row.cells.len());
+    if columns == 0 {
+        return Err(invalid(&format!("{path}.rows")));
+    }
+    if columns > MAX_TABLE_COLUMNS {
+        return Err(limit(&format!("{path}.rows[0].cells")));
+    }
+    *document_cells += rows * columns;
+    if *document_cells > MAX_DOCUMENT_CELLS {
+        return Err(limit(path));
+    }
+    if table
+        .header_rows
+        .as_ref()
+        .is_some_and(|count| *count > rows)
+    {
+        return Err(invalid(&format!("{path}.header_rows")));
+    }
+    if table
+        .header_columns
+        .as_ref()
+        .is_some_and(|count| *count > columns)
+    {
+        return Err(invalid(&format!("{path}.header_columns")));
+    }
+    if let Some(widths) = table.column_widths.as_ref()
+        && (widths.len() != columns
+            || widths
+                .iter()
+                .flatten()
+                .any(|width| !(1..=MAX_COLUMN_WIDTH).contains(width)))
+    {
+        return Err(invalid(&format!("{path}.column_widths")));
+    }
+    for (row_index, row) in table.rows.iter().enumerate() {
+        if row.cells.len() != columns {
+            return Err(invalid(&format!("{path}.rows[{row_index}].cells")));
+        }
+        for (column, cell) in row.cells.iter().enumerate() {
+            validate_inline(cell, &format!("{path}.rows[{row_index}].cells[{column}]"))?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_inline(nodes: &[InlineNode], path: &str) -> Result<(), DomainError> {
+    for (index, inline) in nodes.iter().enumerate() {
+        let invalid_href = match inline.href.as_ref() {
+            Some(href) => !safe_href(href),
+            None => inline.kind == InlineType::Link,
+        };
+        if invalid_href {
+            return Err(invalid(&format!("{path}[{index}].href")));
+        }
     }
     Ok(())
 }
@@ -416,13 +525,34 @@ fn extract_blocks(blocks: &[NoteBlock], path: &mut Vec<usize>, output: &mut Vec<
         output.push(PlainTextBlock {
             block_id: block.id.clone(),
             path: path.clone(),
-            text: block
-                .content
-                .iter()
-                .map(|inline| inline.text.as_str())
-                .collect(),
+            text: block.table.as_ref().map_or_else(
+                || {
+                    block
+                        .content
+                        .iter()
+                        .map(|inline| inline.text.as_str())
+                        .collect()
+                },
+                extract_table,
+            ),
         });
         extract_blocks(&block.children, path, output);
         path.pop();
     }
+}
+
+fn extract_table(table: &NoteTable) -> String {
+    let mut text = String::new();
+    for (row_index, row) in table.rows.iter().enumerate() {
+        if row_index > 0 {
+            text.push('\n');
+        }
+        for (column, cell) in row.cells.iter().enumerate() {
+            if column > 0 {
+                text.push('\t');
+            }
+            text.extend(cell.iter().map(|inline| inline.text.as_str()));
+        }
+    }
+    text
 }

@@ -124,7 +124,7 @@ describe("T28 mtone BlockEditor menus and interactions", () => {
     fireEvent.mouseDown(dividerOption);
     fireEvent.click(dividerOption);
 
-    expect(await screen.findByText(/未应用此次编辑.*分割线/)).toBeInTheDocument();
+    expect(await screen.findByText(/未应用此次编辑.*分割线/)).not.toHaveTextContent("粘贴链接名称");
     // The slash menu first removes the trigger text and emits the original document.
     expect(onChange.mock.calls).toEqual([[original]]);
   });

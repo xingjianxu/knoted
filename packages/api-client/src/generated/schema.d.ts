@@ -1291,7 +1291,7 @@ export interface components {
             timezone: "Asia/Shanghai";
         };
         /** @enum {string} */
-        BlockType: "heading" | "paragraph" | "bulletListItem" | "numberedListItem" | "checkListItem" | "image" | "codeBlock";
+        BlockType: "heading" | "paragraph" | "bulletListItem" | "numberedListItem" | "checkListItem" | "image" | "codeBlock" | "table";
         /** @enum {string} */
         InlineMark: "bold" | "italic" | "underline" | "strike" | "code";
         InlineNode: {
@@ -1301,6 +1301,18 @@ export interface components {
             /** Format: uri */
             href?: string;
             marks?: components["schemas"]["InlineMark"][];
+        };
+        /** @description 普通矩形表格，不含合并单元格。每行列数相同，笔记内的表格共最多 10000 个单元格。 */
+        NoteTable: {
+            rows: {
+                cells: components["schemas"]["InlineNode"][][];
+            }[];
+            /** @description 从第一行开始的表头行数，不超过实际行数。 */
+            header_rows?: number;
+            /** @description 从第一列开始的表头列数，不超过实际列数。 */
+            header_columns?: number;
+            /** @description 每列的宽度，长度必须等于列数；null 表示自动宽度。 */
+            column_widths?: (number | null)[];
         };
         /** @description 白名单笔记块。块 ID 在文档内唯一；最多 5000 块、嵌套 8 层；拒绝可执行 HTML 与任意协议。 */
         NoteBlock: {
@@ -1312,6 +1324,7 @@ export interface components {
             asset_id?: string;
             language?: string;
             checked?: boolean;
+            table?: components["schemas"]["NoteTable"];
             /** @description 嵌套子块；服务端限制总深度不超过 8 层。 */
             children?: components["schemas"]["NoteBlock"][];
         };

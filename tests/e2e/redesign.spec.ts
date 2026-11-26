@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import type { components } from "../../packages/api-client/src/generated/schema";
 
 const id = (number: number) => `00000000-0000-4000-8000-${String(number).padStart(12, "0")}`;
 const now = "2026-11-19T00:00:00Z";
@@ -638,6 +639,84 @@ test("笔记编辑器消费 mtone-blockeditor：斜杠菜单、图片上传资�
   await slashList.getByRole("option", { name: "分割线" }).click();
   await expect(page.getByRole("region", { name: "笔记编辑器" }).getByRole("status")).toContainText("未应用此次编辑");
   expect(patches).toHaveLength(patchCountBefore);
+});
+
+test("笔记表格可自动保存、刷新重开并在历史中预览", async ({ page }) => {
+  test.skip(baseline, "改版后的编辑器回归");
+  let saved: Omit<typeof note, "document"> & { document: components["schemas"]["NoteDocument"] } = { ...note, document: { blocks: [
+    { id: id(100), type: "paragraph" },
+    { id: id(101), type: "paragraph", content: [{ type: "text", text: "粘贴位置" }] },
+  ] } };
+  let snapshot: (typeof saved & { snapshot_id: string; note_id: string; reason: string }) | undefined;
+  await fixtures(page);
+  await page.route(`**/api/v1/notes/${note.id}`, (route) => {
+    if (route.request().method() === "PATCH") {
+      const patch = route.request().postDataJSON();
+      expect(patch.expected_version).toBe(saved.content_version);
+      saved = { ...saved, title: patch.title, document: patch.document, content_version: saved.content_version + 1 };
+    }
+    return route.fulfill({ json: saved });
+  });
+  await page.route(url => url.pathname === `/api/v1/notes/${note.id}/snapshots`, (route) => {
+    if (route.request().method() === "POST") {
+      snapshot = { ...saved, snapshot_id: id(55), note_id: note.id, reason: "flush" };
+      return route.fulfill({ status: 201, json: snapshot });
+    }
+    return route.fulfill({ json: list(snapshot ? [snapshot] : []) });
+  });
+  await page.goto(`http://127.0.0.1:4178/notes/${note.id}`);
+  const editor = page.getByRole("textbox", { name: "笔记编辑器" });
+  await editor.locator("p").first().click();
+  await page.keyboard.type("/");
+  await page.getByRole("listbox", { name: "插入块" }).getByRole("option", { name: "表格" }).click();
+  const inserted = editor.locator("table").first();
+  await inserted.locator("td").first().click();
+  await page.keyboard.insertText("插入的项目");
+  const table = (cell: string) => expect.objectContaining({
+    type: "table",
+    table: expect.objectContaining({
+      rows: expect.arrayContaining([expect.objectContaining({
+        cells: expect.arrayContaining([[expect.objectContaining({ type: "text", text: cell })]]),
+      })]),
+    }),
+  });
+  await expect.poll(() => saved.document.blocks).toContainEqual(table("插入的项目"));
+  await inserted.locator("td").last().click();
+  await page.getByRole("group", { name: "表格操作" }).getByRole("button", { name: "添加行", exact: true }).click();
+  await expect(inserted.locator("tr")).toHaveCount(3);
+
+  await editor.getByText("粘贴位置", { exact: true }).click();
+  await page.keyboard.press("End");
+  await editor.evaluate(element => {
+    const clipboardData = new DataTransfer();
+    clipboardData.setData("text/html", "<table><tr><th>项目</th><th>负责人</th></tr><tr><td><strong>粘贴的项目</strong></td><td></td></tr></table>");
+    element.dispatchEvent(new ClipboardEvent("paste", { clipboardData, bubbles: true, cancelable: true }));
+  });
+  await expect(editor.locator("table")).toHaveCount(2);
+  await page.getByRole("button", { name: "保存并记录历史" }).click();
+  await expect.poll(() => snapshot?.document.blocks.find(block => block.id === id(101))?.children).toContainEqual(expect.objectContaining({
+    type: "table",
+    table: expect.objectContaining({
+      header_rows: 1,
+      rows: [
+        { cells: [[{ type: "text", text: "项目" }], [{ type: "text", text: "负责人" }]] },
+        { cells: [[{ type: "text", text: "粘贴的项目", marks: ["bold"] }], []] },
+      ],
+    }),
+  }));
+  await expect(page.getByText(/未应用此次编辑/)).toHaveCount(0);
+
+  await page.reload();
+  await expect(editor.locator("table")).toHaveCount(2);
+  await expect(inserted.locator("tr")).toHaveCount(3);
+  await expect(editor.locator("table").last().locator("th")).toHaveText(["项目", "负责人"]);
+  await expect(editor.locator("table").last().locator("td")).toHaveText(["粘贴的项目", ""]);
+  await page.getByRole("button", { name: "历史版本", exact: true }).click();
+  await page.getByRole("button", { name: /预览 调研手记/ }).click();
+  const preview = page.getByRole("region", { name: "历史预览" });
+  await expect(preview.locator("table")).toHaveCount(2);
+  await expect(preview.locator("table").last()).toContainText("粘贴的项目");
+  await expect(preview.locator("[contenteditable=true]")).toHaveCount(0);
 });
 
 test("笔记编辑页标题输入框在常态、悬停与聚焦态均隐藏边框", async ({ page }) => {

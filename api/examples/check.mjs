@@ -172,6 +172,7 @@ const CLOSED_ENUMS = {
       "checkListItem",
       "image",
       "codeBlock",
+      "table",
     ],
   },
   "intelligence.openapi.yaml": {

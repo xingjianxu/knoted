@@ -124,8 +124,13 @@ async fn t57_4_published_lexical_hits_keep_the_persisted_chunk_identity() {
         CreateNote {
             title: "研究记录".into(),
             parent_id: None,
-            document_json: json!({"blocks":[{"id":"note-block","type":"paragraph",
-            "content":[{"type":"text","text":"这篇文章详细讨论了知识管理与中文检索。"}]}]})
+            document_json: json!({"blocks":[
+                {"id":"note-title","type":"paragraph","content":[{"type":"text","text":"研究主题"}]},
+                {"id":"note-table","type":"table","table":{"rows":[
+                    {"cells":[[{"type":"text","text":"研究资料和实施记录。".repeat(180)}],[]]},
+                    {"cells":[[],[{"type":"text","text":"这篇文章详细讨论了知识管理与中文检索。"}]]}
+                ]}}
+            ]})
             .to_string(),
         },
     )
@@ -167,10 +172,21 @@ async fn t57_4_published_lexical_hits_keep_the_persisted_chunk_identity() {
         .unwrap();
     assert_eq!(set.source.source_id, note.id);
     assert_eq!(set.source.source_version, note.content_version);
-    assert_eq!(
-        set.chunks[0].locations[0].structure["block_id"],
-        "note-block"
-    );
+    let table_chunks = set
+        .chunks
+        .iter()
+        .filter(|chunk| {
+            chunk
+                .locations
+                .iter()
+                .any(|location| location.structure["block_id"] == "note-table")
+        })
+        .collect::<Vec<_>>();
+    assert!(table_chunks.len() > 1);
+    let table_hit = table_chunks
+        .iter()
+        .find(|chunk| chunk.text.contains("知识管理"))
+        .unwrap();
     let index = chunks::chunk_index_uid(&ctx);
     let http = reqwest::Client::new();
     let matches: serde_json::Value = http
@@ -186,7 +202,7 @@ async fn t57_4_published_lexical_hits_keep_the_persisted_chunk_identity() {
         .unwrap();
     let hits = matches["hits"].as_array().unwrap();
     assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0]["chunk_id"], set.chunks[0].id.to_string());
+    assert_eq!(hits[0]["chunk_id"], table_hit.id.to_string());
     assert_eq!(hits[0]["chunk_set_id"], set.id.to_string());
     assert_eq!(hits[0]["source_version"], set.source.source_version);
     delete(
