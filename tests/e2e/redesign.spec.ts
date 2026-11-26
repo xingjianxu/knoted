@@ -424,28 +424,67 @@ test("笔记标题和编辑器共用居中的 Container，并随分栏和窄屏�
   await page.goto(`http://127.0.0.1:4178/notes/${note.id}`);
 
   const pane = page.getByRole("region", { name: "当前笔记" });
+  const paneBar = pane.locator(".notes-pane-bar");
   const container = pane.locator(".mt-container");
+  const heading = container.locator(".notes-document-heading");
   const title = container.getByRole("textbox", { name: "笔记标题" });
+  const blockEditor = container.locator(".mt-block-editor");
   const editor = container.getByRole("textbox", { name: "笔记编辑器" });
-  const divider = container.getByRole("separator");
   const sidebar = page.getByRole("complementary", { name: "笔记目录" });
   const expectFilled = async () => {
     await expect(title).toHaveValue(note.title);
     await expect(editor).toBeVisible();
-    await expect(divider).toBeVisible();
-    const [paneBox, containerBox, editorBox, dividerBox] = await Promise.all([
-      pane.boundingBox(), container.boundingBox(), editor.boundingBox(), divider.boundingBox(),
+    await expect(container.getByRole("separator")).toHaveCount(0);
+
+    const spacing = await title.evaluate(el => {
+      const inputStyle = getComputedStyle(el);
+      const wrapStyle = el.parentElement ? getComputedStyle(el.parentElement) : null;
+      const headingEl = el.closest(".notes-document-heading");
+      const headingStyle = headingEl ? getComputedStyle(headingEl) : null;
+      return {
+        inputMarginBottom: inputStyle.marginBottom,
+        inputPaddingTop: inputStyle.paddingTop,
+        wrapMarginBottom: wrapStyle?.marginBottom,
+        headingPaddingTop: headingStyle?.paddingTop,
+      };
+    });
+    expect(spacing.inputMarginBottom).toBe("0px");
+    expect(spacing.inputPaddingTop).toBe("0px");
+    expect(spacing.wrapMarginBottom).toBe("0px");
+    expect(spacing.headingPaddingTop).toBe("0px");
+
+    const [paneBox, barBox, containerBox, headingBox, titleBox, blockEditorBox] = await Promise.all([
+      pane.boundingBox(),
+      paneBar.boundingBox(),
+      container.boundingBox(),
+      heading.boundingBox(),
+      title.boundingBox(),
+      blockEditor.boundingBox(),
     ]);
     expect(paneBox).not.toBeNull();
+    expect(barBox).not.toBeNull();
     expect(containerBox).not.toBeNull();
-    expect(editorBox).not.toBeNull();
-    expect(dividerBox).not.toBeNull();
+    expect(headingBox).not.toBeNull();
+    expect(titleBox).not.toBeNull();
+    expect(blockEditorBox).not.toBeNull();
+
     expect(Math.abs(containerBox!.width - Math.min(960, paneBox!.width))).toBeLessThanOrEqual(2);
     expect(Math.abs(containerBox!.x + containerBox!.width / 2 - (paneBox!.x + paneBox!.width / 2))).toBeLessThanOrEqual(2);
-    expect(Math.abs(editorBox!.x - (containerBox!.x + 16))).toBeLessThanOrEqual(2);
-    expect(Math.abs(editorBox!.width - (containerBox!.width - 32))).toBeLessThanOrEqual(2);
-    expect(Math.abs(editorBox!.y - (dividerBox!.y + dividerBox!.height))).toBeLessThanOrEqual(2);
-    expect(Math.abs(editorBox!.y + editorBox!.height - (paneBox!.y + paneBox!.height))).toBeLessThanOrEqual(2);
+    expect(Math.abs(blockEditorBox!.x - (containerBox!.x + 16))).toBeLessThanOrEqual(2);
+    expect(Math.abs(blockEditorBox!.width - (containerBox!.width - 32))).toBeLessThanOrEqual(2);
+    expect(Math.abs(titleBox!.x - blockEditorBox!.x)).toBeLessThanOrEqual(2);
+
+    const topGap = titleBox!.y - (barBox!.y + barBox!.height);
+    expect(topGap).toBeGreaterThanOrEqual(8);
+    expect(topGap).toBeLessThanOrEqual(18);
+
+    const titleToEditorGap = blockEditorBox!.y - (headingBox!.y + headingBox!.height);
+    expect(titleToEditorGap).toBeGreaterThanOrEqual(6);
+    expect(titleToEditorGap).toBeLessThanOrEqual(14);
+
+    const bottomGap = paneBox!.y + paneBox!.height - (blockEditorBox!.y + blockEditorBox!.height);
+    expect(bottomGap).toBeGreaterThanOrEqual(12);
+    expect(bottomGap).toBeLessThanOrEqual(24);
   };
 
   await expectFilled();
@@ -456,9 +495,9 @@ test("笔记标题和编辑器共用居中的 Container，并随分栏和窄屏�
 
   await page.setViewportSize({ width: 1280, height: 900 });
   await expectFilled();
-  const before = (await editor.boundingBox())!.width;
+  const before = (await blockEditor.boundingBox())!.width;
   await page.getByRole("separator", { name: "调整分栏 1" }).press("ArrowRight");
-  await expect.poll(async () => (await editor.boundingBox())?.width ?? before).toBeLessThan(before);
+  await expect.poll(async () => (await blockEditor.boundingBox())?.width ?? before).toBeLessThan(before);
   await expectFilled();
 
   await page.setViewportSize({ width: 390, height: 844 });
@@ -472,6 +511,8 @@ test("长笔记在正文区滚动时保留工具栏", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 540 });
   await page.goto(`http://127.0.0.1:4178/notes/${note.id}`);
 
+  const scroll = page.locator(".notes-body-scroll");
+  const blockEditor = scroll.locator(".mt-block-editor");
   const editor = page.getByRole("textbox", { name: "笔记编辑器" });
   const lastParagraph = editor.getByText(/^调研记录第 14 段/);
   await expect(lastParagraph).toBeAttached();
@@ -479,6 +520,14 @@ test("长笔记在正文区滚动时保留工具栏", async ({ page }) => {
   await lastParagraph.scrollIntoViewIfNeeded();
   await expect(lastParagraph).toBeInViewport();
   await expect(page.getByRole("button", { name: "历史版本" })).toBeInViewport();
+
+  await scroll.evaluate(el => { el.scrollTop = el.scrollHeight; });
+  const [scrollBox, blockEditorBox] = await Promise.all([scroll.boundingBox(), blockEditor.boundingBox()]);
+  expect(scrollBox).not.toBeNull();
+  expect(blockEditorBox).not.toBeNull();
+  const bottomGap = scrollBox!.y + scrollBox!.height - (blockEditorBox!.y + blockEditorBox!.height);
+  expect(bottomGap).toBeGreaterThanOrEqual(12);
+  expect(bottomGap).toBeLessThanOrEqual(24);
 });
 
 test("笔记编辑器消费 mtone-blockeditor：斜杠菜单、图片上传资产映射与不支持块提示", async ({ page }) => {

@@ -732,7 +732,7 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
             ) : activeNoteId ? (
               <div className="notes-pane">
                 <div className="notes-body-scroll">
-                  <div className="notes-body-inner space-y-3">
+                  <Container className="notes-body-inner space-y-3">
                     {detail.isFetching && <Spinner label="正在读取笔记" />}
                     {detail.error && (
                       <Alert tone="error">
@@ -742,7 +742,7 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
                         </div>
                       </Alert>
                     )}
-                  </div>
+                  </Container>
                 </div>
               </div>
             ) : (
@@ -967,7 +967,7 @@ function NotePane({
 
       <div className="notes-body-scroll">
         <Container className={history ? "notes-body-inner space-y-4" : "notes-body-editor"}>
-          <div className="notes-document-heading space-y-4">
+          <div className="notes-document-heading">
             {autosave.error && <Alert tone="error">{autosave.error.message}</Alert>}
             {autosave.historyError && <Alert tone="error">历史保存失败：{autosave.historyError.message}</Alert>}
             {autosave.serverUpdated && <Alert tone="warning">服务器内容已更新；本地草稿仍保留。</Alert>}
@@ -984,8 +984,8 @@ function NotePane({
               readOnly={expired}
               onChange={event => { if (!isBusy() && !expired) autosave.changeDraft({ title: event.target.value }); }}
             />
-            <Divider className={history ? undefined : "mb-0"} />
           </div>
+          {history && <Divider className="my-0" />}
 
           {/* The same editor and selection survive history and drawer interactions. */}
           <div className="notes-document" hidden={history} inert={history}>
