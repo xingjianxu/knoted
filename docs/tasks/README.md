@@ -27,6 +27,7 @@
 | [#296](296.md) | Feature | 笔记编辑器填满正文区 | 无 |
 | [#298](298.md) | Feature | 升级 mtone 并用 Container 布局笔记编辑区 | 无 |
 | [#300](300.md) | Feature | 笔记侧栏支持拖动同级排序 | 无 |
+| [#303](303.md) | Task | 升级 `@bixlab/mtone` 至 `0.15.5` 与 `@bixlab/mtone-blockeditor` 至 `0.2.2` | 无 |
 
 ## 开发部署
 
