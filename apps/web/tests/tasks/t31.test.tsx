@@ -1,9 +1,10 @@
 import { File as NodeFile } from "node:buffer";
 import { openWorkspaceLogout } from "../fixtures/workspace-header";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient } from "@tanstack/react-query";
 import { createBrowserHistory, createMemoryHistory } from "@tanstack/react-router";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import type { components } from "@knoted/api-client";
+import { createApiClient, type components } from "@knoted/api-client";
 import App from "../../src/App";
 import { createAppRouter, safeReturnTo } from "../../src/lib/router";
 import { queryKeys } from "../../src/lib/query";
@@ -171,6 +172,27 @@ it("evicts the cache at session 401 headers while retaining queries cached durin
   expect(await screen.findByRole("button", { name: "使用 Passkey 登录" })).toBeInTheDocument();
   expect(router.state.location.search).toEqual({ redirect: "/notes" });
   expect(queryClient.getQueryData(after)).toBe("new cache");
+});
+it("clears an injected client's private cache when the route session returns 401", async () => {
+  intercept = (_r, url) => url.pathname.endsWith("/auth/session") ? failure(401) : undefined;
+  const queryClient = new QueryClient();
+  const api = createApiClient({ baseUrl: "/api/v1" });
+  const router = createAppRouter({
+    history: createMemoryHistory({ initialEntries: ["/notes"] }),
+    bundle: { queryClient, api },
+  });
+  const sessionKey = queryKeys.auth.session();
+  const noteKey = queryKeys.notes.detail(id(1));
+  queryClient.setQueryData(sessionKey, { session: { id: id(100) } });
+  queryClient.setQueryData(noteKey, note(1));
+  queryClient.getMutationCache().build(queryClient, { mutationKey: ["private-note"] });
+  render(<UiProvider><App router={router}/></UiProvider>);
+
+  expect(await screen.findByRole("button", { name: "使用 Passkey 登录" })).toBeInTheDocument();
+  expect(router.state.location.search).toEqual({ redirect: "/notes" });
+  expect(queryClient.getQueryData(sessionKey)).toBeUndefined();
+  expect(queryClient.getQueryData(noteKey)).toBeUndefined();
+  expect(queryClient.getMutationCache().getAll()).toEqual([]);
 });
 it("t31_navigation_barrier_and_draft_failures keeps route/editor selected until mounted save and history finish", async () => {
   const pending = deferred(); intercept = (r) => r.method === "PATCH" ? pending.promise : undefined;

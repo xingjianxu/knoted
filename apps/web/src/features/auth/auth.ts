@@ -14,7 +14,11 @@ export async function AuthGate(bundle: QueryClientBundle, href: string, signal: 
   } catch (error) {
     signal.throwIfAborted();
     if (error instanceof ApiRequestError && error.status === 401) {
-      bundle.queryClient.getMutationCache().clear();
+      if (bundle.evictsQueriesOnUnauthorized) {
+        bundle.queryClient.getMutationCache().clear();
+      } else {
+        bundle.queryClient.clear();
+      }
       throw redirect({
         to: "/login",
         search: { redirect: href },

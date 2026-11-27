@@ -67,6 +67,8 @@ const NO_RETRY_STATUSES = new Set([401, 403, 404, 422]);
 export interface QueryClientBundle {
   queryClient: QueryClient;
   api: ApiClient;
+  /** The API client's 401 handler already evicts queries present at headers. */
+  evictsQueriesOnUnauthorized?: true;
 }
 
 /**
@@ -113,5 +115,5 @@ export function createQueryClient(options?: { onUnauthorized?: () => void }): Qu
     },
   });
 
-  return { queryClient, api };
+  return { queryClient, api, evictsQueriesOnUnauthorized: true };
 }
