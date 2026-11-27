@@ -68,7 +68,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
 
       return request;
     },
-    async onResponse({ response }) {
+    async onResponse({ request, response }) {
       if (response.ok) {
         return;
       }
@@ -77,7 +77,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         options.onUnauthorized?.();
       }
 
-      throw await ApiRequestError.fromResponse(response);
+      throw await ApiRequestError.fromResponse(response, request.signal);
     },
   });
 
