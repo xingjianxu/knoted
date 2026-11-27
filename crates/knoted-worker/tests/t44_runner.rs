@@ -8,13 +8,13 @@ use knoted_worker::{
 #[tokio::test]
 async fn t44_dispatcher_captures_after_scan_via_shared_queue() {
     let db = TestDb::create().await.unwrap();
-    let root = temp();
-    let staging = temp();
-    std::fs::write(root.as_path().join("sample.txt"), "sample").unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let staging = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("sample.txt"), "sample").unwrap();
     let ctx = AppContext::new(db.pool.clone()).with_files(FilesConfig {
         enabled: true,
-        root: Some(root.as_path().into()),
-        staging_root: Some(staging.as_path().into()),
+        root: Some(root.path().into()),
+        staging_root: Some(staging.path().into()),
         ..Default::default()
     });
     enqueue_scan(&ctx).await.unwrap();
@@ -26,8 +26,6 @@ async fn t44_dispatcher_captures_after_scan_via_shared_queue() {
         .await
         .unwrap();
     db.drop().await;
-    std::fs::remove_dir_all(root).unwrap();
-    std::fs::remove_dir_all(staging).unwrap();
     assert!(matches!(scan,StepOutcome::Finished{job,..} if job.state=="succeeded"));
     assert!(
         matches!(capture,StepOutcome::Finished{job,..} if job.state=="succeeded"),
@@ -36,24 +34,19 @@ async fn t44_dispatcher_captures_after_scan_via_shared_queue() {
     assert_eq!(rows, 1);
 }
 
-fn temp() -> std::path::PathBuf {
-    let p = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir(&p).unwrap();
-    p
-}
 #[tokio::test]
 async fn t44_real_runner_cancellation_stops_and_cleans_active_copy() {
     use std::time::Duration;
     let db = TestDb::create().await.unwrap();
-    let root = temp();
-    let staging = temp();
-    let file = std::fs::File::create(root.join("sample.bin")).unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let staging = tempfile::tempdir().unwrap();
+    let file = std::fs::File::create(root.path().join("sample.bin")).unwrap();
     file.set_len(64 * 1024 * 1024).unwrap();
     drop(file);
     let ctx = AppContext::new(db.pool.clone()).with_files(FilesConfig {
         enabled: true,
-        root: Some(root.clone()),
-        staging_root: Some(staging.clone()),
+        root: Some(root.path().into()),
+        staging_root: Some(staging.path().into()),
         ..Default::default()
     });
     enqueue_scan(&ctx).await.unwrap();
@@ -64,7 +57,7 @@ async fn t44_real_runner_cancellation_stops_and_cleans_active_copy() {
     let task = tokio::spawn(async move { runner.step().await });
     tokio::time::timeout(Duration::from_secs(8), async {
         loop {
-            let writing = std::fs::read_dir(staging.join("input"))
+            let writing = std::fs::read_dir(staging.path().join("input"))
                 .into_iter()
                 .flatten()
                 .any(|e| e.unwrap().path().extension().is_some_and(|v| v == "part"));
@@ -93,10 +86,10 @@ async fn t44_real_runner_cancellation_stops_and_cleans_active_copy() {
         .fetch_one(ctx.pool())
         .await
         .unwrap();
-    let objects = std::fs::read_dir(staging.join("input")).unwrap().count();
+    let objects = std::fs::read_dir(staging.path().join("input"))
+        .unwrap()
+        .count();
     db.drop().await;
-    std::fs::remove_dir_all(root).unwrap();
-    std::fs::remove_dir_all(staging).unwrap();
     assert!(matches!(result,StepOutcome::Finished{job,..} if job.state=="cancelled"));
     assert_eq!(sources, 0);
     assert_eq!(objects, 0);
