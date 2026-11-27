@@ -977,6 +977,37 @@ api_key_credential = "meilisearch"
     assert.deepEqual(pcArgs(context.logFile), []);
   });
 
+  it("仅有退役变量的旧部署环境不能替代保留的设置", () => {
+    const context = fixture({ legacy: true });
+    for (const pid of ["1000", "1001", "1002"]) rmSync(join(context.procRoot, pid), { recursive: true });
+    context.env.STUB_INSTANCE_STOPPED = "1";
+    attachLauncher(context);
+    writeDeployEnv(context.instanceRoot, { KNOTED_INTELLIGENCE_BGE_M3_DIR: "/retired" });
+
+    const result = deploy(context);
+
+    assert.notEqual(result.status, 0);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
+    assert.match(result.stderr, /旧.*配置.*显式/);
+    assert.deepEqual(pcArgs(context.logFile), []);
+  });
+
+  it("旧配置缺失时接受明确停用搜索和 Office 的环境", () => {
+    const context = fixture({ legacy: true });
+    for (const pid of ["1000", "1001", "1002"]) rmSync(join(context.procRoot, pid), { recursive: true });
+    context.env.STUB_INSTANCE_STOPPED = "1";
+    context.env.KNOTED_SEARCH_ENABLED = "0";
+    context.env.KNOTED_OFFICE_ORIGIN = "";
+    context.env.KNOTED_OFFICE_JWT_SECRET_FILE = "";
+    attachLauncher(context);
+
+    const result = deploy(context);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, targetRevision));
+    assert.deepEqual(pcArgs(context.logFile), ["pc up -D"]);
+  });
+
   it("旧渲染配置使用不受支持的搜索字段时拒绝改写", () => {
     const context = fixture({ legacy: true });
     for (const pid of ["1000", "1001", "1002"]) rmSync(join(context.procRoot, pid), { recursive: true });

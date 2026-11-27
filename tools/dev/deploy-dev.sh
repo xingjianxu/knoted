@@ -298,6 +298,20 @@ write_deploy_env() {
   mv -f "$tmp" "$deploy_env_file"
 }
 
+# Without the rendered TOML, disabled optional settings must be explicit.
+legacy_environment_known() {
+  [[ ${resolved[KNOTED_SEARCH_ENABLED]:-} =~ ^[01]$ ]] || return 1
+  if [[ ${resolved[KNOTED_SEARCH_ENABLED]} == 1 && -z ${resolved[KNOTED_SEARCH_CREDENTIAL_FILE]:-} &&
+        ! -v KNOTED_SEARCH_CREDENTIAL_FILE ]]; then
+    return 1
+  fi
+  if [[ -n ${resolved[KNOTED_OFFICE_ORIGIN]:-} && -n ${resolved[KNOTED_OFFICE_JWT_SECRET_FILE]:-} ]]; then
+    return 0
+  fi
+  [[ -v KNOTED_OFFICE_ORIGIN && -v KNOTED_OFFICE_JWT_SECRET_FILE &&
+     -z ${resolved[KNOTED_OFFICE_ORIGIN]:-} && -z ${resolved[KNOTED_OFFICE_JWT_SECRET_FILE]:-} ]]
+}
+
 # 先解析调用者环境和 deploy.env，冷切换可从旧渲染配置补齐。
 # 同一编排更新还可以从活动进程读取环境，最终结果回写文件。
 resolve_runtime_variables() {
@@ -318,8 +332,7 @@ resolve_runtime_variables() {
     if [ -f "$old_config" ]; then
       read_legacy_runtime_config "$old_config" ||
         fail "无法从旧渲染配置恢复搜索和 Office，请显式提供这些运行设置" 2
-    elif [ ! -f "$deploy_env_file" ] &&
-         [[ -z ${KNOTED_SEARCH_ENABLED:-} || ! -v KNOTED_OFFICE_ORIGIN || ! -v KNOTED_OFFICE_JWT_SECRET_FILE ]]; then
+    elif ! legacy_environment_known; then
       fail "旧实例没有可用的部署环境或渲染配置，请显式提供搜索和 Office 设置" 2
     fi
     missing=""
