@@ -10,7 +10,7 @@ export interface FilePreviewProps {
     open: boolean;
     onOpenChange: (open: boolean) => void;
     /** Ordinary original download, deliberately independent of preview byte limits. */
-    onDownload: (file: FileSource) => void | Promise<void>;
+    onDownload: (file: FileSource) => void | "stale" | Promise<void | "stale">;
 }
 type Owner = {
     controller: AbortController;
@@ -50,7 +50,8 @@ function OpenPreview({ api, file, onOpenChange, onDownload }: FilePreviewProps &
     const [closed, setClosed] = useState(false);
     const [unauthorized, setUnauthorized] = useState(false);
     const [downloading, setDownloading] = useState(false);
-    const [downloadError, setDownloadError] = useState("");
+    const [downloadError, setDownloadError] = useState<"failed" | "stale" | null>(null);
+    const staleDownload = downloadError === "stale";
     const lifetime = useRef<Owner | null>(null);
     const officeLifetime = useRef<(() => void) | null>(null);
     const office = isOfficeFile(snapshot);
@@ -129,12 +130,14 @@ function OpenPreview({ api, file, onOpenChange, onDownload }: FilePreviewProps &
     }
     async function download() {
         const owner = lifetime.current;
-        if (!owner || owner.disposed || downloading)
+        if (!owner || owner.disposed || downloading || staleDownload)
             return;
         setDownloading(true);
-        setDownloadError("");
+        setDownloadError(null);
         try {
-            await onDownload(file);
+            const result = await onDownload(file);
+            if (!owner.disposed && result === "stale")
+                setDownloadError("stale");
         }
         catch (error) {
             if (owner.disposed)
@@ -145,7 +148,7 @@ function OpenPreview({ api, file, onOpenChange, onDownload }: FilePreviewProps &
                 setUnauthorized(true);
             }
             else
-                setDownloadError("下载失败，请重试。");
+                setDownloadError("failed");
         }
         finally {
             if (!owner.disposed)
@@ -156,7 +159,7 @@ function OpenPreview({ api, file, onOpenChange, onDownload }: FilePreviewProps &
         return null;
     const current = state.api === api ? state : { kind: "loading" as const };
     return <Dialog open title={`文件预览：${file.name}`} onOpenChange={open => { if (!open)
-        close(); }} className="w-[min(64rem,calc(100vw-2rem))]" footer={<><Button onClick={close}>关闭预览</Button><Button disabled={downloading || file.status !== "present"} onClick={() => void download()}>下载原文件</Button></>}>
+        close(); }} className="w-[min(64rem,calc(100vw-2rem))]" footer={<><Button onClick={close}>关闭预览</Button><Button disabled={downloading || staleDownload || file.status !== "present"} onClick={() => void download()}>下载原文件</Button></>}>
     <div className="max-h-[max(3rem,min(70dvh,calc(100dvh-9rem)))] overflow-auto">
       {office ? <OfficePreview api={api} file={snapshot} disposeRef={officeLifetime} onUnauthorized={markUnauthorized}/> : <>
         {current.kind === "loading" && <Spinner label="正在读取预览"/>}
@@ -171,7 +174,8 @@ function OpenPreview({ api, file, onOpenChange, onDownload }: FilePreviewProps &
         }}/>}
         {current.kind === "pdf" && <><p>由浏览器 PDF 查看器显示；如无法显示，请下载原文件。</p><iframe title={`PDF 预览：${file.name}`} src={current.url} className="h-[max(3rem,min(60dvh,calc(100dvh-11rem)))] w-full"/></>}
       </>}
-      {downloadError && <Alert tone="error">{downloadError}</Alert>}
+      {staleDownload && <Alert tone="warning">文件版本已变化，请关闭并重新打开预览后再下载。</Alert>}
+      {downloadError === "failed" && <Alert tone="error">下载失败，请重试。</Alert>}
     </div>
   </Dialog>;
 }

@@ -147,9 +147,7 @@ function FileEditor({ bundle, source, onSelectFile }: {
             if (response.headers.get("etag") !== `"${selected.version}"`) {
                 setNotice("文件版本已变化，请刷新后重试下载。");
                 await bundle.queryClient.invalidateQueries({ queryKey: queryKeys.files.detail(selected.id) });
-                if (reportToPreview)
-                    throw new Error("文件版本已变化，请刷新后重试下载。");
-                return;
+                return "stale" as const;
             }
             const url = URL.createObjectURL(data);
             try {
