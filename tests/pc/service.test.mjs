@@ -245,7 +245,7 @@ describe("prepare", () => {
     assert.ok(toml.includes('root = "/data/vaultsyncd-dev/dev-server/vaults/knoted-test"'));
     assert.ok(toml.includes(`staging_root = "${fixture.instanceRoot}/staging"`));
     assert.match(toml, /\[files\]\nenabled = true/);
-    assert.doesNotMatch(toml, /^\[office\]$/m);
+    assert.doesNotMatch(toml, /^\[(office|search)\]$/m);
     assert.doesNotMatch(toml, /^\[chat(?:\.|\])/m);
 
     assert.equal(statSync(join(fixture.instanceRoot, "config/knoted.toml")).mode & 0o777, 0o600);
@@ -253,6 +253,50 @@ describe("prepare", () => {
     assert.equal(existsSync(join(fixture.instanceRoot, "config/Caddyfile")), false);
     assert.equal(existsSync(join(fixture.instanceRoot, "bin/knoted-https-reload")), false);
 
+  });
+
+  it("手动 prepare 从实例 deploy.env 恢复搜索与 Office，调用者环境优先", async () => {
+    const fixture = await fullFixture();
+    mkdirSync(fixture.instanceRoot);
+    const jwtPath = join(fixture.base, "office files=jwt=");
+    const deployEnv = [
+      "KNOTED_SEARCH_ENABLED=1",
+      "KNOTED_OFFICE_ORIGIN=https://saved.example.test",
+      `KNOTED_OFFICE_JWT_SECRET_FILE=${jwtPath}`,
+      "KNOTED_SEARCH_CREDENTIAL_FILE=/run/knoted/search",
+      "DATABASE_URL=ignored",
+      "KNOTED_CHAT_LOCAL_MODEL=retired",
+    ].join("\n");
+    const file = join(fixture.instanceRoot, "deploy.env");
+    writeFileSync(file, deployEnv, { mode: 0o600 });
+
+    const result = run("bash", [serviceScript, "prepare"], {
+      env: prepareEnv(fixture, { KNOTED_OFFICE_ORIGIN: "https://override.example.test" }),
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const toml = readFileSync(join(fixture.instanceRoot, "config/knoted.toml"), "utf8");
+    assert.match(toml, /\[search\]\nenabled = true\napi_key_credential = "meilisearch"/);
+    assert.ok(toml.includes('credential_file = "/run/knoted/search"'));
+    assert.ok(toml.includes('document_server_origin = "https://override.example.test"'));
+    assert.ok(toml.includes(`jwt_secret_file = "${jwtPath}"`));
+    assert.doesNotMatch(toml, /saved\.example|ignored|retired/);
+    assert.equal(readFileSync(file, "utf8"), deployEnv);
+  });
+
+  it("deploy.env 格式错误时保留上次生成的配置，错误信息只给出行号", async () => {
+    const fixture = await fullFixture();
+    const env = prepareEnv(fixture);
+    const initial = run("bash", [serviceScript, "prepare"], { env });
+    assert.equal(initial.status, 0, initial.stderr);
+    const config = join(fixture.instanceRoot, "config/knoted.toml");
+    const before = readFileSync(config, "utf8");
+    writeFileSync(join(fixture.instanceRoot, "deploy.env"), "KNOTED_SEARCH_ENABLED=1\ninvalid test line\n");
+
+    const result = run("bash", [serviceScript, "prepare"], { env });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /deploy\.env:2/);
+    assert.doesNotMatch(result.stderr, /invalid test line/);
+    assert.equal(readFileSync(config, "utf8"), before);
   });
 
   it("仅用可信来源和绝对凭据路径启用 Office；不打开凭据文件", async () => {

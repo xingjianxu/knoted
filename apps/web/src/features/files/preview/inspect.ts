@@ -18,7 +18,12 @@ export function isOfficeFile(file: FileSource): boolean {
 // Keep aligned with crates/knoted-core/src/files/text.rs::supports (T46).
 const textExtensions = new Set("txt md markdown rs py js jsx ts tsx c h cpp hpp cc java go rb php sh bash zsh fish sql html htm css scss xml json toml yaml yml ini cfg conf csv tsv log nix swift kt kts lua r pl ex exs erl hrl vue svelte".split(" "));
 const textNames = new Set(["readme", "license", "makefile", "dockerfile", "justfile"]);
-const imageMimes: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp" };
+const imageMimes = new Map([
+    ["png", "image/png"],
+    ["jpg", "image/jpeg"],
+    ["jpeg", "image/jpeg"],
+    ["webp", "image/webp"],
+]);
 export function previewKind(file: FileSource): "text" | "pdf" | "image" {
     const name = file.name.replace(/[A-Z]/g, c => c.toLowerCase());
     const extension = name.lastIndexOf(".") > 0 ? name.slice(name.lastIndexOf(".") + 1) : "";
@@ -26,7 +31,8 @@ export function previewKind(file: FileSource): "text" | "pdf" | "image" {
     const generic = !mime || mime === "application/octet-stream";
     if (extension === "pdf" && (generic || mime === "application/pdf"))
         return "pdf";
-    if (imageMimes[extension] && (generic || mime === imageMimes[extension]))
+    const imageMime = imageMimes.get(extension);
+    if (imageMime && (generic || mime === imageMime))
         return "image";
     if ((textNames.has(name) || textExtensions.has(extension)) &&
         (generic || mime?.startsWith("text/") || ["application/json", "application/xml", "application/javascript", "application/x-sh", "application/toml", "application/yaml"].includes(mime!)))
@@ -39,7 +45,7 @@ export function inspectPreview(file: FileSource, bytes: Uint8Array): Preview {
     const kind = previewKind(file);
     if (kind === "image") {
         const extension = file.name.toLowerCase().split(".").at(-1)!;
-        const mime = imageMimes[extension]!;
+        const mime = imageMimes.get(extension)!;
         inspectImage(bytes, mime);
         return { kind, mime };
     }
