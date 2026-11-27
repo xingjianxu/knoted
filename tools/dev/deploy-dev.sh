@@ -60,13 +60,7 @@ domain=${KNOTED_HTTPS_DOMAIN:-wlab.132140.xyz}
 deploy_env_file=$instance_root/deploy.env
 lock_file=$instance_root/.deploy.lock
 
-# 运行变量白名单：全部是路径或开关，不含密钥本身。
-runtime_variable_keys=(
-  KNOTED_SEARCH_ENABLED
-  KNOTED_SEARCH_CREDENTIAL_FILE
-  KNOTED_OFFICE_ORIGIN
-  KNOTED_OFFICE_JWT_SECRET_FILE
-)
+source "$script_dir/pc/runtime-env.sh"
 
 log() {
   printf 'knoted-deploy: %s\n' "$1" >&2
@@ -148,21 +142,6 @@ resolve_revision() {
      [[ -z $generation || $selected_generation != "$generation" ]]; then
     fail "目标提交 $revision 的产物代不受当前部署规则支持" 2
   fi
-}
-
-# deploy.env 只接受 KEY=VALUE 行，不 source（避免执行文件内容）。调用者环境优先。
-read_deploy_env() {
-  local key value
-  while IFS='=' read -r key value || [ -n "$key" ]; do
-    [ -n "$key" ] || continue
-    case " ${runtime_variable_keys[*]} " in
-    *" $key "*)
-      if [ -n "$value" ] && [ -z "${resolved[$key]:-}" ]; then
-        resolved[$key]=$value
-      fi
-      ;;
-    esac
-  done <"$deploy_env_file"
 }
 
 # 旧 prepare 只生成下列搜索和 Office 字段。配置中其他段落无需读取字段值。
@@ -316,13 +295,13 @@ legacy_environment_known() {
 # 同一编排更新还可以从活动进程读取环境，最终结果回写文件。
 resolve_runtime_variables() {
   local key captured=0 missing="" file_before=""
+  load_deploy_env "$deploy_env_file"
   declare -gA resolved=()
   for key in "${runtime_variable_keys[@]}"; do
     if [ -n "${!key:-}" ]; then resolved[$key]=${!key}; fi
   done
   if [ -f "$deploy_env_file" ]; then
     file_before=$(grep -E '^[A-Z_]+=' "$deploy_env_file" 2>/dev/null || true)
-    read_deploy_env
   fi
   for key in "${runtime_variable_keys[@]}"; do
     [ -n "${resolved[$key]:-}" ] || missing="$missing $key"

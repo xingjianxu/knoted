@@ -629,10 +629,86 @@ async fn t45_union_dedup_preserves_target_edges_and_deleted_endpoint_rows() {
     assert_eq!(result.note.as_deref(), Some("my note"));
 }
 
+// Hold relationship admission in a third session. Only start the second
+// operation after PostgreSQL reports the first queued on this fixture's lock;
+// release the gate when both real service transactions are waiting.
+async fn ordered_relink_race<R, W>(
+    ctx: &AppContext,
+    relink: R,
+    writer: W,
+    relink_first: bool,
+) -> (R::Output, W::Output)
+where
+    R: Future,
+    W: Future,
+{
+    if relink_first {
+        return queued_transactions(ctx, relink, writer).await;
+    }
+    let (written, moved) = queued_transactions(ctx, writer, relink).await;
+    (moved, written)
+}
+
+async fn queued_transactions<A: Future, B: Future>(
+    ctx: &AppContext,
+    first: A,
+    second: B,
+) -> (A::Output, B::Output) {
+    use sqlx::{Connection, PgConnection};
+
+    let relation: i32 = sqlx::query_scalar("SELECT 'projects'::regclass::oid::integer")
+        .fetch_one(ctx.pool())
+        .await
+        .unwrap();
+    let mut connection = PgConnection::connect_with(&ctx.pool().connect_options())
+        .await
+        .unwrap();
+    let mut gate = connection.begin().await.unwrap();
+    let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(33001, $1)")
+        .bind(relation)
+        .fetch_one(&mut *gate)
+        .await
+        .unwrap();
+    assert!(
+        acquired,
+        "the fixture's private lock must be free before either service starts"
+    );
+
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        let (a, (b, ())) = tokio::join!(first, async {
+            wait_for_lock_queue(&mut gate, relation, 1).await;
+            tokio::join!(second, async {
+                wait_for_lock_queue(&mut gate, relation, 2).await;
+                gate.commit().await.unwrap();
+            })
+        });
+        (a, b)
+    })
+    .await
+    .expect("both service transactions must queue and finish without deadlock")
+}
+
+async fn wait_for_lock_queue(connection: &mut sqlx::PgConnection, relation: i32, expected: i64) {
+    loop {
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_locks WHERE locktype='advisory'
+             AND database=(SELECT oid FROM pg_database WHERE datname=current_database())
+             AND classid=33001 AND objid=$1::integer::oid AND objsubid=2 AND NOT granted",
+        )
+        .bind(relation)
+        .fetch_one(&mut *connection)
+        .await
+        .unwrap();
+        if waiting == expected {
+            return;
+        }
+    }
+}
+
 #[tokio::test]
 async fn t45_concurrent_tag_writers_and_relink_obey_old_cas() {
     use knoted_core::links::service::*;
-    for assign in [true, false] {
+    for (assign, relink_first) in [(true, true), (true, false), (false, true), (false, false)] {
         let (db, ctx, old, new, _directory) = pair().await;
         let tag = create_tag(
             &ctx,
@@ -642,66 +718,79 @@ async fn t45_concurrent_tag_writers_and_relink_obey_old_cas() {
         )
         .await
         .unwrap();
-        let change = || ChangeEntityTag {
-            entity: Entity {
-                entity_type: EntityType::File,
-                id: old,
+        let retained = create_tag(
+            &ctx,
+            CreateTag {
+                name: "target tag".into(),
             },
-            tag_id: tag.id,
-        };
-        if !assign {
-            assign_tag(&ctx, change()).await.unwrap();
-        }
-        let race = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            tokio::join!(
-                relink_source(&ctx, relink(old, new, if assign { 11 } else { 12 })),
-                async {
-                    if assign {
-                        assign_tag(&ctx, change()).await
-                    } else {
-                        remove_tag(&ctx, change()).await
-                    }
-                }
-            )
-        })
-        .await;
-        let members: Vec<Uuid> = sqlx::query_scalar(
-            "SELECT entity_id FROM file_tags WHERE tag_id=$1 ORDER BY entity_id",
         )
-        .bind(tag.id)
-        .fetch_all(ctx.pool())
         .await
         .unwrap();
-        let notes: Vec<(Uuid, Option<String>)> =
-            sqlx::query_as("SELECT id,note FROM file_sources ORDER BY id")
+        let change = |id, tag_id| ChangeEntityTag {
+            entity: Entity {
+                entity_type: EntityType::File,
+                id,
+            },
+            tag_id,
+        };
+        assign_tag(&ctx, change(new, retained.id)).await.unwrap();
+        if !assign {
+            assign_tag(&ctx, change(old, tag.id)).await.unwrap();
+        }
+        let version = if assign { 11 } else { 12 };
+        let (moved, written) = ordered_relink_race(
+            &ctx,
+            relink_source(&ctx, relink(old, new, version)),
+            async {
+                if assign {
+                    assign_tag(&ctx, change(old, tag.id)).await
+                } else {
+                    remove_tag(&ctx, change(old, tag.id)).await
+                }
+            },
+            relink_first,
+        )
+        .await;
+        let members: Vec<(Uuid, Uuid)> =
+            sqlx::query_as("SELECT entity_id,tag_id FROM file_tags ORDER BY entity_id,tag_id")
                 .fetch_all(ctx.pool())
                 .await
                 .unwrap();
+        let notes: (Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT a.note,b.note FROM file_sources a, file_sources b WHERE a.id=$1 AND b.id=$2",
+        )
+        .bind(old)
+        .bind(new)
+        .fetch_one(ctx.pool())
+        .await
+        .unwrap();
         db.drop().await;
-        let (moved, written) = race.expect("no lock inversion");
+
         written.unwrap();
+        let mut expected = vec![(new, retained.id)];
         if assign {
-            assert_eq!(members.len(), 1);
-            // Assignment first invalidates old CAS. Assignment after transfer
-            // remains on the old present source, not silently redirected.
-            assert_eq!(members, vec![old]);
-        } else if moved.is_ok() {
-            assert_eq!(members, vec![new]);
-        } else {
-            assert!(members.is_empty());
+            expected.push((old, tag.id));
+        } else if relink_first {
+            expected.push((new, tag.id));
         }
-        let note_owner = notes
-            .into_iter()
-            .find(|(_, note)| note.is_some())
-            .unwrap()
-            .0;
-        assert_eq!(note_owner, if moved.is_ok() { new } else { old });
+        expected.sort();
+        assert_eq!(members, expected);
+        if relink_first {
+            assert_eq!(moved.unwrap().id, new);
+            assert_eq!(notes, (None, Some("my note".into())));
+        } else {
+            assert!(
+                matches!(moved, Err(DomainError::Conflict { current_version: Some(actual) }) if actual == version + 1)
+            );
+            assert_eq!(notes, (Some("my note".into()), None));
+        }
     }
 }
+
 #[tokio::test]
 async fn t45_concurrent_create_remove_links_serialize_with_transfer() {
     use knoted_core::links::service::*;
-    for create in [true, false] {
+    for (create, relink_first) in [(true, true), (true, false), (false, true), (false, false)] {
         let (db, ctx, old, new, _directory) = pair().await;
         let root: Uuid = sqlx::query_scalar("SELECT root_id FROM file_sources WHERE id=$1")
             .bind(old)
@@ -709,23 +798,23 @@ async fn t45_concurrent_create_remove_links_serialize_with_transfer() {
             .await
             .unwrap();
         let third = seed(&ctx, root, "third", None).await;
-        let input = || CreateLink {
+        let input = |source_id, target_id| CreateLink {
             source_type: EntityType::File,
-            source_id: old,
+            source_id,
             target_type: EntityType::File,
-            target_id: third,
+            target_id,
         };
-        let edge = if !create {
-            Some(create_link(&ctx, input()).await.unwrap())
-        } else {
+        let retained = create_link(&ctx, input(third, new)).await.unwrap();
+        let edge = if create {
             None
+        } else {
+            Some(create_link(&ctx, input(old, third)).await.unwrap())
         };
-        let race = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            tokio::join!(relink_source(&ctx, relink(old, new, 11)), async {
-                if create {
-                    create_link(&ctx, input()).await.map(|_| ())
-                } else {
-                    let edge = edge.as_ref().unwrap();
+        let (moved, written) = ordered_relink_race(
+            &ctx,
+            relink_source(&ctx, relink(old, new, 11)),
+            async {
+                if let Some(edge) = &edge {
                     remove_link(
                         &ctx,
                         RemoveLink {
@@ -734,36 +823,48 @@ async fn t45_concurrent_create_remove_links_serialize_with_transfer() {
                         },
                     )
                     .await
+                } else {
+                    create_link(&ctx, input(old, third)).await.map(|_| ())
                 }
-            })
-        })
+            },
+            relink_first,
+        )
         .await;
-        let edges: Vec<(Uuid, Uuid, i64)> =
-            sqlx::query_as("SELECT source_id,target_id,version FROM entity_links")
-                .fetch_all(ctx.pool())
-                .await
-                .unwrap();
+        let edges: Vec<(Uuid, Uuid, i64)> = sqlx::query_as(
+            "SELECT source_id,target_id,version FROM entity_links ORDER BY source_id,target_id",
+        )
+        .fetch_all(ctx.pool())
+        .await
+        .unwrap();
         db.drop().await;
-        let (moved, written) = race.expect("no lock inversion");
-        moved.unwrap();
-        if create {
-            written.unwrap();
-            assert_eq!(edges.len(), 1);
-            assert!([old, new].contains(&edges[0].0));
-            assert_eq!(edges[0].1, third);
-        } else if written.is_ok() {
-            assert!(edges.is_empty());
-        } else {
-            assert_eq!(edges, vec![(new, third, 2)]);
+
+        let moved = moved.unwrap();
+        assert_eq!(moved.id, new);
+        assert_eq!(moved.note.as_deref(), Some("my note"));
+        let mut expected = vec![(retained.source_id, retained.target_id, 1)];
+        if !create && relink_first {
             assert!(matches!(
                 written,
                 Err(DomainError::Conflict {
                     current_version: Some(2)
                 })
             ));
+            expected.push((new, third, 2));
+        } else {
+            written.unwrap();
+            if create {
+                expected.push(if relink_first {
+                    (old, third, 1)
+                } else {
+                    (new, third, 2)
+                });
+            }
         }
+        expected.sort();
+        assert_eq!(edges, expected);
     }
 }
+
 #[tokio::test]
 async fn t45_concurrent_complete_scan_target_missing_cannot_transfer() {
     let (db, ctx, root, _staging, input) = fixture(3).await;
