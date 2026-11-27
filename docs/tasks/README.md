@@ -16,6 +16,7 @@
 
 | 任务卡 | Type | 交付目标 | 直接前置 |
 |---|---|---|---|
+| [#171](171.md) | Bug | 在请求原件前拒绝图片预览白名单外的后缀 | 无 |
 | [#272](272.md) | Task | 升级并迁移前端至 `@bixlab/mtone@0.13.0` 并全面采用 mtone 组件 | 无 |
 | [#274](274.md) | Bug | 升级 mtone 0.13.1 修复工作区顶栏与侧栏品牌区错位 | [xingjianxu/mtone#68](https://github.com/xingjianxu/mtone/issues/68)（已完成） |
 | [#276](276.md) | Feature | 布置工作区 AdminLayout 顶栏导航和操作 | 无 |
