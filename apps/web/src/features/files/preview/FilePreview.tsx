@@ -10,7 +10,8 @@ export interface FilePreviewProps {
     open: boolean;
     onOpenChange: (open: boolean) => void;
     /** Ordinary original download, deliberately independent of preview byte limits. */
-    onDownload: (file: FileSource) => void | "stale" | Promise<void | "stale">;
+    onDownload: (file: FileSource) => void | Promise<void>;
+    staleDownload?: boolean;
 }
 type Owner = {
     controller: AbortController;
@@ -42,7 +43,7 @@ export function FilePreview(props: FilePreviewProps) {
         file.name, file.mime, file.size, file.status, file.relative_path]);
     return <OpenPreview key={identity} {...props} file={file}/>;
 }
-function OpenPreview({ api, file, onOpenChange, onDownload }: FilePreviewProps & {
+function OpenPreview({ api, file, onOpenChange, onDownload, staleDownload }: FilePreviewProps & {
     file: FileSource;
 }) {
     const [snapshot] = useState(file);
@@ -50,8 +51,7 @@ function OpenPreview({ api, file, onOpenChange, onDownload }: FilePreviewProps &
     const [closed, setClosed] = useState(false);
     const [unauthorized, setUnauthorized] = useState(false);
     const [downloading, setDownloading] = useState(false);
-    const [downloadError, setDownloadError] = useState<"failed" | "stale" | null>(null);
-    const staleDownload = downloadError === "stale";
+    const [downloadFailed, setDownloadFailed] = useState(false);
     const lifetime = useRef<Owner | null>(null);
     const officeLifetime = useRef<(() => void) | null>(null);
     const office = isOfficeFile(snapshot);
@@ -133,11 +133,9 @@ function OpenPreview({ api, file, onOpenChange, onDownload }: FilePreviewProps &
         if (!owner || owner.disposed || downloading || staleDownload)
             return;
         setDownloading(true);
-        setDownloadError(null);
+        setDownloadFailed(false);
         try {
-            const result = await onDownload(file);
-            if (!owner.disposed && result === "stale")
-                setDownloadError("stale");
+            await onDownload(file);
         }
         catch (error) {
             if (owner.disposed)
@@ -148,7 +146,7 @@ function OpenPreview({ api, file, onOpenChange, onDownload }: FilePreviewProps &
                 setUnauthorized(true);
             }
             else
-                setDownloadError("failed");
+                setDownloadFailed(true);
         }
         finally {
             if (!owner.disposed)
@@ -175,7 +173,7 @@ function OpenPreview({ api, file, onOpenChange, onDownload }: FilePreviewProps &
         {current.kind === "pdf" && <><p>由浏览器 PDF 查看器显示；如无法显示，请下载原文件。</p><iframe title={`PDF 预览：${file.name}`} src={current.url} className="h-[max(3rem,min(60dvh,calc(100dvh-11rem)))] w-full"/></>}
       </>}
       {staleDownload && <Alert tone="warning">文件版本已变化，请关闭并重新打开预览后再下载。</Alert>}
-      {downloadError === "failed" && <Alert tone="error">下载失败，请重试。</Alert>}
+      {downloadFailed && <Alert tone="error">下载失败，请重试。</Alert>}
     </div>
   </Dialog>;
 }

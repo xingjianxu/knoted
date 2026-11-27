@@ -27,7 +27,7 @@ function FileEditor({ bundle, source, onSelectFile }: {
     const [relinkOpen, setRelinkOpen] = useState(false);
     const [targetId, setTargetId] = useState(""), [target, setTarget] = useState<FileSource>();
     const [tagPage, setTagPage] = useState<string | null>(null), [tagNames, setTagNames] = useState<Record<string, string>>({});
-    const [preview, setPreview] = useState<FileSource | null>(null);
+    const [preview, setPreview] = useState<{ file: FileSource; stale: boolean } | null>(null);
     const previewEntry = useRef<HTMLButtonElement | null>(null);
     const lifetime = useRef<AbortController | null>(null);
     useEffect(() => { const owner = new AbortController(); lifetime.current = owner; return () => { owner.abort(); }; }, []);
@@ -146,8 +146,10 @@ function FileEditor({ bundle, source, onSelectFile }: {
                 throw new Error("下载响应无效");
             if (response.headers.get("etag") !== `"${selected.version}"`) {
                 setNotice("文件版本已变化，请刷新后重试下载。");
+                if (reportToPreview)
+                    setPreview(open => open?.file === selected ? { ...open, stale: true } : open);
                 await bundle.queryClient.invalidateQueries({ queryKey: queryKeys.files.detail(selected.id) });
-                return "stale" as const;
+                return;
             }
             const url = URL.createObjectURL(data);
             try {
@@ -252,14 +254,14 @@ function FileEditor({ bundle, source, onSelectFile }: {
           <div className="flex flex-wrap gap-2">
             <Button variant="solid" ref={previewEntry} disabled={busy || readOnly} onClick={event => {
               event.currentTarget.focus();
-              setPreview(source);
+              setPreview({ file: source, stale: false });
             }}>预览文件</Button>
             <Button disabled={busy || readOnly} onClick={() => void download(source)}>下载原文件</Button>
           </div>
         </div>
         <Paragraph muted className="wrap-anywhere">{source.relative_path}</Paragraph>
       </header>
- <FilePreview api={bundle.api} file={preview} open={preview !== null} onDownload={selected => download(selected, true)} onOpenChange={open => {
+ <FilePreview api={bundle.api} file={preview?.file ?? null} staleDownload={preview?.stale} open={preview !== null} onDownload={selected => download(selected, true)} onOpenChange={open => {
         if (open) return;
         setPreview(null);
         const owner = lifetime.current;

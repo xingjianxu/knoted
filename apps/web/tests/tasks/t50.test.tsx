@@ -194,7 +194,7 @@ it.each([
 const fileA = "00000000-0000-4000-8000-000000000050";
 const fileB = "00000000-0000-4000-8000-000000000051";
 const jsonResponse = (value: unknown, status = 200) => new Response(JSON.stringify(value), {status, headers:{"content-type":"application/json"}});
-function detailHarness(file = source("预览原件.txt", {id:fileA, note:"saved note", tag_ids:[fileB]}), content: () => Response | Promise<Response> = () => response(enc.encode("actual source text")), detail = () => file) {
+function detailHarness(file = source("预览原件.txt", {id:fileA, note:"saved note", tag_ids:[fileB]}), content: () => Response | Promise<Response> = () => response(enc.encode("actual source text")), detail: () => FileSource | Promise<FileSource> = () => file) {
     const requests: Request[] = [];
     const bundle: QueryClientBundle = {
         queryClient: new QueryClient({defaultOptions:{queries:{retry:false,staleTime:Infinity}}}),
@@ -202,7 +202,7 @@ function detailHarness(file = source("预览原件.txt", {id:fileA, note:"saved 
             const request = input as Request; requests.push(request);
             if (request.url.endsWith("/content")) return content();
             if (new URL(request.url).pathname.endsWith("/tags")) return jsonResponse({items:[],next_cursor:null});
-            return jsonResponse(request.url.endsWith(fileB) ? source("second.txt",{id:fileB}) : detail());
+            return jsonResponse(request.url.endsWith(fileB) ? source("second.txt",{id:fileB}) : await detail());
         }}),
     };
     const view=(id=file.id)=><UiProvider><QueryClientProvider client={bundle.queryClient}><FileDetail bundle={bundle} fileId={id} onSelectFile={()=>{}}/></QueryClientProvider></UiProvider>;
@@ -280,10 +280,11 @@ it("B a failed ordinary download is visible inside the preview",async()=>{
 it("asks the user to reopen a stale preview before downloading the new version", async () => {
     const original = source("原件.txt", { id: fileA });
     let current = original;
+    const refreshed = deferred<FileSource>();
     const download = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     const h = detailHarness(original,
         () => response(enc.encode(`version ${current.version}`), { etag: `"${current.version}"` }),
-        () => current);
+        () => current === original ? original : refreshed.promise);
     const { dialog } = await openDetailPreview();
     expect(await within(dialog).findByLabelText("文件文本")).toHaveTextContent("version 7");
     current = { ...original, name: "新版.txt", version: 8 };
@@ -297,6 +298,8 @@ it("asks the user to reopen a stale preview before downloading the new version",
     expect(within(dialog).getByLabelText("文件文本")).toHaveTextContent("version 7");
 
     fireEvent.click(within(dialog).getByRole("button", { name: "关闭预览" }));
+    expect(screen.getByRole("button", { name: "预览文件" })).toBeDisabled();
+    await act(async () => refreshed.resolve(current));
     const { dialog: reopened } = await openDetailPreview();
     expect(reopened).toHaveAccessibleName("文件预览：新版.txt");
     expect(await within(reopened).findByLabelText("文件文本")).toHaveTextContent("version 8");
