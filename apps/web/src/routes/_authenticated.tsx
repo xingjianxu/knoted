@@ -32,7 +32,7 @@ import { NotesNavigationBlocked } from "../features/notes/navigation";
 import { AuthGate, authError } from "../features/auth/auth";
 
 export const Route = createFileRoute("/_authenticated")({
-  beforeLoad: ({ context, location }) => AuthGate(context, location.href),
+  beforeLoad: ({ context, location, abortController }) => AuthGate(context, location.href, abortController.signal),
   component: Shell,
 });
 

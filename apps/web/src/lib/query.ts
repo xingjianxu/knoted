@@ -67,6 +67,8 @@ const NO_RETRY_STATUSES = new Set([401, 403, 404, 422]);
 export interface QueryClientBundle {
   queryClient: QueryClient;
   api: ApiClient;
+  /** The API client's 401 handler already evicts queries present at headers. */
+  evictsQueriesOnUnauthorized?: true;
 }
 
 /**
@@ -97,8 +99,8 @@ export function createQueryClient(options?: { onUnauthorized?: () => void }): Qu
     baseUrl: "/api/v1",
     onUnauthorized: () => {
       // clear() cancels in-flight queries, which would turn the triggering 401
-      // into CancelledError. Snapshot the keys that exist now and remove just
-      // those on the next task, after the rejection has settled. Entries cached
+      // into CancelledError. Snapshot the keys when headers arrive, then remove
+      // those on the next task to let ready errors propagate. Entries cached
       // after the 401 (including a new login's session) survive; this is not a
       // paint-time guarantee because background tabs clamp timers.
       const unauthorizedHashes = new Set(
@@ -113,5 +115,5 @@ export function createQueryClient(options?: { onUnauthorized?: () => void }): Qu
     },
   });
 
-  return { queryClient, api };
+  return { queryClient, api, evictsQueriesOnUnauthorized: true };
 }

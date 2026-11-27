@@ -1,9 +1,10 @@
 import { File as NodeFile } from "node:buffer";
 import { openWorkspaceLogout } from "../fixtures/workspace-header";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient } from "@tanstack/react-query";
 import { createBrowserHistory, createMemoryHistory } from "@tanstack/react-router";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import type { components } from "@knoted/api-client";
+import { createApiClient, type components } from "@knoted/api-client";
 import App from "../../src/App";
 import { createAppRouter, safeReturnTo } from "../../src/lib/router";
 import { queryKeys } from "../../src/lib/query";
@@ -138,6 +139,60 @@ it("t31_registered_routes_and_url_safety protects the real notes destination", a
   const { router } = await mount();
   await screen.findByRole("button", { name: "使用 Passkey 登录" }); expect(router.state.location.pathname).toBe("/login");
   expect(router.state.location.search).toEqual({ redirect: `/notes/${id(1)}` });
+});
+it("evicts the cache at session 401 headers while retaining queries cached during body parsing", async () => {
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  let started!: () => void;
+  const reading = new Promise<void>(resolve => { started = resolve; });
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) { stream = controller; },
+    pull() { started(); },
+  }, { highWaterMark: 0 });
+  const unauthorized = new Response(body, { status: 401, headers: { "Content-Type": "application/json" } });
+  intercept = (_r, url) => url.pathname.endsWith("/auth/session") ? unauthorized : undefined;
+
+  const router = createAppRouter({ history: createMemoryHistory({ initialEntries: ["/notes"] }) });
+  const queryClient = router.options.context!.queryClient;
+  const before = queryKeys.notes.detail("before-401");
+  const after = queryKeys.notes.detail("after-401");
+  queryClient.setQueryData(before, "old cache");
+  render(<UiProvider><App router={router}/></UiProvider>);
+
+  try {
+    await reading;
+    queryClient.setQueryData(after, "new cache");
+    await waitFor(() => expect(queryClient.getQueryData(before)).toBeUndefined());
+    expect(queryClient.getQueryData(after)).toBe("new cache");
+  } finally {
+    await act(async () => {
+      stream.enqueue(new TextEncoder().encode(JSON.stringify({ code: "unauthenticated", message: "no session", request_id: id(500) })));
+      stream.close();
+    });
+  }
+  expect(await screen.findByRole("button", { name: "使用 Passkey 登录" })).toBeInTheDocument();
+  expect(router.state.location.search).toEqual({ redirect: "/notes" });
+  expect(queryClient.getQueryData(after)).toBe("new cache");
+});
+it("clears an injected client's private cache when the route session returns 401", async () => {
+  intercept = (_r, url) => url.pathname.endsWith("/auth/session") ? failure(401) : undefined;
+  const queryClient = new QueryClient();
+  const api = createApiClient({ baseUrl: "/api/v1" });
+  const router = createAppRouter({
+    history: createMemoryHistory({ initialEntries: ["/notes"] }),
+    bundle: { queryClient, api },
+  });
+  const sessionKey = queryKeys.auth.session();
+  const noteKey = queryKeys.notes.detail(id(1));
+  queryClient.setQueryData(sessionKey, { session: { id: id(100) } });
+  queryClient.setQueryData(noteKey, note(1));
+  queryClient.getMutationCache().build(queryClient, { mutationKey: ["private-note"] });
+  render(<UiProvider><App router={router}/></UiProvider>);
+
+  expect(await screen.findByRole("button", { name: "使用 Passkey 登录" })).toBeInTheDocument();
+  expect(router.state.location.search).toEqual({ redirect: "/notes" });
+  expect(queryClient.getQueryData(sessionKey)).toBeUndefined();
+  expect(queryClient.getQueryData(noteKey)).toBeUndefined();
+  expect(queryClient.getMutationCache().getAll()).toEqual([]);
 });
 it("t31_navigation_barrier_and_draft_failures keeps route/editor selected until mounted save and history finish", async () => {
   const pending = deferred(); intercept = (r) => r.method === "PATCH" ? pending.promise : undefined;

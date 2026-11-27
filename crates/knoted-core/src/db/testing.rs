@@ -13,6 +13,7 @@
 use std::cell::Cell;
 use std::fmt;
 use std::str::FromStr;
+use std::time::Duration;
 
 use sqlx::postgres::{PgConnectOptions, PgConnection, PgPoolOptions};
 use sqlx::{Connection, PgPool};
@@ -85,7 +86,7 @@ impl TestDb {
                     Ok(())
                 })
             })
-            .connect(url)
+            .connect_with(options.application_name(&schema))
             .await?;
 
         migrate(&pool).await?;
@@ -110,7 +111,7 @@ impl TestDb {
     /// an error; dropping a second time is a no-op.
     pub async fn drop(self) {
         self.pool.close().await;
-        let _ = drop_schema(&self.base_url, &self.schema).await;
+        let _ = drop_schema(&self.base_url, &self.schema, false).await;
         // Marked only after the cleanup attempt: if this future is cancelled
         // mid-await, `Drop` still runs and retries (DROP ... IF EXISTS is safe).
         self.cleaned.set(true);
@@ -133,6 +134,9 @@ impl Drop for TestDb {
         // `TestDb::drop` was never awaited (the test panicked or called
         // `std::mem::drop`, for example). Clean up from a dedicated runtime so
         // a finished test cannot leak its schema.
+        // close() immediately stops further acquisitions, including via clones.
+        // Its drain future needs the caller's runtime, which may be unwinding.
+        std::mem::drop(self.pool.close());
         cleanup_schema_blocking(&self.base_url, &self.schema);
     }
 }
@@ -181,8 +185,28 @@ async fn create_schema(base_url: &str, schema: &str) -> Result<(), sqlx::Error> 
     Ok(())
 }
 
-async fn drop_schema(base_url: &str, schema: &str) -> Result<(), sqlx::Error> {
+async fn drop_schema(
+    base_url: &str,
+    schema: &str,
+    disconnect_pool: bool,
+) -> Result<(), sqlx::Error> {
     let mut connection = PgConnection::connect(base_url).await?;
+    if disconnect_pool {
+        // Bound the server-side lock wait even if the client deadline expires.
+        sqlx::query("SET lock_timeout = '5s'")
+            .execute(&mut connection)
+            .await?;
+        // Dropped SQLx transactions can still hold locks while their original
+        // runtime is blocked in Drop. End only this fixture's pool sessions.
+        sqlx::query(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+             WHERE datname=current_database() AND usename=session_user
+               AND application_name=$1 AND pid<>pg_backend_pid()",
+        )
+        .bind(schema)
+        .execute(&mut connection)
+        .await?;
+    }
     sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
         .execute(&mut connection)
         .await?;
@@ -202,7 +226,16 @@ fn cleanup_schema_blocking(base_url: &str, schema: &str) {
             .enable_all()
             .build()
         {
-            let _ = runtime.block_on(drop_schema(&base_url, &schema));
+            runtime.block_on(async {
+                let _ = tokio::time::timeout(
+                    Duration::from_secs(10),
+                    drop_schema(&base_url, &schema, true),
+                )
+                .await;
+            });
+            // Hostname resolution may still occupy a Tokio blocking worker.
+            // Dropping the runtime normally would wait for it indefinitely.
+            runtime.shutdown_timeout(Duration::from_millis(100));
         }
     })
     .join();
