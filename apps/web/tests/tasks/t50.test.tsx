@@ -84,6 +84,18 @@ it("t50_3 switch A→B→A cannot publish old A or overwrite current success", a
 it("revokes each loaded image URL on switch, close and unmount", async () => { const h = harness(async () => response(fixture("chinese.png")), source("a.png")); const first = (await screen.findByRole("img")).getAttribute("src"); expect(live.size).toBe(1); h.change({ file: source("b.png", { id: "b" }) }); await waitFor(() => expect(screen.getByRole("img").getAttribute("src")).not.toBe(first)); expect(live.size).toBe(1); expect(URL.revokeObjectURL).toHaveBeenCalledWith(first); h.change({ open: false }); expect(live.size).toBe(0); h.change({ open: true }); await screen.findByRole("img"); h.unmount(); expect(live.size).toBe(0); });
 it("StrictMode discarded generation never publishes or leaks", async () => { const api = createApiClient({ baseUrl: "http://localhost/api/v1", fetch: async () => response(fixture("chinese.png")) }); const h = render(<StrictMode><UiProvider><FilePreview api={api} file={source("a.png")} open onOpenChange={() => { }} onDownload={() => { }}/></UiProvider></StrictMode>); await screen.findByRole("img"); expect(live.size).toBe(1); h.unmount(); expect(live.size).toBe(0); });
 it("rejects oversized images before any object URL or img src and preserves download", async () => { const h = harness(async () => response(png(40000001, 1)), source("a.png")); await screen.findByText(/40,000,000/); expect(URL.createObjectURL).not.toHaveBeenCalled(); expect(screen.queryByRole("img")).toBeNull(); fireEvent.click(screen.getByRole("button", { name: "下载原文件" })); expect(h.props.onDownload).toHaveBeenCalledWith(h.props.file); });
+it.each([
+    ["a.constructor", null],
+    ["a.__proto__", "application/octet-stream"],
+])("rejects unsupported inherited image extensions before requesting content (%s)", async (name, mime) => {
+    const fetch = vi.fn(async () => response(fixture("chinese.png")));
+    harness(fetch, source(name, { mime }));
+    await act(async () => {});
+    expect(fetch).not.toHaveBeenCalled();
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(screen.getByText("此格式暂不支持预览，请下载原文件。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "下载原文件" })).toBeEnabled();
+});
 it("metadata ETag mismatch asks refresh without claiming content changed", async () => { harness(async () => response(enc.encode("secret"), { etag: '"8"' })); await screen.findByText(/元数据版本/); expect(screen.queryByLabelText("文件文本")).toBeNull(); expect(screen.queryByText(/正文.*变化/)).toBeNull(); });
 it("401 uses existing client handling and clears the dialog", async () => { const h = harness(async () => new Response(JSON.stringify({ code: "unauthorized", message: "unauthorized", request_id: "x" }), { status: 401, headers: { "content-type": "application/json" } })); await waitFor(() => expect(h.onUnauthorized).toHaveBeenCalledOnce()); await waitFor(() => expect(h.props.onOpenChange).toHaveBeenCalledWith(false)); expect(screen.queryByLabelText("文件文本")).toBeNull(); expect(live.size).toBe(0); });
 it("DTO oversize skips preview fetching but ordinary download remains usable", async () => { const fetch = vi.fn(async () => response(enc.encode("unused"))); const h = harness(fetch, source("a.txt", { size: 52428801 })); await screen.findByText(/50 MiB/); expect(fetch).not.toHaveBeenCalled(); fireEvent.click(screen.getByRole("button", { name: "下载原文件" })); expect(h.props.onDownload).toHaveBeenCalledOnce(); });
@@ -194,7 +206,7 @@ it.each([
 const fileA = "00000000-0000-4000-8000-000000000050";
 const fileB = "00000000-0000-4000-8000-000000000051";
 const jsonResponse = (value: unknown, status = 200) => new Response(JSON.stringify(value), {status, headers:{"content-type":"application/json"}});
-function detailHarness(file = source("预览原件.txt", {id:fileA, note:"saved note", tag_ids:[fileB]}), content: () => Response | Promise<Response> = () => response(enc.encode("actual source text"))) {
+function detailHarness(file = source("预览原件.txt", {id:fileA, note:"saved note", tag_ids:[fileB]}), content: () => Response | Promise<Response> = () => response(enc.encode("actual source text")), detail: () => FileSource | Promise<FileSource> = () => file) {
     const requests: Request[] = [];
     const bundle: QueryClientBundle = {
         queryClient: new QueryClient({defaultOptions:{queries:{retry:false,staleTime:Infinity}}}),
@@ -202,7 +214,7 @@ function detailHarness(file = source("预览原件.txt", {id:fileA, note:"saved 
             const request = input as Request; requests.push(request);
             if (request.url.endsWith("/content")) return content();
             if (new URL(request.url).pathname.endsWith("/tags")) return jsonResponse({items:[],next_cursor:null});
-            return jsonResponse(request.url.endsWith(fileB) ? source("second.txt",{id:fileB}) : file);
+            return jsonResponse(request.url.endsWith(fileB) ? source("second.txt",{id:fileB}) : await detail());
         }}),
     };
     const view=(id=file.id)=><UiProvider><QueryClientProvider client={bundle.queryClient}><FileDetail bundle={bundle} fileId={id} onSelectFile={()=>{}}/></QueryClientProvider></UiProvider>;
@@ -323,6 +335,37 @@ it("B a failed ordinary download is visible inside the preview",async()=>{
     const {dialog}=await openDetailPreview();await within(dialog).findByLabelText("文件文本");
     fireEvent.click(within(dialog).getByRole("button",{name:"下载原文件"}));
     expect(await within(dialog).findByText("下载失败，请重试。")).toBeInTheDocument();
+});
+
+it("asks the user to reopen a stale preview before downloading the new version", async () => {
+    const original = source("原件.txt", { id: fileA });
+    let current = original;
+    const refreshed = deferred<FileSource>();
+    const download = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const h = detailHarness(original,
+        () => response(enc.encode(`version ${current.version}`), { etag: `"${current.version}"` }),
+        () => current === original ? original : refreshed.promise);
+    const { dialog } = await openDetailPreview();
+    expect(await within(dialog).findByLabelText("文件文本")).toHaveTextContent("version 7");
+    current = { ...original, name: "新版.txt", version: 8 };
+    const staleDownload = within(dialog).getByRole("button", { name: "下载原文件" });
+    fireEvent.click(staleDownload);
+    expect(await within(dialog).findByText("文件版本已变化，请关闭并重新打开预览后再下载。")).toBeInTheDocument();
+    expect(staleDownload).toBeDisabled();
+    expect(download).not.toHaveBeenCalled();
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(h.requests.filter(request => request.url.endsWith(fileA))).toHaveLength(2);
+    expect(within(dialog).getByLabelText("文件文本")).toHaveTextContent("version 7");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "关闭预览" }));
+    expect(screen.getByRole("button", { name: "预览文件" })).toBeDisabled();
+    await act(async () => refreshed.resolve(current));
+    const { dialog: reopened } = await openDetailPreview();
+    expect(reopened).toHaveAccessibleName("文件预览：新版.txt");
+    expect(await within(reopened).findByLabelText("文件文本")).toHaveTextContent("version 8");
+    fireEvent.click(within(reopened).getByRole("button", { name: "下载原文件" }));
+    await waitFor(() => expect(download).toHaveBeenCalledOnce());
+    expect(URL.createObjectURL).toHaveBeenCalledOnce();
 });
 
 it.each(["preview401","loaded-detail401"] as const)("B default router %s removes preview resources, draft and file cache",async(mode)=>{

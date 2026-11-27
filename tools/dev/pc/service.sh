@@ -217,6 +217,8 @@ command_prepare() {
   revision=$(verify_runtime)
   log "固定产物 revision=$revision"
   require_tools
+  source "$script_dir/runtime-env.sh"
+  load_deploy_env "$instance_root/deploy.env"
   local office search
   office=$(office_config_block)
   search=$(search_config_block)
