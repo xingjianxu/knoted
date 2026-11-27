@@ -86,7 +86,7 @@ intelligence 与 Worker 的固定产物编排及 SIGTERM 关闭已接入；本�
   机器码/白名单不符。最小更新后4项兼容定向全部通过；完整轮次早于后续取消竞态
   修复，不冒称它覆盖最终字节。新竞态定向RED→GREEN，父独立完整pytest待完成。
 - 最终 ruff check/format、pc36项、API check/verify、shell语法均exit0。
-- 私有停机CLI、state/receipt与冷备规则见 [intelligence README](../../../../services/intelligence/README.md)。
+- 私有停机CLI、state/receipt与冷备规则见 [intelligence README](https://github.com/xingjianxu/knoted/blob/3624a3e8346d4c74b5141a114c676c46479c4717/services/intelligence/README.md)。
   无证明/缺库/legacy/损坏均非0；不执行恢复或写原库，不以PID消失代替凭证。
 
 固定 Python 产物已从 b27c388 真实构建，移除全部文件/目录写权限后，在原位置和整体
