@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Usage: bash tests/fixtures/t71/instance.sh pnpm exec playwright test tests/e2e/t71.spec.ts
-# Requires a fixed T71_ARTIFACT, T71_PGVECTOR, KNOTED_INTELLIGENCE_BGE_M3_DIR, and
-# the release's KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR. Optional T71_MEILI_BIN,
-# T71_PG_BIN and T71_CHROMIUM select installed binaries; pgvector requires PostgreSQL 18.
-# The normal Playwright webServer also reserves 4177 for its component test fixture.
+# Requires a fixed T71_ARTIFACT. Optional T71_MEILI_BIN, T71_PG_BIN and
+# T71_CHROMIUM select installed binaries.
 set -euo pipefail
 umask 077
-artifact=${T71_ARTIFACT:?set T71_ARTIFACT to the absolute path of a fixed release}
+export T71_ARTIFACT
+T71_ARTIFACT=$(realpath -e -- "${T71_ARTIFACT:?set T71_ARTIFACT to a fixed release}")
+artifact=$T71_ARTIFACT
 pg=${T71_PG_BIN:-$(pg_config --bindir)}
-vector=${T71_PGVECTOR:?set T71_PGVECTOR to the installed pgvector prefix}
 meili=$(command -v "${T71_MEILI_BIN:-meilisearch}")
 meili=$(realpath -e -- "$meili")
-fixtures=$(cd "$(dirname "$0")" && pwd)
+repo=$(cd "$(dirname "$0")/../../.." && pwd)
+KNOTED_RUNTIME_ROOT="$artifact" bash "$repo/tools/dev/pc/service.sh" verify-artifact >/dev/null
 task=/data/knoted_dev/t71
 mkdir -p "$task"
 exec {lock_fd}>"$task/.instance.lock"
@@ -37,7 +37,7 @@ cleanup() {
   fi
   for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null || true; done
   for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null || true; done
-  rm -f "$run"/{model.key,meili.key,credentials.toml,tls.key}
+  rm -f "$run"/{meili.key,credentials.toml,tls.key}
   if test -s "$run/pg/postmaster.pid"; then
     if ! "$pg/pg_ctl" -D "$run/pg" -m fast -w stop >/dev/null; then
       printf 'Cannot stop isolated PostgreSQL in %s\n' "$run" >&2
@@ -53,7 +53,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-mkdir "$run"/{socket,files,staging,assets,python,cache,tmp}
+mkdir "$run"/{socket,files,staging,assets,tmp}
 export TMPDIR="$run/tmp"
 sample_dir="$run/files/agent-fixtures/t71"
 mkdir -p "$sample_dir"
@@ -65,8 +65,6 @@ cat >> "$run/pg/postgresql.conf" <<CONF
 listen_addresses = ''
 port = 17828
 unix_socket_directories = '$run/socket'
-extension_control_path = '$vector/share/postgresql:\$system'
-dynamic_library_path = '$vector/lib:\$libdir'
 CONF
 "$pg/pg_ctl" -D "$run/pg" -l "$run/postgres.log" -w start >/dev/null
 export PGHOST="$run/socket" PGPORT=17828 PGDATABASE=t71
@@ -76,7 +74,6 @@ DATABASE_URL="$db" sqlx migrate run --source "$artifact/share/knoted/migrations"
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -noenc -days 1 -subj '/CN=t71.knoted.test' \
   -addext 'subjectAltName=DNS:t71.knoted.test' -out "$run/tls.crt" -keyout "$run/tls.key" >/dev/null 2>&1
 openssl rand -hex 32 > "$run/meili.key"
-openssl rand -hex 32 > "$run/model.key"
 printf '[secrets]\nmeilisearch = "%s"\n' "$(cat "$run/meili.key")" > "$run/credentials.toml"
 cat > "$run/app.toml" <<CONFIG
 [server]
@@ -99,39 +96,16 @@ credential_file = "$run/credentials.toml"
 enabled = true
 base_url = "http://127.0.0.1:17823"
 index_uid = "t71_documents"
-rag_chunk_index_uid = "t71_chunks"
 api_key_credential = "meilisearch"
-[intelligence]
-base_url = "http://127.0.0.1:17827"
-[vectors]
-enabled = true
-[chat.local]
-base_url = "http://127.0.0.1:17825"
-model = "t71-fixture"
-credential_file = "$run/model.key"
 CONFIG
 (
   cd "$run"
   exec env -i PATH="$PATH" HOME="$run" TMPDIR="$TMPDIR" MEILI_MASTER_KEY="$(cat "$run/meili.key")" \
-    "$meili" --http-addr 127.0.0.1:17824 --db-path "$run/meili" --env production --no-analytics
+    "$meili" --http-addr 127.0.0.1:17823 --db-path "$run/meili" --env production --no-analytics
 ) > "$run/meili.log" 2>&1 &
 pids+=("$!")
-node "$fixtures/search-gate.mjs" > "$run/gate.log" 2>&1 &
-pids+=("$!")
-node "$fixtures/embedding-gate.mjs" > "$run/embedding-gate.log" 2>&1 &
-pids+=("$!")
-python3 -B "$fixtures/provider.py" "$run/model.key" 17825 > "$run/provider.log" 2>&1 &
-pids+=("$!")
-export KNOTED_INTELLIGENCE_BGE_M3_DIR=${KNOTED_INTELLIGENCE_BGE_M3_DIR:?set the fixed BGE-M3 model directory}
-env KNOTED_INTELLIGENCE_HOST=127.0.0.1 KNOTED_INTELLIGENCE_PORT=17826 \
-  KNOTED_INTELLIGENCE_STATE_DIR="$run/python" KNOTED_INTELLIGENCE_STAGING_DIR="$run/staging" \
-  XDG_CACHE_HOME="$run/cache" TMPDIR="$run/tmp" KNOTED_INTELLIGENCE_DOCLING_DEVICE=cpu \
-  KNOTED_INTELLIGENCE_GPU_SLOTS=1 KNOTED_EMBED_GPU_UUID= CUDA_VISIBLE_DEVICES= \
-  "$artifact/bin/knoted-intelligence" > "$run/python.log" 2>&1 &
-pids+=("$!")
-for url in http://127.0.0.1:17826/internal/v1/health http://127.0.0.1:17827/internal/v1/health http://127.0.0.1:17823/health; do
-  curl -fsS --retry 30 --retry-connrefused --retry-delay 1 --max-time 3 "$url" >/dev/null
-done
+curl --noproxy '*' -fsS --retry 30 --retry-connrefused --retry-delay 1 --max-time 3 \
+  http://127.0.0.1:17823/health >/dev/null
 "$artifact/bin/knoted-api" --config "$run/app.toml" > "$run/api.log" 2>&1 &
 pids+=("$!")
 "$artifact/bin/knoted-worker" --config "$run/app.toml" > "$run/worker.log" 2>&1 &

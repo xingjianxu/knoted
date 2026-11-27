@@ -1,8 +1,8 @@
 # Knoted 测试实例编排（由 @bixlab/pcwrap 管理，控制端口 15600，见 pcwrap.config.json）。
 #
 # 边界：本编排只管理 Knoted 测试应用（配置渲染、迁移、API、Worker）。
-# 数据库由宿主用户直接创建（ADR 0004），编排只跑 `sqlx migrate`；Strata、共享模型根、
-# 共享 Caddy HTTPS、ACME 证书与运行期工具由 /etc/nixos 提供，不出现在这里，也不随 `pnpm pc down` 停止。
+# 数据库由宿主用户直接创建（ADR 0004），编排只跑 `sqlx migrate`。
+# 共享 Caddy HTTPS、ACME 证书与运行期工具由 /etc/nixos 提供。
 #
 # 运行根是固定提交构建产物（tools/dev/build-artifact.sh 产出，含 REVISION 与 SHA256SUMS），
 # 不在编排里做源码构建或热更新。
@@ -63,25 +63,3 @@ processes:
     depends_on:
       migrate:
         condition: process_completed_successfully
-      knoted-intelligence:
-        condition: process_healthy
-
-  knoted-intelligence:
-    command: "exec bash tools/dev/pc/service.sh intelligence"
-    availability:
-      restart: "on_failure"
-      backoff_seconds: 3
-      max_restarts: 5
-    depends_on:
-      prepare:
-        condition: process_completed_successfully
-    shutdown:
-      signal: 15
-      timeout_seconds: 30
-    readiness_probe:
-      exec:
-        command: "bash tools/dev/pc/service.sh probe-intelligence"
-      initial_delay_seconds: 1
-      period_seconds: 2
-      timeout_seconds: 3
-      failure_threshold: 60
