@@ -76,7 +76,7 @@ function releaseRepository() {
   rmSync(join(root, "services"), { recursive: true });
   for (const relative of [
     "tools/dev/build-artifact.sh", "tools/dev/deploy-dev.sh",
-    "tools/dev/pc/service.sh", "tools/dev/artifact-generation", "process-compose.yaml",
+    "tools/dev/pc/service.sh", "tools/dev/pc/runtime-env.sh", "tools/dev/artifact-generation", "process-compose.yaml",
   ]) {
     mkdirSync(resolve(join(root, relative), ".."), { recursive: true });
     cpSync(join(worktree, relative), join(root, relative));
@@ -753,6 +753,20 @@ printf '%s\\n' "$STUB_MOUNT"
     const quarantined = readdirSync(context.runtimeParentDir).filter((name) => name.includes(".incomplete."));
     assert.deepEqual(quarantined, []);
     assert.equal(currentTarget(context), target);
+  });
+
+  it("deploy.env 的语法错误在构建和切换前报告", () => {
+    const context = fixture({ withTargetArtifact: false });
+    const file = join(context.instanceRoot, "deploy.env");
+    writeFileSync(file, "invalid test line\n");
+
+    const result = deploy(context);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /deploy\.env:1/);
+    assert.doesNotMatch(result.stderr, /invalid test line/);
+    assert.deepEqual(pcArgs(context.logFile), []);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
+    assert.equal(readFileSync(file, "utf8"), "invalid test line\n");
   });
 
   it("调用者环境变量覆盖 deploy.env 并回写文件", () => {
