@@ -44,13 +44,6 @@ async fn fixture() -> (TestDb, AppContext, tempfile::TempDir, Uuid) {
 #[tokio::test]
 async fn t49_content_current_bytes_metadata_and_missing() {
     let (db, ctx, _dir, id) = fixture().await;
-    sqlx::query("INSERT INTO file_extractions(source_id,content_version,input_sha256,parser_revision,options_hash,job_id,blocks) SELECT id,content_version,sha256,'test',repeat('b',64),(SELECT id FROM jobs LIMIT 1),'[{\"text\":\"original\"}]'::jsonb FROM file_sources WHERE id=$1").bind(id).execute(ctx.pool()).await.unwrap();
-    let before: serde_json::Value =
-        sqlx::query_scalar("SELECT to_jsonb(e) FROM file_extractions e WHERE source_id=$1")
-            .bind(id)
-            .fetch_one(ctx.pool())
-            .await
-            .unwrap();
     let content = download::read_content(&ctx, ReadContent { id }).await;
     let update = browse::update_file(
         &ctx,
@@ -80,14 +73,7 @@ async fn t49_content_current_bytes_metadata_and_missing() {
         },
     )
     .await;
-    let after: serde_json::Value =
-        sqlx::query_scalar("SELECT to_jsonb(e) FROM file_extractions e WHERE source_id=$1")
-            .bind(id)
-            .fetch_one(ctx.pool())
-            .await
-            .unwrap();
     db.drop().await;
-    assert_eq!(before, after);
     assert_eq!(content.unwrap().bytes, b"source bytes");
     assert_eq!(update.unwrap().content_version, 7);
     assert_eq!(second.unwrap().version, 12);

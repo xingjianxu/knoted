@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 pub const USAGE: &str = "usage: knoted-api admin backup --output <new-directory> [--config <PATH>]";
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 pub const MANIFEST: &str = "manifest.json";
 pub const DATABASE_DUMP: &str = "database.dump";
 pub const ASSETS: &str = "assets";
@@ -65,6 +65,8 @@ pub enum BackupError {
     Database,
     #[error("the PostgreSQL connection settings are unsupported by the backup command")]
     Connection,
+    #[error("the source has no fixed API port")]
+    ApiPort,
     #[error("exclusive maintenance admission unavailable or prior writes unresolved")]
     Maintenance,
     #[error(transparent)]
@@ -106,10 +108,10 @@ pub struct BackupSource {
     pub database: String,
     pub rp_id: String,
     pub origin: String,
+    pub api_port: u16,
     pub asset_root: PathBuf,
     pub staging_root: Option<PathBuf>,
     pub file_root: Option<PathBuf>,
-    pub intelligence_origin: String,
     pub search: BackupSearch,
 }
 
@@ -119,7 +121,6 @@ pub struct BackupSearch {
     pub enabled: bool,
     pub origin: String,
     pub document_index: String,
-    pub chunk_index: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -149,16 +150,21 @@ pub async fn run(
     config: &AppConfig,
 ) -> Result<BackupManifest, BackupError> {
     let database = config.database().ok_or(BackupError::Database)?;
+    let api_port = config
+        .server
+        .as_ref()
+        .and_then(|server| server.bind.parse::<std::net::SocketAddr>().ok())
+        .map(|address| address.port())
+        .filter(|port| *port != 0)
+        .ok_or(BackupError::ApiPort)?;
     let pool = db::connect(database)
         .await
         .map_err(|_| BackupError::Database)?;
     let ctx = AppContext::new(pool)
         .with_asset_root(config.assets.root.clone())
         .with_files(config.files.clone())
-        .with_intelligence(config.intelligence.clone())
         .with_search(config.search.clone())
-        .with_search_api_key(config.search_api_key())
-        .with_vectors_enabled(config.vectors.enabled);
+        .with_search_api_key(config.search_api_key());
     let output = std::path::absolute(&command.output)?;
     let protected: Vec<&Path> = std::iter::once(ctx.asset_root())
         .chain(ctx.files().root.as_deref())
@@ -186,15 +192,14 @@ pub async fn run(
         database: snapshot.database.clone(),
         rp_id: config.auth.rp_id.clone(),
         origin: config.auth.origin.clone(),
+        api_port,
         asset_root: config.assets.root.clone(),
         staging_root: config.files.staging_root.clone(),
         file_root: config.files.root.clone(),
-        intelligence_origin: config.intelligence.base_url.clone(),
         search: BackupSearch {
             enabled: config.search.enabled,
             origin: config.search.base_url.clone(),
             document_index: config.search.index_uid.clone(),
-            chunk_index: config.search.rag_chunk_index_uid.clone(),
         },
     };
     let migrations = snapshot

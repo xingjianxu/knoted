@@ -1,7 +1,6 @@
 {
   "documents": [
-    "openapi.yaml",
-    "intelligence.openapi.yaml"
+    "openapi.yaml"
   ],
   "examples": [
     {
@@ -83,24 +82,6 @@
       "valid": false
     },
     {
-      "document": "intelligence.openapi.yaml",
-      "schema": "ExecutionRequest",
-      "file": "valid/execution-request-parse.json",
-      "valid": true
-    },
-    {
-      "document": "intelligence.openapi.yaml",
-      "schema": "ExecutionRequest",
-      "file": "invalid/execution-request-bad-kind.json",
-      "valid": false
-    },
-    {
-      "document": "intelligence.openapi.yaml",
-      "schema": "ExecutionState",
-      "file": "valid/execution-state-interrupted.json",
-      "valid": true
-    },
-    {
       "document": "openapi.yaml",
       "schema": "DashboardSummary",
       "file": "valid/dashboard-summary.json",
@@ -109,7 +90,7 @@
     {
       "document": "openapi.yaml",
       "schema": "DashboardSummary",
-      "file": "invalid/dashboard-summary-missing-indexing.json",
+      "file": "invalid/dashboard-summary-with-indexing.json",
       "valid": false
     },
     {
@@ -146,36 +127,6 @@
       "document": "openapi.yaml",
       "schema": "FileRelinkRequest",
       "file": "invalid/file-relink-extra-confirm.json",
-      "valid": false
-    },
-    {
-      "document": "intelligence.openapi.yaml",
-      "schema": "ExecutionRecord",
-      "file": "valid/execution-record-exit-confirmed.json",
-      "valid": true
-    },
-    {
-      "document": "intelligence.openapi.yaml",
-      "schema": "ExecutionRecord",
-      "file": "valid/execution-record-exit-unconfirmed.json",
-      "valid": true
-    },
-    {
-      "document": "intelligence.openapi.yaml",
-      "schema": "ExecutionRecord",
-      "file": "valid/execution-record-legacy.json",
-      "valid": true
-    },
-    {
-      "document": "intelligence.openapi.yaml",
-      "schema": "ExecutionRecord",
-      "file": "invalid/execution-record-running-exit-confirmed.json",
-      "valid": false
-    },
-    {
-      "document": "intelligence.openapi.yaml",
-      "schema": "ExecutionRecord",
-      "file": "invalid/execution-record-exit-nonboolean.json",
       "valid": false
     }
   ]

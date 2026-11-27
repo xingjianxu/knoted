@@ -146,45 +146,6 @@ impl Default for AssetsConfig {
     }
 }
 
-/// Internal execution service; no external origin or inline credentials.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields, default)]
-pub struct IntelligenceConfig {
-    pub base_url: String,
-}
-impl Default for IntelligenceConfig {
-    fn default() -> Self {
-        Self {
-            base_url: "http://127.0.0.1:15603".into(),
-        }
-    }
-}
-impl IntelligenceConfig {
-    pub fn validate(&self) -> Result<(), ConfigError> {
-        let valid = url::Url::parse(&self.base_url).ok().is_some_and(|u| {
-            u.scheme() == "http"
-                && u.username().is_empty()
-                && u.password().is_none()
-                && u.path() == "/"
-                && u.query().is_none()
-                && u.fragment().is_none()
-                && match u.host() {
-                    Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-                    Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-                    _ => false,
-                }
-        });
-        if valid {
-            Ok(())
-        } else {
-            Err(ConfigError::Invalid {
-                field: "intelligence.base_url",
-                message: "requires an HTTP loopback origin without credentials or a path".into(),
-            })
-        }
-    }
-}
-
 /// Full-text publication target. Disabled unless configured; an API key is
 /// referenced by credential name, never inlined into the configuration file.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -193,8 +154,6 @@ pub struct SearchConfig {
     pub enabled: bool,
     pub base_url: String,
     pub index_uid: String,
-    /// Independent generation for lexical RAG chunks.
-    pub rag_chunk_index_uid: String,
     /// Credential name in the shared credential file, `None` for an engine that
     /// accepts unauthenticated loopback traffic.
     pub api_key_credential: Option<String>,
@@ -205,7 +164,6 @@ impl Default for SearchConfig {
             enabled: false,
             base_url: "http://127.0.0.1:15605".into(),
             index_uid: "knoted_documents".into(),
-            rag_chunk_index_uid: "knoted_rag_chunks".into(),
             api_key_credential: None,
         }
     }
@@ -224,8 +182,7 @@ impl SearchConfig {
             field: "search",
             message: message.into(),
         };
-        // Same shape as the internal execution service: loopback HTTP only, no
-        // credentials in the URL and no path to append requests to.
+        // The client adds paths to a credential-free loopback origin.
         let valid = url::Url::parse(&self.base_url).ok().is_some_and(|u| {
             u.scheme() == "http"
                 && u.username().is_empty()
@@ -244,26 +201,13 @@ impl SearchConfig {
                 "base_url requires an HTTP loopback IP-literal origin without credentials or a path",
             ));
         }
-        // Both generation UIDs become URL path segments.
-        for uid in [&self.index_uid, &self.rag_chunk_index_uid] {
-            if !Self::valid_index_uid(uid) {
-                return Err(invalid(
-                    "index_uid and rag_chunk_index_uid require 1-400 alphanumeric, `-` or `_` characters",
-                ));
-            }
-        }
-        if self.index_uid == self.rag_chunk_index_uid {
-            return Err(invalid("document and chunk index UIDs must differ"));
+        if !Self::valid_index_uid(&self.index_uid) {
+            return Err(invalid(
+                "index_uid requires 1-400 alphanumeric, `-` or `_` characters",
+            ));
         }
         Ok(())
     }
-}
-
-/// Enables automatic dense vectors for current chunk sets.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields, default)]
-pub struct VectorsConfig {
-    pub enabled: bool,
 }
 
 /// Optional server-side Office preview. Configuration contains a path, never a JWT secret.
@@ -404,10 +348,7 @@ pub struct AppConfig {
     pub auth: AuthConfig,
     pub assets: AssetsConfig,
     pub files: FilesConfig,
-    pub intelligence: IntelligenceConfig,
     pub search: SearchConfig,
-    pub chat: crate::rag::providers::ChatProvidersConfig,
-    pub vectors: VectorsConfig,
     pub office: Option<OfficeConfig>,
     secrets: BTreeMap<String, String>,
 }
@@ -422,10 +363,7 @@ impl fmt::Debug for AppConfig {
             .field("auth", &self.auth)
             .field("assets", &self.assets)
             .field("files", &self.files)
-            .field("intelligence", &self.intelligence)
             .field("search", &self.search)
-            .field("chat", &self.chat)
-            .field("vectors", &self.vectors)
             .field("office_configured", &self.office.is_some())
             .field("loaded_credentials", &self.secrets.len())
             .finish()
@@ -520,12 +458,7 @@ impl AppConfig {
         }
         validate_auth(&file.auth)?;
         file.files.validate()?;
-        file.intelligence.validate()?;
         file.search.validate()?;
-        file.chat.validate().map_err(|_| ConfigError::Invalid {
-            field: "chat",
-            message: "invalid model provider settings".into(),
-        })?;
         if let Some(office) = &file.office {
             office.validate()?;
         }
@@ -570,10 +503,7 @@ impl AppConfig {
             auth: file.auth,
             assets: file.assets,
             files: file.files,
-            intelligence: file.intelligence,
             search: file.search,
-            chat: file.chat,
-            vectors: file.vectors,
             office: file.office,
             secrets,
         })
@@ -625,13 +555,7 @@ struct ConfigFile {
     #[serde(default)]
     files: FilesConfig,
     #[serde(default)]
-    intelligence: IntelligenceConfig,
-    #[serde(default)]
     search: SearchConfig,
-    #[serde(default)]
-    chat: crate::rag::providers::ChatProvidersConfig,
-    #[serde(default)]
-    vectors: VectorsConfig,
     office: Option<OfficeConfig>,
 }
 

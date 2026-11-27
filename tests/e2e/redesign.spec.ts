@@ -17,15 +17,8 @@ const note = { id: id(6), title: "调研手记", document, content_version: 2, f
   parent_id: null, position: 0, deleted_at: null, ...timestamps };
 const file = { id: id(7), name: "调研结果.txt", relative_path: "资料/项目/调研结果.txt", note: "校对后发布。", size: 280,
   mime: "text/plain", tag_ids: [], sha256: "b".repeat(64), version: 1, content_version: 1, status: "present", last_seen_at: now, ...timestamps };
-const chat = { id: id(8), title: "资料问答", provider: "local", version: 1, ...timestamps };
 const current = { id: id(2), user_id: id(3), current: true, created_at: now, last_seen_at: now,
   idle_expires_at: "2026-11-30T00:00:00Z", absolute_expires_at: "2026-12-19T00:00:00Z" };
-const messages = Array.from({ length: 8 }, (_, i) => ({
-  id: id(60 + i), session_id: chat.id, role: i % 2 === 0 ? "user" : "assistant", run_id: id(80 + Math.floor(i / 2)),
-  body: i % 2 === 0 ? `调研材料第 ${i + 1} 条记录了什么？` : `这是第 ${i + 1} 条材料的摘要。资料包括引用、数据和复核信息。`,
-  incomplete: false, created_at: now,
-}));
-const target = messages.at(-1)!;
 const fixtureFileText = "合成文本文件用于核对鉴权预览界面。";
 
 async function fixtures(page: Page, authenticated = true) {
@@ -51,7 +44,7 @@ async function fixtures(page: Page, authenticated = true) {
         tasks_by_status: { todo: 3, in_progress: 4, done: 5, cancelled: 1 },
         recent_notes: [note], recent_tasks: [], due_tasks: [task, {
           ...task, id: id(14), title: "补全引用", due: { ...task.due, date: "2020-11-18" },
-        }], job_failures: 1, indexing_enabled: false,
+        }], job_failures: 1,
       });
       case "/notes": return json(list([note, { ...note, id: id(15), title: "后续问题", parent_id: note.id }]));
       case `/notes/${note.id}`:
@@ -85,16 +78,10 @@ async function fixtures(page: Page, authenticated = true) {
       case `/files/${file.id}/content`: return route.fulfill({
         body: fixtureFileText, contentType: "text/plain; charset=utf-8", headers: { etag: '"1"' },
       });
-      case "/jobs": return json(list([{
-        id: id(12), kind: "file.extract", state: "failed", attempts: 1, max_attempts: 3, error: "unsupported_format",
-        started_at: now, finished_at: now, ...timestamps,
-      }]));
       case "/search": return json(list([{
-        id: target.id, session_id: chat.id, entity_type: "chat", title: "会话中的调研材料",
-        snippet: "调研资料包括引用、数据和复核信息。", path: null, score: null, updated_at: now,
+        id: note.id, entity_type: "note", title: note.title,
+        snippet: "调研记录第 1 段，记录公开材料、复核过程及后续行动。", score: null, updated_at: now,
       }]));
-      case "/chat/sessions": return json(list([chat]));
-      case `/chat/sessions/${chat.id}`: return json({ ...chat, messages });
       case "/trash": {
         if (failTrashRefresh) {
           return route.fulfill({ status: 503, json: { code: "dependency_unavailable", message: "刷新暂时失败" } });
@@ -145,10 +132,7 @@ const routeSamples: RouteSample[] = [
   { name: "task", path: `/tasks/${task.id}`, ready: heading(/^校对调研报告/), section: "事项" },
   { name: "files", path: "/files", ready: heading("文件"), section: "文件" },
   { name: "file", path: `/files/${file.id}`, ready: heading(file.name), section: "文件" },
-  { name: "jobs", path: "/files/jobs", ready: heading("索引任务"), section: "文件" },
-  { name: "search", path: "/search?q=调研", ready: page => page.getByRole("link", { name: "会话中的调研材料" }), section: "搜索" },
-  { name: "chat", path: "/chat", ready: page => page.getByRole("link", { name: chat.title }), section: "问答" },
-  { name: "thread", path: `/chat/${chat.id}`, ready: heading(chat.title), section: "问答" },
+  { name: "search", path: "/search?q=调研", ready: page => page.getByRole("link", { name: note.title }), section: "搜索" },
   { name: "trash", path: "/trash", ready: heading("回收站"), section: "回收站" },
   { name: "security", path: "/settings/security", ready: heading("凭据与会话"), section: "凭据与会话" },
   { name: "404", path: "/missing-route", ready: heading("页面不存在") },
@@ -190,6 +174,8 @@ test("窄屏文件列表打开详情，预览源码并关闭回焦，再返回�
   await fixtures(page);
   await page.goto("http://127.0.0.1:4178/files");
   const fileRow = page.getByRole("button", { name: `打开文件 ${file.name}` });
+  await expect(fileRow).toBeVisible();
+  await expect(page.getByRole("link", { name: "索引任务" })).toHaveCount(0);
   await fileRow.click();
   await expect(page.getByRole("heading", { name: file.name, level: 1 })).toBeInViewport();
   const preview = page.getByRole("button", { name: "预览文件" });

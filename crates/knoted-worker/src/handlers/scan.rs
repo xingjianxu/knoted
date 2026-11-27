@@ -9,7 +9,6 @@ use knoted_core::{
         scanner::{self, ObserveRoot, ScanRules},
     },
     jobs::{self, ExecutionOutcome, Lease},
-    rag::chat,
 };
 use std::{
     sync::Arc,
@@ -66,47 +65,12 @@ impl Handler for Dispatcher {
                     },
                 }
             }
-            knoted_core::files::extraction::EXTRACT_JOB_KIND => {
-                super::extract::execute(&self.ctx, lease, &job).await
-            }
-            chat::GENERATE_JOB_KIND => chat::execute_generation(&self.ctx, lease, &job).await,
-            super::vector::KIND => super::vector::execute(&self.ctx, lease, &job).await,
-            super::chunk_fulltext::BUILD_JOB_KIND | super::chunk_fulltext::PUBLISH_JOB_KIND => {
-                super::chunk_fulltext::execute(&self.ctx, lease, &job).await
-            }
             super::fulltext::PUBLISH_JOB_KIND | super::fulltext::CLEANUP_JOB_KIND => {
                 super::fulltext::execute(&self.ctx, lease, &job).await
             }
             _ => ExecutionOutcome::PermanentFailure {
                 message: "unsupported job kind".into(),
             },
-        }
-    }
-    async fn cancel_and_wait<'a>(&'a self, lease: &'a Lease) -> bool {
-        // Extraction, embeddings, and generation require upstream stop
-        // confirmation. A failed kind lookup cannot prove that work stopped.
-        match sqlx::query_scalar::<_, String>("SELECT kind FROM jobs WHERE id=$1")
-            .bind(lease.job_id)
-            .fetch_optional(self.ctx.pool())
-            .await
-        {
-            Ok(Some(kind)) if kind == knoted_core::files::extraction::EXTRACT_JOB_KIND => {
-                super::extract::cancel_and_wait(&self.ctx, lease).await
-            }
-            Ok(Some(kind))
-                if kind == super::fulltext::PUBLISH_JOB_KIND
-                    || kind == super::fulltext::CLEANUP_JOB_KIND =>
-            {
-                super::fulltext::cancel_and_wait(&self.ctx, lease).await
-            }
-            Ok(Some(kind)) if kind == chat::GENERATE_JOB_KIND => {
-                chat::cancel_and_wait(&self.ctx, lease).await
-            }
-            Ok(Some(kind)) if kind == super::vector::KIND => {
-                super::vector::cancel_and_wait(&self.ctx, lease).await
-            }
-            Ok(_) => true,
-            Err(_) => false,
         }
     }
 }
@@ -226,22 +190,6 @@ async fn schedule(ctx: AppContext, mut stop: tokio::sync::watch::Receiver<()>) {
     }
 }
 
-async fn recover_chat(ctx: AppContext, mut stop: tokio::sync::watch::Receiver<()>) {
-    let mut tick = tokio::time::interval(Duration::from_secs(2));
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    while super::next_tick(&mut tick, &mut stop).await {
-        let Ok(Some(admission)) = ctx.try_write().await else {
-            continue;
-        };
-        if chat::recover_terminal_generation(&ctx).await.is_err() {
-            eprintln!("knoted-worker: generation recovery unavailable");
-        }
-        if admission.finish().await.is_err() {
-            eprintln!("knoted-worker: maintenance completion could not be recorded");
-        }
-    }
-}
-
 pub async fn run(ctx: AppContext) {
     let runner = WorkerRunner::with_context(
         ctx.clone(),
@@ -258,17 +206,6 @@ pub async fn run(ctx: AppContext) {
             if ctx.files().enabled {
                 schedule(ctx.clone(), stop.clone()).await;
             }
-        },
-        async {
-            if ctx.search().enabled {
-                super::chunk_fulltext::schedule(ctx.clone(), stop.clone()).await;
-            }
-        },
-        async {
-            if ctx.vectors_enabled() {
-                super::vector::schedule(ctx.clone(), stop.clone()).await;
-            }
-        },
-        recover_chat(ctx.clone(), stop.clone())
+        }
     );
 }

@@ -18,7 +18,6 @@
 mod repository;
 pub mod service;
 
-pub(crate) use repository::request_cancel;
 pub use repository::{
     claim, enqueue, finish_with_token, heartbeat, heartbeat_state, schedule_retry,
 };

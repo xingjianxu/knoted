@@ -1,7 +1,6 @@
 // dev 一键部署脚本的场景测试（pnpm test:pc）。
 // 覆盖：迁移判定驱动 down+up 或 restart、已最新空转、构建失败不动指针、
-// 构建前必须拿到运行变量、切换后验证失败复位指针、deploy.env 抓取与权限、
-// 缺变量在切换前退出、.worktrees 路径守卫。
+// 退役前置检查、切换后验证失败复位指针、deploy.env 抓取与权限、.worktrees 路径守卫。
 //
 // 脚本不复制 build-artifact.sh / pcwrap / service.sh 的逻辑，测试因此用
 // PATH 前置 stub（pnpm、curl）与显式 seam（产物父目录、/proc 根、构建命令）
@@ -29,12 +28,7 @@ import { resolve } from "node:path";
 import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-const repoRoot = resolve(import.meta.dirname, "../..");
-const deployScript = join(repoRoot, "tools/dev/deploy-dev.sh");
-const targetRevision = spawnSync("git", ["rev-parse", "HEAD"], {
-  cwd: repoRoot,
-  encoding: "utf8",
-}).stdout.trim();
+const worktree = resolve(import.meta.dirname, "../..");
 const previousRevision = "0".repeat(39) + "1";
 
 const temporary = [];
@@ -65,6 +59,36 @@ function run(command, args, options = {}) {
   return result;
 }
 
+function releaseRepository() {
+  const root = makeTempDir("git");
+  const git = (...args) => {
+    const result = run("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-c", "commit.gpgsign=false", ...args], { cwd: root });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git("init", "--quiet");
+  mkdirSync(join(root, "services/intelligence"), { recursive: true });
+  writeFileSync(join(root, "services/intelligence/pyproject.toml"), "[project]\nname = \"legacy-fixture\"\n");
+  git("add", ".");
+  git("commit", "--quiet", "-m", "legacy release");
+  const legacyRevision = git("rev-parse", "HEAD");
+
+  rmSync(join(root, "services"), { recursive: true });
+  for (const relative of [
+    "tools/dev/build-artifact.sh", "tools/dev/deploy-dev.sh",
+    "tools/dev/pc/service.sh", "tools/dev/artifact-generation", "process-compose.yaml",
+  ]) {
+    mkdirSync(resolve(join(root, relative), ".."), { recursive: true });
+    cpSync(join(worktree, relative), join(root, relative));
+  }
+  git("add", "--all");
+  git("commit", "--quiet", "-m", "current release");
+  return { repoRoot: root, legacyRevision, targetRevision: git("rev-parse", "HEAD") };
+}
+
+const { repoRoot, legacyRevision, targetRevision } = releaseRepository();
+const deployScript = join(repoRoot, "tools/dev/deploy-dev.sh");
+
 function writeExecutable(path, contents) {
   mkdirSync(resolve(path, ".."), { recursive: true });
   writeFileSync(path, contents);
@@ -81,19 +105,19 @@ function writeManifest(root) {
 }
 
 // build-artifact.sh 的产物形状：只提供部署脚本实际校验的条目。
-function createArtifact(parent, revision, migrations = ["0001_registry.sql"]) {
+function createArtifact(parent, revision, migrations = ["0001_registry.sql"], { legacy = false } = {}) {
   const root = join(parent, revision);
   mkdirSync(join(root, "bin"), { recursive: true });
   mkdirSync(join(root, "share/knoted/web"), { recursive: true });
   mkdirSync(join(root, "share/knoted/migrations"), { recursive: true });
-  mkdirSync(join(root, "share/knoted/intelligence/python/bin"), { recursive: true });
-  for (const name of ["knoted-api", "knoted-worker", "knoted-intelligence"]) {
+  for (const name of ["knoted-api", "knoted-worker"]) {
     writeExecutable(join(root, `bin/${name}`), "#!/usr/bin/env bash\nexit 0\n");
   }
-  writeExecutable(
-    join(root, "share/knoted/intelligence/python/bin/python3.12"),
-    '#!/usr/bin/env bash\nexec python3 "$@"\n',
-  );
+  if (legacy) {
+    for (const image of ["bin/knoted-intelligence", processImages["knoted-intelligence"]]) {
+      writeExecutable(join(root, image), "#!/usr/bin/env bash\nexit 0\n");
+    }
+  }
   writeFileSync(join(root, "share/knoted/web/index.html"), "<!doctype html><title>knoted</title>\n");
   for (const migration of migrations) {
     writeFileSync(join(root, `share/knoted/migrations/${migration}`), "select 1;\n");
@@ -115,6 +139,7 @@ const processImages = {
 // service.sh 在 exec 前把运行根解析成具体产物目录，所以 cmdline 的 argv[0] 里带 <sha>。
 function createProcFixture(procRoot, artifactRoot) {
   Object.values(processImages).forEach((image, index) => {
+    if (!existsSync(join(artifactRoot, image))) return;
     const pidDir = join(procRoot, String(1000 + index));
     mkdirSync(pidDir, { recursive: true });
     symlinkSync(join(artifactRoot, image), join(pidDir, "exe"));
@@ -180,6 +205,8 @@ relink() {
   index=0
   for image in bin/knoted-api bin/knoted-worker share/knoted/intelligence/python/bin/python3.12; do
     pid=$((1000 + index))
+    [ -x "$target/$image" ] || continue
+    mkdir -p "\${STUB_PROC:?}/$pid"
     # STUB_EXE=0 模拟跨组：/proc/<pid>/exe 读不到，只剩 cmdline。
     if [ "\${STUB_EXE:-1}" = 1 ]; then
       rm -f "\${STUB_PROC:?}/$pid/exe"
@@ -196,7 +223,8 @@ relink() {
   done
 }
 case "$*" in
-"pc process list") exit 0 ;;
+"pc process list") [ "\${STUB_INSTANCE_STOPPED:-0}" = 0 ]; exit ;;
+"pc process get knoted-intelligence") [ "\${STUB_LEGACY_GRAPH:-0}" = 1 ]; exit ;;
 esac
 printf '%s|%s\\n' "$PWD" "$*" >>"\${STUB_LOG:?}"
 case "$*" in
@@ -268,6 +296,7 @@ function fixture({
   targetMigrations,
   previousMigrations = ["0001_registry.sql"],
   withTargetArtifact = true,
+  legacy = false,
   runtimeParent,
 } = {}) {
   const base = makeTempDir("run");
@@ -282,7 +311,7 @@ function fixture({
   const logFile = join(base, "pnpm.log");
   writeFileSync(logFile, "");
 
-  const previousRoot = createArtifact(runtimeParentDir, previousRevision, previousMigrations);
+  const previousRoot = createArtifact(runtimeParentDir, previousRevision, previousMigrations, { legacy });
   symlinkSync(previousRoot, join(runtimeParentDir, "current"));
   createProcFixture(procRoot, previousRoot);
 
@@ -294,6 +323,9 @@ function fixture({
 
   writePnpmStub(join(stubBin, "pnpm"));
   writeCurlStub(join(stubBin, "curl"));
+  writeExecutable(join(stubBin, "ss"), `#!/usr/bin/env bash
+if [ "\${STUB_CONTROL_BUSY:-0}" = 1 ]; then printf '%s\n' 'LISTEN 0 4096 127.0.0.1:12345 0.0.0.0:*'; fi
+`);
   const buildStub = join(base, "build-artifact-stub.sh");
   writeBuildStub(buildStub);
 
@@ -306,7 +338,6 @@ function fixture({
     KNOTED_DEPLOY_BUILD_CMD: buildStub,
     KNOTED_DEPLOY_READY_TIMEOUT: "3",
     KNOTED_API_PORT: "15602",
-    KNOTED_INTELLIGENCE_PORT: "15603",
     KNOTED_HTTPS_PORT: "15601",
     KNOTED_HTTPS_DOMAIN: "knoted.example.test",
     STUB_LOG: logFile,
@@ -315,10 +346,10 @@ function fixture({
     STUB_ARTIFACT_TEMPLATE: templateRoot,
     KNOTED_BUILD_ROOT: join(base, "build"),
     // 运行变量必须由 deploy.env 或活动进程提供，不能从测试宿主环境串味。
-    KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR: "",
-    KNOTED_INTELLIGENCE_BGE_M3_DIR: "",
+    KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR: legacy ? "/retired-docling-root" : "",
+    KNOTED_INTELLIGENCE_BGE_M3_DIR: legacy ? "/retired-bge-root" : "",
     KNOTED_SEARCH_ENABLED: "",
-    KNOTED_VECTORS_ENABLED: "",
+    KNOTED_SEARCH_CREDENTIAL_FILE: "",
     KNOTED_OFFICE_ORIGIN: "",
     KNOTED_OFFICE_JWT_SECRET_FILE: "",
   };
@@ -338,7 +369,9 @@ function attachLauncher(context, { legacy = false } = {}) {
   assert.equal(clone.status, 0, clone.stderr);
   const worktree = run("git", ["-C", checkout, "worktree", "add", "--quiet", "--detach", linked, targetRevision]);
   assert.equal(worktree.status, 0, worktree.stderr);
-  cpSync(join(repoRoot, "process-compose.yaml"), join(checkout, "process-compose.yaml"));
+  for (const directory of [checkout, linked]) {
+    cpSync(join(repoRoot, "process-compose.yaml"), join(directory, "process-compose.yaml"));
+  }
   const launcher = join(checkout, "tools/dev/pc/service.sh");
   mkdirSync(resolve(launcher, ".."), { recursive: true });
   if (legacy) {
@@ -385,10 +418,8 @@ function writeDeployEnv(instanceRoot, values) {
 }
 
 const runtimeVariables = {
-  KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR: "/data/llm/docling/run",
-  KNOTED_INTELLIGENCE_BGE_M3_DIR: "/data/llm/bge-m3/run",
   KNOTED_SEARCH_ENABLED: "1",
-  KNOTED_VECTORS_ENABLED: "1",
+  KNOTED_SEARCH_CREDENTIAL_FILE: "/var/lib/search/credentials",
   KNOTED_OFFICE_ORIGIN: officeOrigin,
   KNOTED_OFFICE_JWT_SECRET_FILE: "/var/lib/onlyoffice-secrets/jwt",
 };
@@ -405,7 +436,7 @@ describe("deploy-dev.sh", () => {
     assert.deepEqual(readdirSync(context.runtimeParentDir).sort(), [targetRevision, "current"].sort());
   });
 
-  it("迁移集合不变只重启三个进程", () => {
+  it("迁移集合不变只重启 API 和 Worker", () => {
     const context = fixture({ targetMigrations: ["0001_registry.sql"] });
     writeDeployEnv(context.instanceRoot, runtimeVariables);
 
@@ -415,7 +446,6 @@ describe("deploy-dev.sh", () => {
     assert.deepEqual(pcArgs(context.logFile), [
       "pc process restart knoted-api",
       "pc process restart knoted-worker",
-      "pc process restart knoted-intelligence",
     ]);
     // pcwrap daemon 的 cwd 决定后续 prepare/restart 用哪份 service.sh，必须锚在主检出。
     assert.deepEqual(pcCwd(context.logFile), [mainCheckout()]);
@@ -578,14 +608,12 @@ printf '%s\\n' "$STUB_MOUNT"
     assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
     assert.ok(existsSync(join(context.runtimeParentDir, previousRevision)));
     assert.ok(existsSync(join(context.runtimeParentDir, targetRevision)));
-    // 前三次是切到新产物的重启，之后必须再按旧指针重启一次。
+    // 切到新产物及复位后各重启一次 API 和 Worker。
     assert.deepEqual(pcArgs(context.logFile), [
       "pc process restart knoted-api",
       "pc process restart knoted-worker",
-      "pc process restart knoted-intelligence",
       "pc process restart knoted-api",
       "pc process restart knoted-worker",
-      "pc process restart knoted-intelligence",
     ]);
   });
 
@@ -698,7 +726,6 @@ printf '%s\\n' "$STUB_MOUNT"
     assert.deepEqual(pcArgs(context.logFile), [
       "pc process restart knoted-api",
       "pc process restart knoted-worker",
-      "pc process restart knoted-intelligence",
     ]);
     assert.ok(elapsed < 20_000, `必须快速失败，实际 ${elapsed}ms`);
     assert.match(result.stderr, /不回滚/);
@@ -741,6 +768,16 @@ printf '%s\\n' "$STUB_MOUNT"
     assert.match(readFileSync(join(context.instanceRoot, "deploy.env"), "utf8"), new RegExp(`^KNOTED_OFFICE_ORIGIN=${shellOrigin}$`, "m"));
   });
 
+  it("显式给出全部现用配置仍可读取旧 deploy.env 并完成部署", () => {
+    const context = fixture();
+    writeDeployEnv(context.instanceRoot, runtimeVariables);
+    Object.assign(context.env, runtimeVariables);
+
+    const result = deploy(context);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, targetRevision));
+  });
+
   it("实例停着时 restart 失败回退到完整启动", () => {
     const context = fixture({ targetMigrations: ["0001_registry.sql"] });
     writeDeployEnv(context.instanceRoot, runtimeVariables);
@@ -756,27 +793,16 @@ printf '%s\\n' "$STUB_MOUNT"
     ]);
   });
 
-  it("首次部署从活动进程并集抓取运行变量并写成 0600", () => {
-    const context = fixture({ targetMigrations: ["0001_registry.sql"] });
-    // 真实布局：service.sh 用 env -i 只给 intelligence 留模型根，其余开关只在 api/worker。
-    const writeEnviron = (pid, values) => {
-      writeFileSync(
-        join(context.procRoot, pid, "environ"),
-        Object.entries(values)
-          .map(([key, value]) => `${key}=${value}`)
-          .join("\0") + "\0",
-      );
-    };
-    writeEnviron("1002", {
-      KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR: runtimeVariables.KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR,
-      KNOTED_INTELLIGENCE_BGE_M3_DIR: runtimeVariables.KNOTED_INTELLIGENCE_BGE_M3_DIR,
-    });
-    writeEnviron("1000", {
-      KNOTED_SEARCH_ENABLED: runtimeVariables.KNOTED_SEARCH_ENABLED,
-      KNOTED_VECTORS_ENABLED: runtimeVariables.KNOTED_VECTORS_ENABLED,
-      KNOTED_OFFICE_ORIGIN: runtimeVariables.KNOTED_OFFICE_ORIGIN,
-      KNOTED_OFFICE_JWT_SECRET_FILE: runtimeVariables.KNOTED_OFFICE_JWT_SECRET_FILE,
-    });
+  it("从已核实的 API 和 Worker 抓取运行变量并写成 0600", () => {
+    const context = fixture();
+    const { KNOTED_SEARCH_ENABLED, KNOTED_SEARCH_CREDENTIAL_FILE, ...office } = runtimeVariables;
+    for (const [pid, values] of [
+      ["1000", office],
+      ["1001", { KNOTED_SEARCH_ENABLED, KNOTED_SEARCH_CREDENTIAL_FILE }],
+    ]) {
+      const input = Object.entries(values).map(([key, value]) => `${key}=${value}\0`).join("");
+      writeFileSync(join(context.procRoot, pid, "environ"), input);
+    }
 
     const result = deploy(context);
     assert.equal(result.status, 0, result.stderr);
@@ -787,24 +813,23 @@ printf '%s\\n' "$STUB_MOUNT"
     }
   });
 
-  it("只有 cmdline 的候选进程不能提供部署环境变量", () => {
+  it("未经 exe 核实的进程不提供可选运行变量", () => {
     const context = fixture();
     removeProcImages(context.procRoot);
     const input = Object.entries(runtimeVariables).map(([key, value]) => `${key}=${value}\0`).join("");
     writeFileSync(join(context.procRoot, "1000", "environ"), input);
 
     const result = deploy(context);
-    assert.equal(result.status, 2, result.stderr);
+    assert.equal(result.status, 0, result.stderr);
     assert.match(result.stderr, /environ 不可读或无法确认来源/);
     assert.equal(existsSync(join(context.instanceRoot, "deploy.env")), false);
-    assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
-    assert.deepEqual(pcArgs(context.logFile), []);
   });
 
-  it("environ 存在且有读权限但实际打不开时给出诊断并在切换前退出", async () => {
+  it("实际打不开 environ 时报告原因并采用显式配置", async () => {
     const context = fixture();
-    // 用 Unix socket 模拟 stat/-r 通过、实际打开失败（不依赖测试用户权限）。
-    const environ = join(context.procRoot, "1002", "environ");
+    context.env.KNOTED_SEARCH_ENABLED = "1";
+    // 用 Unix socket 模拟 stat/-r 通过、实际打开失败。
+    const environ = join(context.procRoot, "1000", "environ");
     const server = createServer();
     await new Promise((resolve, reject) => server.once("error", reject).listen(environ, resolve));
     let result;
@@ -815,16 +840,244 @@ printf '%s\\n' "$STUB_MOUNT"
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR/);
-    // 有活动进程但 environ 读不到（如跨组）时不能只说“缺少变量”。
+    assert.equal(result.status, 0, result.stderr);
     assert.match(result.stderr, /environ 不可读/);
     assert.match(result.stderr, /sg /);
+    assert.equal(readFileSync(join(context.instanceRoot, "deploy.env"), "utf8"), "KNOTED_SEARCH_ENABLED=1\n");
+  });
+
+  it("旧进程图仍可连接时拒绝切换", () => {
+    const context = fixture({ legacy: true });
+    for (const pid of ["1000", "1001", "1002"]) rmSync(join(context.procRoot, pid), { recursive: true });
+    writeDeployEnv(context.instanceRoot, runtimeVariables);
+    const result = deploy(context);
     assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
-    assert.deepEqual(
-      pcArgs(context.logFile).filter((line) => line.startsWith("pc ")),
-      [],
-    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /旧.*编排.*停止/);
+    assert.deepEqual(pcArgs(context.logFile), []);
+  });
+
+  it("旧 daemon 不可达时拒绝遗留计算进程", () => {
+    const context = fixture({ legacy: true });
+    for (const pid of ["1000", "1001"]) rmSync(join(context.procRoot, pid), { recursive: true });
+    context.env.STUB_INSTANCE_STOPPED = "1";
+    writeDeployEnv(context.instanceRoot, runtimeVariables);
+    const result = deploy(context);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /knoted-intelligence.*1002/);
+    assert.deepEqual(pcArgs(context.logFile), []);
+  });
+
+  it("旧控制端口仍占用时拒绝把连接失败当停机", () => {
+    const context = fixture({ legacy: true });
+    for (const pid of ["1000", "1001", "1002"]) rmSync(join(context.procRoot, pid), { recursive: true });
+    context.env.STUB_INSTANCE_STOPPED = "1";
+    context.env.STUB_CONTROL_BUSY = "1";
+    context.env.PC_PORT_NUM = "12345";
+    writeDeployEnv(context.instanceRoot, runtimeVariables);
+
+    const result = deploy(context);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /控制端口 12345.*停止/);
+    assert.deepEqual(pcArgs(context.logFile), []);
+  });
+
+  it("已停止旧编排时完整加载新进程图并只保留现用变量", () => {
+    const context = fixture({ legacy: true });
+    for (const pid of ["1000", "1001", "1002"]) rmSync(join(context.procRoot, pid), { recursive: true });
+    context.env.STUB_INSTANCE_STOPPED = "1";
+    context.env.KNOTED_OFFICE_ORIGIN = officeOrigin;
+    writeDeployEnv(context.instanceRoot, {
+      ...runtimeVariables,
+      KNOTED_INTELLIGENCE_BGE_M3_DIR: "/retired-model-root",
+      KNOTED_CHAT_LOCAL_MODEL: "retired-model",
+      KNOTED_VECTORS_ENABLED: "1",
+    });
+    attachLauncher(context);
+
+    const result = deploy(context);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, targetRevision));
+    assert.deepEqual(pcArgs(context.logFile), ["pc up -D"]);
+    const renderedEnv = readFileSync(join(context.instanceRoot, "deploy.env"), "utf8");
+    assert.equal(renderedEnv, Object.entries(runtimeVariables).map(([key, value]) => `${key}=${value}\n`).join(""));
+  });
+
+  it("跨进程图失败时保留两份固定产物供排查", () => {
+    const context = fixture({ legacy: true });
+    for (const pid of ["1000", "1001", "1002"]) rmSync(join(context.procRoot, pid), { recursive: true });
+    context.env.STUB_INSTANCE_STOPPED = "1";
+    context.env.STUB_HTTPS_FAIL = "1";
+    attachLauncher(context);
+    writeDeployEnv(context.instanceRoot, runtimeVariables);
+
+    const result = deploy(context);
+    assert.notEqual(result.status, 0);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, targetRevision));
+    assert.deepEqual(pcArgs(context.logFile), ["pc up -D"]);
+    assert.ok(existsSync(join(context.runtimeParentDir, previousRevision)));
+  });
+
+  it("旧手工启动没有 deploy.env 时从已渲染配置保留搜索和 Office", () => {
+    const context = fixture({ legacy: true, withTargetArtifact: false });
+    for (const pid of ["1000", "1001", "1002"]) rmSync(join(context.procRoot, pid), { recursive: true });
+    context.env.STUB_INSTANCE_STOPPED = "1";
+    attachLauncher(context);
+    const configDir = join(context.instanceRoot, "config");
+    mkdirSync(configDir);
+    const credentialPath = join(context.base, "not created search file");
+    const jwtPath = join(context.base, "not created Office file");
+    writeFileSync(join(configDir, "knoted.toml"), `[server]
+bind = "127.0.0.1:15602"
+[database]
+url = "postgres://fixture@localhost/do-not-copy"
+[files]
+enabled = true
+[intelligence]
+base_url = "http://127.0.0.1:15603"
+[office]
+document_server_origin = "${officeOrigin}"
+jwt_secret_file = "${jwtPath}"
+[credentials]
+credential_file = "${credentialPath}"
+[search]
+enabled = true
+api_key_credential = "meilisearch"
+`);
+
+    const result = deploy(context);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, targetRevision));
+    assert.ok(pcArgs(context.logFile).some(line => line.startsWith("build ") && line.endsWith(` ${officeOrigin}`)));
+    assert.equal(readFileSync(join(context.instanceRoot, "deploy.env"), "utf8"), [
+      "KNOTED_SEARCH_ENABLED=1",
+      `KNOTED_SEARCH_CREDENTIAL_FILE=${credentialPath}`,
+      `KNOTED_OFFICE_ORIGIN=${officeOrigin}`,
+      `KNOTED_OFFICE_JWT_SECRET_FILE=${jwtPath}`,
+      "",
+    ].join("\n"));
+    assert.equal(existsSync(credentialPath), false);
+    assert.equal(existsSync(jwtPath), false);
+    assert.doesNotMatch(result.stdout + result.stderr, /do-not-copy/);
+  });
+
+  it("没有旧部署环境且渲染配置不可用时拒绝清空保留功能配置", () => {
+    const context = fixture({ legacy: true });
+    for (const pid of ["1000", "1001", "1002"]) rmSync(join(context.procRoot, pid), { recursive: true });
+    context.env.STUB_INSTANCE_STOPPED = "1";
+
+    const result = deploy(context);
+
+    assert.notEqual(result.status, 0);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
+    assert.match(result.stderr, /旧.*配置.*显式/);
+    assert.deepEqual(pcArgs(context.logFile), []);
+  });
+
+  it("仅有退役变量的旧部署环境不能替代保留的设置", () => {
+    const context = fixture({ legacy: true });
+    for (const pid of ["1000", "1001", "1002"]) rmSync(join(context.procRoot, pid), { recursive: true });
+    context.env.STUB_INSTANCE_STOPPED = "1";
+    attachLauncher(context);
+    writeDeployEnv(context.instanceRoot, { KNOTED_INTELLIGENCE_BGE_M3_DIR: "/retired" });
+
+    const result = deploy(context);
+
+    assert.notEqual(result.status, 0);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
+    assert.match(result.stderr, /旧.*配置.*显式/);
+    assert.deepEqual(pcArgs(context.logFile), []);
+  });
+
+  it("旧配置缺失时接受明确停用搜索和 Office 的环境", () => {
+    const context = fixture({ legacy: true });
+    for (const pid of ["1000", "1001", "1002"]) rmSync(join(context.procRoot, pid), { recursive: true });
+    context.env.STUB_INSTANCE_STOPPED = "1";
+    context.env.KNOTED_SEARCH_ENABLED = "0";
+    context.env.KNOTED_OFFICE_ORIGIN = "";
+    context.env.KNOTED_OFFICE_JWT_SECRET_FILE = "";
+    attachLauncher(context);
+
+    const result = deploy(context);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, targetRevision));
+    assert.deepEqual(pcArgs(context.logFile), ["pc up -D"]);
+  });
+
+  it("旧渲染配置使用不受支持的搜索字段时拒绝改写", () => {
+    const context = fixture({ legacy: true });
+    for (const pid of ["1000", "1001", "1002"]) rmSync(join(context.procRoot, pid), { recursive: true });
+    context.env.STUB_INSTANCE_STOPPED = "1";
+    const configDir = join(context.instanceRoot, "config");
+    mkdirSync(configDir);
+    writeFileSync(join(configDir, "knoted.toml"), '[server]\n[database]\n[files]\n[search]\nenabled = true\nindex_uid = "custom"\n');
+
+    const result = deploy(context);
+
+    assert.notEqual(result.status, 0);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
+    assert.match(result.stderr, /旧渲染配置.*显式/);
+    assert.equal(existsSync(join(context.instanceRoot, "deploy.env")), false);
+    assert.deepEqual(pcArgs(context.logFile), []);
+  });
+
+  it("当前指针已经更新但旧项目仍在时拒绝重启和清理", () => {
+    const context = fixture();
+    context.env.STUB_LEGACY_GRAPH = "1";
+    writeDeployEnv(context.instanceRoot, runtimeVariables);
+    const result = deploy(context);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /旧.*编排.*停止/);
+    assert.deepEqual(pcArgs(context.logFile), []);
+  });
+
+  it("清理前再次识别旧解释器后代", () => {
+    const context = fixture();
+    const legacy = createArtifact(context.runtimeParentDir, "a".repeat(40), undefined, { legacy: true });
+    const pid = join(context.procRoot, "1002");
+    mkdirSync(pid);
+    // 跨组的 guardian 只有固定解释器 argv[0] 可读。
+    writeFileSync(join(pid, "cmdline"), `${join(legacy, processImages["knoted-intelligence"])}\0-m\0knoted_intelligence.guardian\0`);
+    const result = deploy(context, ["--prune-current"]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /knoted-intelligence.*1002/);
+    assert.ok(existsSync(legacy));
+  });
+
+  it("候选产物缺少 Web 时，即使清单完整也不重启或切换", () => {
+    const context = fixture();
+    const target = join(context.runtimeParentDir, targetRevision);
+    for (const root of [target, context.templateRoot]) {
+      rmSync(join(root, "share/knoted/web/index.html"));
+      writeManifest(root);
+    }
+    writeDeployEnv(context.instanceRoot, runtimeVariables);
+    const result = deploy(context);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /share\/knoted\/web\/index\.html/);
+    assert.ok(pcArgs(context.logFile).every((line) => !line.startsWith("pc ")));
+  });
+
+  it("拒绝非法 REVISION 并且错误信息不回显标记内容", () => {
+    const context = fixture();
+    const target = join(context.runtimeParentDir, targetRevision);
+    const invalidMarker = "untrusted-release-marker";
+    for (const root of [target, context.templateRoot]) {
+      writeFileSync(join(root, "share/knoted/REVISION"), `${invalidMarker}\n`);
+      writeManifest(root);
+    }
+    const result = deploy(context);
+
+    assert.notEqual(result.status, 0);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
+    assert.match(result.stderr, /REVISION/);
+    assert.doesNotMatch(result.stderr, /untrusted-release-marker/);
   });
 
   it("拒绝在 .worktrees 里部署稳定实例", () => {
@@ -842,6 +1095,37 @@ printf '%s\\n' "$STUB_MOUNT"
     const result = deploy(context, ["8b0457e"]);
     assert.equal(result.status, 2);
     assert.match(result.stderr, /40/);
+  });
+
+  it("拒绝旧源码提交并保留已有的同 SHA 归档产物", () => {
+    const context = fixture();
+    const archived = createArtifact(context.runtimeParentDir, legacyRevision, undefined, { legacy: true });
+    writeDeployEnv(context.instanceRoot, runtimeVariables);
+
+    const result = deploy(context, [legacyRevision]);
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /目标提交.*产物代/);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
+    assert.ok(existsSync(join(archived, "bin/knoted-intelligence")));
+    assert.equal(readdirSync(context.runtimeParentDir).some(path => path.includes(".incomplete.")), false);
+    assert.deepEqual(pcArgs(context.logFile), []);
+  });
+
+  it("独立构建入口在触碰构建根前拒绝旧源码提交", () => {
+    const context = fixture();
+    const output = join(context.base, "archived-build");
+    // The old builder reaches cargo. A stub makes the regression safe.
+    writeExecutable(join(context.base, "stubs/cargo"), "#!/usr/bin/env bash\nexit 91\n");
+    const result = run("bash", [join(repoRoot, "tools/dev/build-artifact.sh"), legacyRevision, output], {
+      cwd: repoRoot,
+      env: context.env,
+    });
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /目标提交.*产物代/);
+    assert.equal(existsSync(context.env.KNOTED_BUILD_ROOT), false);
+    assert.equal(existsSync(output), false);
   });
 
   it("拒绝不存在的提交", () => {

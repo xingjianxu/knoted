@@ -50,7 +50,6 @@ impl Engine {
             base_url: self.base.clone(),
             index_uid: self.index.clone(),
             api_key_credential: None,
-            ..SearchConfig::default()
         }
     }
 
@@ -148,8 +147,6 @@ fn document(source_id: Uuid, version: i64, body: &str) -> SourceDocument {
         tags: vec!["会议".into()],
         archived: false,
         deleted: false,
-        path: None,
-        format: None,
         updated_at: Utc.with_ymd_and_hms(2026, 11, 18, 9, 30, 0).unwrap(),
     }
 }
@@ -271,8 +268,6 @@ async fn t53_1_chinese_word_inside_a_long_sentence_is_found() {
         "tags",
         "archived",
         "deleted",
-        "path",
-        "format",
     ] {
         assert!(
             settings["filterableAttributes"]
@@ -280,6 +275,14 @@ async fn t53_1_chinese_word_inside_a_long_sentence_is_found() {
                 .unwrap()
                 .contains(&json!(field)),
             "missing filterable field {field}"
+        );
+    }
+    for retired in ["path", "format"] {
+        assert!(
+            !settings["filterableAttributes"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(retired))
         );
     }
     for field in ["updated_at", "version"] {
@@ -344,7 +347,6 @@ async fn t53_2_accepted_engine_task_is_not_published() {
         base_url: server.uri(),
         index_uid: index.into(),
         api_key_credential: None,
-        ..SearchConfig::default()
     });
     let source = Uuid::new_v4();
     let publication = meili::publish_fulltext(&ctx, document(source, 1, "会议纪要正文"))
@@ -849,7 +851,6 @@ async fn t53_9_permanent_engine_rejection_ends_in_failed() {
         base_url: server.uri(),
         index_uid: index.into(),
         api_key_credential: None,
-        ..SearchConfig::default()
     });
     let source = Uuid::new_v4();
     let publication = meili::publish_fulltext(&ctx, document(source, 1, "被拒绝的会议纪要"))
@@ -1017,7 +1018,6 @@ fn t53_13_client_debug_hides_the_api_key() {
         base_url: "http://127.0.0.1:15605".into(),
         index_uid: "knoted_documents".into(),
         api_key_credential: None,
-        ..SearchConfig::default()
     };
     let client = meili::MeiliClient::new(&config, Some("sentinel-secret")).unwrap();
     let debug = format!("{client:?}");
@@ -1038,7 +1038,6 @@ async fn t53_14_manual_retry_replaces_a_failed_engine_task() {
         base_url: server.uri(),
         index_uid: index.into(),
         api_key_credential: None,
-        ..SearchConfig::default()
     });
     let publication = meili::publish_fulltext(&ctx, document(Uuid::new_v4(), 1, "retry"))
         .await
@@ -1124,16 +1123,4 @@ async fn t53_14_manual_retry_replaces_a_failed_engine_task() {
         published,
         ("published".into(), Some(8), publication.document_key)
     );
-}
-
-#[tokio::test]
-async fn t53_15_chat_message_document_key_passes_database_validation() {
-    let engine = Engine::new();
-    let db = TestDb::create().await.unwrap();
-    let ctx = AppContext::new(db.pool.clone()).with_search(engine.config());
-    let mut message = document(Uuid::new_v4(), 1, "chat message");
-    message.source_type = SourceType::ChatMessage;
-    let key = meili::document_key(message.source_type, message.source_id, 1);
-    let publication = meili::publish_fulltext(&ctx, message).await.unwrap();
-    assert_eq!(publication.document_key, key);
 }

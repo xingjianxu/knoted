@@ -19,7 +19,9 @@ use knoted_core::db;
 
 const USAGE: &str = "usage: knoted-api [--config <PATH>]\n       \
      knoted-api admin token --purpose <bootstrap|recovery> --config <PATH>\n       \
-     knoted-api admin backup --output <new-directory> [--config <PATH>]\n     knoted-api admin restore --input <archive> --target <descriptor>";
+     knoted-api admin backup --output <new-directory> [--config <PATH>]\n       \
+     knoted-api admin restore --input <archive> --target <descriptor>\n       \
+     knoted-api admin retry-search --job <UUID> [--config <PATH>]";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -102,17 +104,10 @@ async fn run_server(args: Vec<String>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let Ok(chat_providers) =
-        knoted_core::rag::providers::ProviderRegistry::new(config.chat.clone())
-    else {
-        tracing::error!("model provider registry unavailable");
-        return ExitCode::FAILURE;
-    };
     let ctx = AppContext::new(pool)
         .with_asset_root(config.assets.root.clone())
         .with_files(config.files.clone())
         .with_office(config.office.as_ref(), config.auth())
-        .with_chat_providers(std::sync::Arc::new(chat_providers))
         .with_search(config.search.clone())
         .with_search_api_key(config.search_api_key());
 
@@ -155,6 +150,7 @@ async fn run_admin(args: &[String]) -> ExitCode {
         "token" => run_admin_token(&args[1..]).await,
         "restore" => run_admin_restore(&args[1..]).await,
         "backup" => run_admin_backup(&args[1..]).await,
+        "retry-search" => run_admin_retry_search(&args[1..]).await,
         "--help" | "help" => {
             println!("{USAGE}");
             ExitCode::SUCCESS
@@ -164,6 +160,42 @@ async fn run_admin(args: &[String]) -> ExitCode {
             eprintln!("knoted-api: unknown admin command");
             eprintln!("{USAGE}");
             ExitCode::from(2)
+        }
+    }
+}
+
+async fn run_admin_retry_search(args: &[String]) -> ExitCode {
+    const HELP: &str = "usage: knoted-api admin retry-search --job <UUID> [--config <PATH>]";
+    if args == ["--help"] {
+        println!("{HELP}");
+        return ExitCode::SUCCESS;
+    }
+    let (id, path) = match args {
+        [flag, id] if flag == "--job" => (id, AppConfig::config_path_from_env()),
+        [flag, id, config, path] if flag == "--job" && config == "--config" => {
+            (id, PathBuf::from(path))
+        }
+        _ => {
+            eprintln!("{HELP}");
+            return ExitCode::from(2);
+        }
+    };
+    let Ok(id) = uuid::Uuid::parse_str(id) else {
+        eprintln!("{HELP}");
+        return ExitCode::from(2);
+    };
+    let Ok(config) = AppConfig::load_for_process(&path, ProcessKind::Worker) else {
+        eprintln!("knoted-api: search retry configuration could not be loaded");
+        return ExitCode::FAILURE;
+    };
+    match admin::retry_search(id, &config).await {
+        Ok(retried) => {
+            println!("search job queued: {retried}");
+            ExitCode::SUCCESS
+        }
+        Err(message) => {
+            eprintln!("knoted-api: {message}");
+            ExitCode::FAILURE
         }
     }
 }

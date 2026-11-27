@@ -8,7 +8,7 @@ import { UiProvider } from "../../src/lib/ui-provider";
 type Summary = components["schemas"]["DashboardSummary"];
 const stamp = "2026-11-17T00:00:00Z";
 const task: components["schemas"]["Task"] = {id:"00000000-0000-4000-8000-000000000001",title:"已完成事项",project_id:null,parent_id:null,description:null,status:"done",priority:"none",start:null,due:{date:"2020-01-01",time:null,timezone:"Asia/Shanghai"},version:1,archived_at:null,deleted_at:null,created_at:stamp,updated_at:stamp};
-const empty = (): Summary => ({counts:{notes:0,tasks_open:0,tasks_due_today:0,projects_active:0,files:0},tasks_by_status:{todo:0,in_progress:0,done:0,cancelled:0},recent_tasks:[],recent_notes:[],due_tasks:[],job_failures:0,indexing_enabled:false});
+const empty = (): Summary => ({counts:{notes:0,tasks_open:0,tasks_due_today:0,projects_active:0,files:0},tasks_by_status:{todo:0,in_progress:0,done:0,cancelled:0},recent_tasks:[],recent_notes:[],due_tasks:[],job_failures:0});
 function harness(summary = empty()) {
  const requests: Request[]=[]; let fail=false; let gate: Promise<void>|undefined; let release:(()=>void)|undefined;
  const bundle={queryClient:new QueryClient({defaultOptions:{queries:{retry:false,staleTime:30000}}}),api:createApiClient({baseUrl:"http://localhost/api/v1",fetch:async input=>{const req=input as Request;requests.push(req);if(gate)await gate;return new Response(JSON.stringify(fail?{code:"dependency_unavailable",message:"SQL secret",request_id:"x"}:summary),{status:fail?503:200,headers:{"content-type":"application/json"}});}})};

@@ -7,9 +7,16 @@ if [[ $# != 2 || ! $1 =~ ^[0-9a-f]{40}$ ]]; then
   exit 2
 fi
 revision=$1
-output=$(realpath -m -- "$2")
+script_dir=$(cd "${BASH_SOURCE[0]%/*}" && pwd)
 repository=$(git rev-parse --show-toplevel)
 [[ $(git rev-parse --verify "$revision^{commit}") == "$revision" ]]
+generation=$(cat "$script_dir/artifact-generation")
+if ! selected_generation=$(git cat-file blob "$revision:tools/dev/artifact-generation" 2>/dev/null) ||
+   [[ -z $generation || $selected_generation != "$generation" ]]; then
+  printf '目标提交 %s 的产物代不受当前构建规则支持。请从该提交的检出构建。\n' "$revision" >&2
+  exit 2
+fi
+output=$(realpath -m -- "$2")
 if [[ -e $output ]]; then
   echo 'output directory already exists; refusing to overwrite' >&2
   exit 2
@@ -27,7 +34,6 @@ cd "$source_dir"
 cargo build --locked --release -p knoted-api -p knoted-worker
 pnpm install --frozen-lockfile --store-dir "$task_root/cache/pnpm-store"
 pnpm --filter @knoted/web build
-(cd "$repository" && bash "$source_dir/tools/dev/build-intelligence.sh" "$revision" "$output")
 mkdir -p "$output/bin" "$output/share/knoted"
 install -m 0755 "$CARGO_TARGET_DIR/release/knoted-api" "$output/bin/knoted-api"
 install -m 0755 "$CARGO_TARGET_DIR/release/knoted-worker" "$output/bin/knoted-worker"

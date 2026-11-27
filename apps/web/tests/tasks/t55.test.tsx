@@ -17,10 +17,9 @@ const otherTag = "00000000-0000-4000-8000-000000000003";
 const timestamp = "2026-11-18T02:30:00.000Z";
 const hit: SearchHit = {
   id,
-  entity_type: "file",
+  entity_type: "note",
   title: "会议纪要",
   snippet: "这份纪要记录了项目讨论。",
-  path: "工作/会议.txt",
   updated_at: timestamp,
   score: null,
 };
@@ -62,39 +61,45 @@ async function openSearch(
 const page = (items: SearchHit[], next_cursor: string | null = null) =>
   json({ items, next_cursor } satisfies SearchResponse);
 
-it("t55_1 labels a chat hit and shows when its exact location is unavailable", async () => {
-  await openSearch("/search?q=纪要", () => page([{ ...hit, entity_type: "chat", path: null }]));
-  expect(await screen.findByText("聊天消息", { exact: true })).toBeInTheDocument();
-  expect(screen.getByText("无法定位到原文位置。")).toBeInTheDocument();
+it("t55_1 links search hits to the corresponding note, project and task", async () => {
+  const projectId = "00000000-0000-4000-8000-000000000004";
+  const taskId = "00000000-0000-4000-8000-000000000005";
+  await openSearch("/search?q=纪要", () => page([
+    hit,
+    { ...hit, id: projectId, entity_type: "project", title: "会议项目" },
+    { ...hit, id: taskId, entity_type: "task", title: "跟进会议" },
+  ]));
+  expect(await screen.findByRole("link", { name: "会议纪要" })).toHaveAttribute("href", `/notes/${id}`);
+  expect(screen.getByRole("link", { name: "会议项目" })).toHaveAttribute("href", `/projects/${projectId}`);
+  expect(screen.getByRole("link", { name: "跟进会议" })).toHaveAttribute("href", `/tasks/${taskId}`);
 });
 
 it("t55_2 restores every submitted filter when the URL is reopened", async () => {
   const params = new URLSearchParams({
     q: "纪要",
-    type: "file",
+    type: "note",
     tags: JSON.stringify([tag, otherTag]),
     project: id,
     updated_from: timestamp,
     updated_to: "2026-11-19T03:00:00.000Z",
     archived: "false",
-    path: "工作/会议",
-    format: "txt",
     sort: "updated_desc",
   });
   const original = await openSearch(`/search?${params}`, () => page([hit]));
-  expect(await screen.findByRole("link", { name: "会议纪要" })).toHaveAttribute("href", `/files/${id}`);
+  await screen.findByRole("link", { name: "会议纪要" });
+  const updatedTo = "2026-11-20T10:30";
+  const submittedEnd = new Date(updatedTo).toISOString();
   fireEvent.click(screen.getByRole("button", { name: "筛选条件" }));
-  fireEvent.change(screen.getByLabelText("路径"), { target: { value: "项目/文件" } });
+  fireEvent.change(screen.getByLabelText("更新时间止"), { target: { value: updatedTo } });
   fireEvent.click(within(screen.getByRole("search")).getByRole("button", { name: "搜索" }));
-  await waitFor(() => expect(original.requests.at(-1)?.get("path")).toBe("项目/文件"));
+  await waitFor(() => expect(original.requests.at(-1)?.get("updated_to")).toBe(submittedEnd));
   const url = original.router.state.location.href;
   original.unmount();
   const reopened = await openSearch(url, () => page([hit]));
   expect(await screen.findByRole("link", { name: "会议纪要" })).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "筛选条件" }));
-  expect(screen.getByLabelText("路径")).toHaveValue("项目/文件");
-  expect(screen.getByLabelText("格式")).toHaveValue("txt");
-  params.set("path", "项目/文件");
+  expect(screen.getByLabelText("更新时间止")).toHaveValue(updatedTo);
+  params.set("updated_to", submittedEnd);
   for (const [key, value] of params) {
     if (key === "tags") expect(reopened.requests.at(-1)?.getAll(key)).toEqual([tag, otherTag]);
     else expect(reopened.requests.at(-1)?.get(key)).toBe(value);
@@ -167,25 +172,26 @@ it("submitting the same search refreshes the first page", async () => {
 
 
 it("keeps unapplied filters while collapsed and searches with them only on submission", async () => {
-  const view = await openSearch("/search?q=纪要&path=工作", () => page([hit]));
+  const view = await openSearch(`/search?q=纪要&updated_from=${timestamp}`, () => page([hit]));
   await screen.findByRole("link", { name: "会议纪要" });
   const toggle = screen.getByRole("button", { name: "筛选条件" });
+  const appliedStart = screen.getByText(/^已应用：更新时间起/).textContent ?? "";
+  const draftStart = "2026-11-19T09:00";
   expect(toggle).toHaveAttribute("aria-expanded", "false");
-  expect(screen.queryByRole("textbox", { name: "路径" })).not.toBeInTheDocument();
-  expect(screen.getByText("已应用：路径 工作")).toBeVisible();
+  expect(screen.queryByLabelText("更新时间起")).not.toBeInTheDocument();
   fireEvent.click(toggle);
-  fireEvent.change(screen.getByRole("textbox", { name: "路径" }), { target: { value: "草稿目录" } });
+  fireEvent.change(screen.getByLabelText("更新时间起"), { target: { value: draftStart } });
   fireEvent.click(toggle);
   expect(toggle).toHaveAttribute("aria-expanded", "false");
-  expect(screen.getByText("已应用：路径 工作")).toBeVisible();
+  expect(screen.getByText(appliedStart)).toBeVisible();
   expect(screen.getByText("有待提交的修改")).toBeVisible();
   expect(view.requests).toHaveLength(1);
   fireEvent.click(toggle);
-  expect(screen.getByRole("textbox", { name: "路径" })).toHaveValue("草稿目录");
+  expect(screen.getByLabelText("更新时间起")).toHaveValue(draftStart);
   fireEvent.click(toggle);
   fireEvent.click(within(screen.getByRole("search")).getByRole("button", { name: "搜索" }));
-  await waitFor(() => expect(view.requests.at(-1)?.get("path")).toBe("草稿目录"));
-  expect(await screen.findByText("已应用：路径 草稿目录")).toBeVisible();
+  await waitFor(() => expect(view.requests.at(-1)?.get("updated_from")).toBe(new Date(draftStart).toISOString()));
+  expect(screen.getByText(/^已应用：更新时间起/)).not.toHaveTextContent(appliedStart);
   expect(screen.queryByText("有待提交的修改")).not.toBeInTheDocument();
 });
 

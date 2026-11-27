@@ -107,28 +107,6 @@ function createRuntimeFixture() {
   writeFileSync(join(root, "share/knoted/web/index.html"), "<!doctype html><title>knoted</title>\n");
   writeFileSync(join(root, "share/knoted/migrations/0001_registry.sql"), "select 1;\n");
   writeFileSync(join(root, "share/knoted/REVISION"), `${revision}\n`);
-  // Only integrity fixtures: no Python computation is started by prepare.
-  writeExecutable(join(root, "bin/knoted-intelligence"), "#!/usr/bin/env bash\nexit 0\n");
-  const pythonRoot = join(root, "share/knoted/intelligence");
-  mkdirSync(join(pythonRoot, "python/bin"), { recursive: true });
-  mkdirSync(join(pythonRoot, "python/lib/python3.12/site-packages/knoted_intelligence"), { recursive: true });
-  writeExecutable(join(pythonRoot, "python/bin/python3.12"), '#!/usr/bin/env bash\nexec python3 "$@"\n');
-  for (const file of [
-    "BUILD.json",
-    "requirements.txt",
-    "uv.lock",
-    "python/lib/python3.12/os.py",
-    "python/lib/python3.12/site-packages/knoted_intelligence/app.py",
-    "python/lib/python3.12/site-packages/knoted_intelligence/guardian.py",
-    "python/lib/python3.12/site-packages/knoted_intelligence/supervision.py",
-    "python/lib/python3.12/site-packages/knoted_intelligence/parsing/pdf.py",
-    "python/lib/python3.12/site-packages/docling/document_converter.py",
-    "python/lib/python3.12/site-packages/torch/__init__.py",
-    "python/lib/python3.12/site-packages/onnxruntime/__init__.py",
-  ]) {
-    mkdirSync(resolve(join(pythonRoot, file), ".."), { recursive: true });
-    writeFileSync(join(pythonRoot, file), "integrity fixture\n");
-  }
   writeManifest(root);
   return root;
 }
@@ -157,7 +135,7 @@ function createCertificateFixture(hostname) {
 }
 
 // prepareEnv 关闭 boot profile 兜底，让每个用例自己决定工具来源。
-function prepareEnv({ runtimeRoot, instanceRoot, certDir, apiPort, httpsPort, intelligencePort, domain }, extra = {}) {
+function prepareEnv({ runtimeRoot, instanceRoot, certDir, apiPort, httpsPort, domain }, extra = {}) {
   return {
     ...process.env,
     // 默认只暴露临时 profile（真实 openssl）；/run/current-system 兜底也关掉，
@@ -168,7 +146,6 @@ function prepareEnv({ runtimeRoot, instanceRoot, certDir, apiPort, httpsPort, in
     KNOTED_RUNTIME_ROOT: runtimeRoot,
     KNOTED_CERT_DIR: certDir,
     KNOTED_API_PORT: String(apiPort),
-    KNOTED_INTELLIGENCE_PORT: String(intelligencePort),
     KNOTED_HTTPS_PORT: String(httpsPort),
     KNOTED_HTTPS_DOMAIN: domain,
     KNOTED_LOG_LEVEL: "debug",
@@ -176,9 +153,6 @@ function prepareEnv({ runtimeRoot, instanceRoot, certDir, apiPort, httpsPort, in
     KNOTED_SEARCH_CREDENTIAL_FILE: "",
     KNOTED_OFFICE_ORIGIN: "",
     KNOTED_OFFICE_JWT_SECRET_FILE: "",
-    KNOTED_CHAT_LOCAL_BASE_URL: "",
-    KNOTED_CHAT_LOCAL_MODEL: "",
-    KNOTED_CHAT_LOCAL_CREDENTIAL_FILE: "",
     DATABASE_URL: "postgres://dev@127.0.0.1:5432/dev",
     ...extra,
   };
@@ -190,14 +164,12 @@ async function fullFixture() {
   const certDir = createCertificateFixture("knoted.example.test");
   const apiPort = await freePort();
   const httpsPort = await freePort();
-  const intelligencePort = await freePort();
   return {
     base,
     runtimeRoot,
     certDir,
     apiPort,
     httpsPort,
-    intelligencePort,
     domain: "knoted.example.test",
     instanceRoot: join(base, "service"),
   };
@@ -230,10 +202,12 @@ describe("编排配置", () => {
       .map((line) => line.trim().replace(":", ""));
     assert.deepEqual(
       processNames.sort(),
-      ["knoted-api", "knoted-intelligence", "knoted-worker", "migrate", "prepare"],
+      ["knoted-api", "knoted-worker", "migrate", "prepare"],
       "外部依赖（PostgreSQL/Strata）不得进编排",
     );
     assert.match(yaml, /condition: process_completed_successfully/);
+    assert.match(yaml, /timeout_seconds: 75/);
+    assert.doesNotMatch(yaml, /probe-intelligence|process_healthy/);
   });
 });
 
@@ -311,55 +285,24 @@ describe("prepare", () => {
     }
   });
 
-  it("显式配置回环模型并只记录绝对凭据路径", async () => {
+  it("退役变量和占用的旧端口不影响准备新实例", async () => {
     const fixture = await fullFixture();
-    const path = join(fixture.base, "not-created model credential");
-    for (const url of ["http://127.42.0.2:15604/v1", "https://[0:0:0:0:0:0:0:1]:15604/models"]) {
+    const blocker = createServer();
+    await new Promise((resolveListen) => blocker.listen(0, "127.0.0.1", resolveListen));
+    try {
       const result = run("bash", [serviceScript, "prepare"], {
         env: prepareEnv(fixture, {
-          KNOTED_CHAT_LOCAL_BASE_URL: url,
-          KNOTED_CHAT_LOCAL_MODEL: "strata/model&variant",
-          KNOTED_CHAT_LOCAL_CREDENTIAL_FILE: path,
+          KNOTED_INTELLIGENCE_PORT: String(blocker.address().port),
+          KNOTED_VECTORS_ENABLED: "retired",
+          KNOTED_CHAT_LOCAL_BASE_URL: "retired",
         }),
       });
       assert.equal(result.status, 0, result.stderr);
       const config = readFileSync(join(fixture.instanceRoot, "config/knoted.toml"), "utf8");
-      assert.ok(config.includes(`[chat.local]\nbase_url = "${url}"\nmodel = "strata/model&variant"\ncredential_file = "${path}"\n`));
-      assert.equal(existsSync(path), false);
-    }
-  });
-
-  it("拒绝缺项、非回环端点和不安全的 TOML 值，错误不回显配置值", async () => {
-    const fixture = await fullFixture();
-    const valid = {
-      KNOTED_CHAT_LOCAL_BASE_URL: "http://127.0.0.1:15604",
-      KNOTED_CHAT_LOCAL_MODEL: "test-model",
-      KNOTED_CHAT_LOCAL_CREDENTIAL_FILE: join(fixture.base, "model-credential"),
-    };
-    for (const override of [
-      { KNOTED_CHAT_LOCAL_BASE_URL: "" },
-      { KNOTED_CHAT_LOCAL_MODEL: "" },
-      { KNOTED_CHAT_LOCAL_CREDENTIAL_FILE: "" },
-      { KNOTED_CHAT_LOCAL_BASE_URL: "https://localhost:15604" },
-      { KNOTED_CHAT_LOCAL_BASE_URL: "https://127.0.0.1.example.test" },
-      { KNOTED_CHAT_LOCAL_BASE_URL: "http://[::ffff:127.0.0.1]:15604" },
-      { KNOTED_CHAT_LOCAL_BASE_URL: "ftp://127.0.0.1:15604" },
-      { KNOTED_CHAT_LOCAL_BASE_URL: "http://user:must-not-appear@127.0.0.1:15604" },
-      { KNOTED_CHAT_LOCAL_BASE_URL: "http://127.0.0.1:65536" },
-      { KNOTED_CHAT_LOCAL_BASE_URL: "http://127.0.0.1:15604?" },
-      { KNOTED_CHAT_LOCAL_BASE_URL: "http://127.0.0.1:15604#" },
-      { KNOTED_CHAT_LOCAL_MODEL: " leading-space" },
-      { KNOTED_CHAT_LOCAL_MODEL: 'bad"\n[extra]' },
-      { KNOTED_CHAT_LOCAL_CREDENTIAL_FILE: "relative-path" },
-      { KNOTED_CHAT_LOCAL_CREDENTIAL_FILE: "/path\\invalid" },
-    ]) {
-      const result = run("bash", [serviceScript, "prepare"], {
-        env: prepareEnv(fixture, { ...valid, ...override }),
-      });
-      assert.equal(result.status, 1, JSON.stringify(Object.keys(override)));
-      assert.match(result.stderr, /KNOTED_CHAT_LOCAL/);
-      assert.doesNotMatch(result.stdout + result.stderr, /must-not-appear/);
-      assert.equal(existsSync(fixture.instanceRoot), false);
+      assert.doesNotMatch(config, /^\[(intelligence|vectors|chat)[.\]]/m);
+      assert.equal(existsSync(join(fixture.instanceRoot, "state/intelligence")), false);
+    } finally {
+      await new Promise((resolveClose) => blocker.close(resolveClose));
     }
   });
 
@@ -403,6 +346,7 @@ describe("prepare", () => {
       const result = run("bash", [serviceScript, "prepare"], { env: prepareEnv(fixture) });
       assert.equal(result.status, 1);
       assert.match(result.stderr, new RegExp(`端口 ${fixture.apiPort} 已被占用`));
+      assert.equal(existsSync(fixture.instanceRoot), false);
     } finally {
       await new Promise((resolveClose) => blocker.close(resolveClose));
     }
@@ -684,46 +628,30 @@ describe("T25 Worker", () => {
   });
 });
 
-describe("Python 固定产物", () => {
+describe("固定产物内容", () => {
   for (const file of [
-    "bin/knoted-intelligence",
-    "share/knoted/intelligence/python/bin/python3.12",
-    "share/knoted/intelligence/python/lib/python3.12/os.py",
-    "share/knoted/intelligence/python/lib/python3.12/site-packages/knoted_intelligence/app.py",
-    "share/knoted/intelligence/python/lib/python3.12/site-packages/docling/document_converter.py",
-    "share/knoted/intelligence/python/lib/python3.12/site-packages/torch/__init__.py",
-    "share/knoted/intelligence/python/lib/python3.12/site-packages/onnxruntime/__init__.py",
-    "share/knoted/intelligence/BUILD.json",
-    "share/knoted/intelligence/requirements.txt",
-    "share/knoted/intelligence/uv.lock",
+    "bin/knoted-api",
+    "bin/knoted-worker",
+    "share/knoted/web/index.html",
+    "share/knoted/migrations/0001_registry.sql",
   ]) {
-    it(`重新生成清单也不能掩盖缺少 ${file}`, async () => {
+    it(`重算清单后仍拒绝缺少 ${file} 的产物`, async () => {
       const fixture = await fullFixture();
-      rmSync(join(fixture.runtimeRoot, file), { force: true });
+      rmSync(join(fixture.runtimeRoot, file));
       writeManifest(fixture.runtimeRoot);
       const result = run("bash", [serviceScript, "prepare"], { env: prepareEnv(fixture) });
-      assert.notEqual(result.status, 0);
-      assert.match(result.stderr, /Python/);
+      assert.equal(result.status, 1, result.stderr);
+      assert.equal(existsSync(fixture.instanceRoot), false);
     });
   }
-});
 
-describe("T47 intelligence", () => {
-  it("固定解释器进程、ready依赖及有界停止配置", () => {
-    const yaml = readFileSync(join(repoRoot, "process-compose.yaml"), "utf8");
-    assert.match(yaml, /\n  knoted-intelligence:/);
-    assert.match(yaml, /command: "exec bash tools\/dev\/pc\/service.sh intelligence"/);
-    assert.match(yaml, /condition: process_healthy/);
-    assert.match(yaml, /timeout_seconds: 30/);
-  });
-  it("degraded JSON 不满足 intelligence readiness", async () => {
+  it("拒绝附带已退役执行入口的产物", async () => {
     const fixture = await fullFixture();
-    const stub = makeTempDir("health-stub");
-    writeExecutable(join(stub, "curl"), "#!/usr/bin/env bash\necho '{\"status\":\"degraded\",\"active_executions\":0}'\n");
-    const result = run("bash", [serviceScript, "probe-intelligence"], {
-      env: prepareEnv(fixture, { PATH: `${stub}:${process.env.PATH}` }),
-    });
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /degraded|未就绪/);
+    writeExecutable(join(fixture.runtimeRoot, "bin/knoted-intelligence"), "#!/usr/bin/env bash\nexit 0\n");
+    writeManifest(fixture.runtimeRoot);
+    const result = run("bash", [serviceScript, "prepare"], { env: prepareEnv(fixture) });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /退役/);
+    assert.equal(existsSync(fixture.instanceRoot), false);
   });
 });

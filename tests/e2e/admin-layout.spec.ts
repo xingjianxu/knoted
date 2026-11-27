@@ -6,8 +6,6 @@ test.use({ baseURL: "http://127.0.0.1:4178" });
 
 const now = "2026-11-19T00:00:00Z";
 const fixtureId = (index: number) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
-const chat = { id: fixtureId(40), title: "布局验收会话", provider: "local", version: 1, created_at: now, updated_at: now };
-const targetMessageId = fixtureId(62);
 
 async function mockWorkspace(page: Page, authenticated = true) {
   let signedIn = authenticated;
@@ -29,7 +27,7 @@ async function mockWorkspace(page: Page, authenticated = true) {
         return route.fulfill({ json: {
           counts: { notes: 10, tasks_open: 0, tasks_due_today: 0, projects_active: 0, files: 0 },
           tasks_by_status: { todo: 0, in_progress: 0, done: 0, cancelled: 0 },
-          recent_tasks: [], due_tasks: [], job_failures: 0, indexing_enabled: false,
+          recent_tasks: [], due_tasks: [], job_failures: 0,
           recent_notes: Array.from({ length: 10 }, (_, index) => ({
             id: fixtureId(index + 10), parent_id: null, title: `最近笔记 ${index + 1}`,
             document: { blocks: [] }, format_version: 1, content_version: 1, position: index,
@@ -55,17 +53,10 @@ async function mockWorkspace(page: Page, authenticated = true) {
       case `/api/v1/tasks/${fixtureId(201)}`:
       case `/api/v1/files/${fixtureId(201)}`:
         return route.fulfill({ status: 404, json: { code: "not_found", message: "不存在" } });
-      case "/api/v1/chat/sessions":
-        return route.fulfill({ json: { items: [chat], next_cursor: null } });
-      case `/api/v1/chat/sessions/${chat.id}`:
-        return route.fulfill({ json: { ...chat, messages: Array.from({ length: 26 }, (_, index) => ({
-          id: fixtureId(index + 42), session_id: chat.id, role: index % 2 === 0 ? "user" : "assistant",
-          body: `验收消息 ${index + 1}`, run_id: fixtureId(100 + Math.floor(index / 2)), incomplete: false, created_at: now,
-        })) } });
       case "/api/v1/search":
         return route.fulfill({ json: { items: [{
-          entity_type: "chat", id: targetMessageId, session_id: chat.id, title: "目标问答消息",
-          snippet: "验收消息 21", updated_at: now, path: null, score: null,
+          entity_type: "note", id: fixtureId(10), title: "最近笔记 1",
+          snippet: "验收资料", updated_at: now, score: null,
         }], next_cursor: null } });
       default:
         throw new Error(`Unexpected request: ${route.request().method()} ${route.request().url()}`);
@@ -109,6 +100,8 @@ test("桌面顶栏可打开全局搜索、通知和账号设置", async ({ page 
   await header.getByRole("button", { name: "全局搜索" }).click();
   await expect(page).toHaveURL((url) => url.pathname === "/search");
   await expect(location.locator('[aria-current="page"]')).toHaveText("搜索");
+  const searchButton = page.getByRole("search", { name: "搜索资料" }).getByRole("button", { name: "搜索" });
+  await expect(searchButton).toHaveCSS("background-color", "rgb(55, 53, 47)");
 
   const notifications = header.getByRole("button", { name: "通知" });
   await notifications.focus();
@@ -206,7 +199,7 @@ test("短视口可逐个 Tab 到所有收起的导航项", async ({ page }) => {
   const nav = page.getByRole("navigation", { name: "主导航" });
   await expect(nav.getByRole("button", { name: "概览" })).toHaveAttribute("aria-current", "page");
   await page.getByRole("link", { name: "跳到主要内容" }).focus();
-  for (const name of ["概览", "笔记", "项目", "事项", "回收站", "文件", "搜索", "问答", "凭据与会话"]) {
+  for (const name of ["概览", "笔记", "项目", "事项", "回收站", "文件", "搜索", "凭据与会话"]) {
     await page.keyboard.press("Tab");
     const item = nav.getByRole("button", { name });
     await expect(item).toBeFocused();
@@ -292,23 +285,13 @@ for (const resize of [false, true]) {
   });
 }
 
-test("搜索跳转到已缓存的问答消息时目标留在视口内", async ({ page }) => {
-  await page.setViewportSize({ width: 1024, height: 640 });
+test("旧文件搜索链接只提交仍受支持的查询参数", async ({ page }) => {
   await mockWorkspace(page);
-  await page.goto(`/chat/${chat.id}`);
-  const message = page.locator(`[data-message-id="${targetMessageId}"]`);
-  await expect(message).toBeAttached();
-  await expect(message).not.toBeInViewport();
-
-  await page.getByRole("navigation", { name: "主导航" }).getByRole("button", { name: "搜索" }).click();
-  await page.getByRole("searchbox", { name: "搜索词" }).fill("验收消息");
-  const searchButton = page.getByRole("search", { name: "搜索资料" }).getByRole("button", { name: "搜索" });
-  await expect(searchButton).toHaveCSS("background-color", "rgb(55, 53, 47)");
-  await searchButton.click();
-  await page.getByRole("link", { name: "目标问答消息" }).click();
-  await expect(page).toHaveURL((url) => url.pathname === `/chat/${chat.id}` && url.searchParams.get("message") === targetMessageId);
-  await expect(message).toBeFocused();
-  await expect(message).toBeInViewport({ ratio: 0.8 });
+  const searchRequest = page.waitForRequest((request) => new URL(request.url()).pathname === "/api/v1/search");
+  await page.goto("/search?q=验收资料&type=file&path=资料&format=txt");
+  const { searchParams } = new URL((await searchRequest).url());
+  expect(Object.fromEntries(searchParams)).toEqual({ q: "验收资料", sort: "relevance", limit: "50" });
+  await expect(page.getByRole("link", { name: "最近笔记 1" })).toHaveAttribute("href", `/notes/${fixtureId(10)}`);
 });
 
 test("未认证用户只看到独立登录页", async ({ page }) => {

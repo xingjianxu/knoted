@@ -16,11 +16,6 @@ in pkgs.testers.runNixOSTest {
     programs.nix-ld.enable = true;
     services.postgresql = {
       enable = true;
-      extensions = ps: [ ps.pgvector ];
-      initialScript = pkgs.writeText "t70-browser-vector.sql" ''
-        \connect template1
-        CREATE EXTENSION vector;
-      '';
       ensureDatabases = [ "knoted" ];
       ensureUsers = [{ name = "knoted"; ensureDBOwnership = true; }];
     };
@@ -30,11 +25,6 @@ in pkgs.testers.runNixOSTest {
       configFile = "/run/t70-private/app.toml";
       instanceRoot = "/var/lib/knoted";
       apiPort = 16602;
-      intelligencePort = 16603;
-      doclingArtifactsDir = "/models/docling";
-      bgeM3Dir = "/models/bge";
-      gpuUuid = null;
-      runtimeLibraries = with pkgs; [ stdenv.cc.cc.lib zlib glib libGL ];
     };
     system.activationScripts.t70.text = ''
       touch /run/t70-browser-vm
@@ -49,8 +39,6 @@ in pkgs.testers.runNixOSTest {
       origin = "https://t70.knoted.test:16601"
       [assets]
       root = "/var/lib/knoted/assets"
-      [intelligence]
-      base_url = "http://127.0.0.1:16603"
       CONFIG
       chown root:knoted /run/t70-private/app.toml
       chmod 0640 /run/t70-private/app.toml
@@ -89,7 +77,6 @@ in pkgs.testers.runNixOSTest {
   testScript = ''
     machine.start()
     machine.wait_for_unit("knoted-worker.service")
-    machine.wait_until_succeeds("curl -fsS http://127.0.0.1:16603/internal/v1/health")
     machine.succeed("""umask 077; mkdir -p /var/lib/t70-tls; cd /var/lib/t70-tls
     openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 \
         -subj /CN=t70-test-ca -keyout ca.key -out ca.crt > /dev/null 2>&1
@@ -104,8 +91,6 @@ in pkgs.testers.runNixOSTest {
     tls = "curl -fsS --noproxy '*' --resolve t70.knoted.test:16601:127.0.0.1 --cacert /var/lib/t70-tls/ca.crt https://t70.knoted.test:16601"
     readiness = tls + "/health/ready | jq -e '.status == \"ready\"'"
     machine.wait_until_succeeds(readiness)
-    machine.succeed("systemctl stop knoted-intelligence")
-    machine.fail("systemctl is-active knoted-intelligence")
     browser = "${browserPython}/bin/python3 ${./test-production-browser.py}"
     pin = "$(cat /var/lib/t70-tls/pin)"
     print(machine.succeed(f"{browser} before-reboot ${package} ${image} {pin}"))
@@ -119,8 +104,6 @@ in pkgs.testers.runNixOSTest {
     assert machine.succeed("cat /proc/sys/kernel/random/boot_id") != boot
     machine.succeed("systemctl start t70-https")
     machine.wait_until_succeeds(readiness)
-    machine.succeed("systemctl stop knoted-intelligence")
-    machine.fail("systemctl is-active knoted-intelligence")
     print(machine.succeed(f"{browser} after-reboot ${package} ${image} {pin}"))
 
     certificate = """openssl s_client -connect 127.0.0.1:16601 -servername t70.knoted.test \

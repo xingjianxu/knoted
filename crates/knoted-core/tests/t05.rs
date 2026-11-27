@@ -307,7 +307,6 @@ async fn t05_1_source_identity_round_trips() {
         (SourceIdentity::File, "file"),
         (SourceIdentity::Project, "project"),
         (SourceIdentity::Task, "task"),
-        (SourceIdentity::ChatMessage, "chat_message"),
     ] {
         assert_eq!(source.as_str(), name);
         assert_eq!(

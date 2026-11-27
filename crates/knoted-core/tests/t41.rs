@@ -207,7 +207,6 @@ async fn t41_recent_sort_limits_and_untruncated_counts_with_no_write_side_effect
         (14, 14, 14, 1, 0)
     );
     assert_eq!(s.job_failures, 2);
-    assert!(!s.indexing_enabled);
     let body = serde_json::to_string(&s).unwrap();
     assert!(!body.contains("PRIVATE"));
     let after: (i64, i64) =

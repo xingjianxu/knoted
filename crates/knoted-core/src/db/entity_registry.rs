@@ -1,6 +1,6 @@
 //! The shared source registry.
 //!
-//! Indexing, entity links and citations need one stable identifier per source
+//! Search and entity links need one stable identifier per source
 //! object. Later cards create the per-module tables and register their rows in
 //! `entity_registry`; this module owns the type tags those rows may carry.
 
@@ -19,17 +19,15 @@ pub enum SourceIdentity {
     File,
     Project,
     Task,
-    ChatMessage,
 }
 
 impl SourceIdentity {
     /// Every accepted identity type, in database constraint order.
-    pub const ALL: [SourceIdentity; 5] = [
+    pub const ALL: [SourceIdentity; 4] = [
         SourceIdentity::Note,
         SourceIdentity::File,
         SourceIdentity::Project,
         SourceIdentity::Task,
-        SourceIdentity::ChatMessage,
     ];
 
     /// The database value of this identity type.
@@ -39,7 +37,6 @@ impl SourceIdentity {
             SourceIdentity::File => "file",
             SourceIdentity::Project => "project",
             SourceIdentity::Task => "task",
-            SourceIdentity::ChatMessage => "chat_message",
         }
     }
 
@@ -50,7 +47,6 @@ impl SourceIdentity {
             "file" => Ok(SourceIdentity::File),
             "project" => Ok(SourceIdentity::Project),
             "task" => Ok(SourceIdentity::Task),
-            "chat_message" => Ok(SourceIdentity::ChatMessage),
             other => Err(DbError::UnknownSourceType(other.to_owned())),
         }
     }

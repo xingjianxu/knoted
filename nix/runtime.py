@@ -9,12 +9,11 @@ from urllib.parse import urlsplit
 
 
 def main():
-    config_file, instance, source, api_port, intelligence_port, rust_only_json, *migration = sys.argv[1:]
+    config_file, instance, source, api_port, rust_only_json, *migration = sys.argv[1:]
     with open(config_file, "rb") as stream:
         config = tomllib.load(stream)
     expected = [
         ("server", "bind", f"127.0.0.1:{api_port}"),
-        ("intelligence", "base_url", f"http://127.0.0.1:{intelligence_port}"),
         ("assets", "root", str(Path(instance) / "assets")),
     ]
     files = config.get("files", {})
@@ -33,9 +32,8 @@ def main():
     resolved_config = Path(config_file).resolve()
     if resolved_config != Path(config_file) and not any(resolved_config.is_relative_to(path) for path in protected):
         sys.exit("a symlinked runtime configuration requires a protected canonical target")
-    providers = config.get("chat", {})
-    sections = [config.get("credentials", {}), providers.get("local", {}), *providers.get("external", {}).values()]
-    secrets = [section["credential_file"] for section in sections if "credential_file" in section]
+    credentials = config.get("credentials", {})
+    secrets = [credentials["credential_file"]] if "credential_file" in credentials else []
     if "jwt_secret_file" in config.get("office", {}):
         secrets.append(config["office"]["jwt_secret_file"])
     for filename in secrets:
@@ -48,8 +46,7 @@ def main():
         sys.exit("runtime TOML must name an existing PostgreSQL database")
     if migration:
         sqlx, migrations = migration
-        # Keep the API port reserved until sqlx exits. The Python TCP port is
-        # already owned by the required systemd socket throughout migration.
+        # Keep the API port reserved until sqlx exits.
         reservation = socket.socket()
         reservation.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:

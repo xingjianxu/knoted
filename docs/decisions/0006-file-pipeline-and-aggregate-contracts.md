@@ -7,7 +7,7 @@
 - Related issues: T39 [#120](https://github.com/xingjianxu/knoted/issues/120)，后续 T41—T50 按卡关联。
 - Related PRs: 初始方案 [#121](https://github.com/xingjianxu/knoted/pull/121)。
 - Supersedes: 无
-- Superseded by: 无
+- Superseded by: [ADR 0014](0014-retire-file-index-rag.md)（后台正文提取与概览的索引状态）
 
 ## 背景与问题
 

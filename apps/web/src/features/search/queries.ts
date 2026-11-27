@@ -8,10 +8,8 @@ export type SearchFilters = Omit<operations["search"]["parameters"]["query"], "c
 
 export const searchTypes = {
   note: "笔记",
-  file: "文件",
   task: "事项",
   project: "项目",
-  chat: "聊天消息",
 } satisfies Record<components["schemas"]["SearchType"], string>;
 
 export const searchSorts = {
@@ -42,13 +40,11 @@ export function validateSearch(search: Record<string, unknown>): SearchFilters {
     updated_from: timestamp.safeParse(search.updated_from).data,
     updated_to: timestamp.safeParse(search.updated_to).data,
     archived: typeof search.archived === "boolean" ? search.archived : undefined,
-    path: text(search.path),
-    format: text(search.format),
     sort: z.enum(searchSortKeys).safeParse(search.sort).data,
   };
 }
 
-const searchTypesKeys = ["note", "file", "task", "project", "chat"] as const;
+const searchTypesKeys = ["note", "task", "project"] as const;
 const searchSortKeys = ["relevance", "updated_desc", "updated_asc"] as const;
 
 export function searchQuery(bundle: QueryClientBundle, filters: SearchFilters, cursor: string | null) {

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useReducer, useRef, type ReactNode } from "react";
+import { useLayoutEffect, useReducer, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, Button, Empty, List, ListItem, Spinner, Status } from "@bixlab/mtone";
 import type { QueryClientBundle } from "../../lib/query";
@@ -25,11 +25,10 @@ export function FileList({ items, selectedId, onSelectFile }: {
   })}</List>;
 }
 
-export function FilesPage({ bundle, fileId, onSelectFile, jobsLink }: {
+export function FilesPage({ bundle, fileId, onSelectFile }: {
   bundle: QueryClientBundle;
   fileId?: string;
   onSelectFile: (id: string | null) => void;
-  jobsLink?: ReactNode;
 }) {
   const [page, dispatch] = useReducer(cursorReducer, undefined, () => createCursorState("files"));
   const list = useQuery(filesQuery(bundle, page.cursor));
@@ -52,10 +51,7 @@ export function FilesPage({ bundle, fileId, onSelectFile, jobsLink }: {
       <FileDetail key={fileId} bundle={bundle} fileId={fileId} onSelectFile={onSelectFile} />
     </div>}
     <section aria-label="文件列表" className={fileId ? "hidden min-w-0 space-y-3 @min-[62rem]/workspace:col-start-1 @min-[62rem]/workspace:row-start-1 @min-[62rem]/workspace:block" : "space-y-3"}>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        {fileId ? <h2 className="section-title">文件</h2> : <h1>文件</h1>}
-        {jobsLink}
-      </div>
+      {fileId ? <h2 className="section-title">文件</h2> : <h1>文件</h1>}
       {list.isPending && <Spinner label="正在读取文件列表" />}
       {list.error && <Alert tone="error" title={list.error.message}><Button onClick={() => void list.refetch()}>重试文件列表</Button></Alert>}
       {list.data && (list.data.items.length > 0 || (!list.isFetching && !list.isError)) && <FileList items={list.data.items} selectedId={fileId} onSelectFile={(id, trigger) => {

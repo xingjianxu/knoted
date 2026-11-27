@@ -80,7 +80,7 @@ async fn t41_dashboard_empty_and_anonymous() {
     assert_eq!(b["recent_notes"], json!([]));
     assert_eq!(b["due_tasks"], json!([]));
     assert_eq!(b["job_failures"], 0);
-    assert_eq!(b["indexing_enabled"], false);
+    assert!(b.get("indexing_enabled").is_none());
     let response = h
         .app
         .clone()

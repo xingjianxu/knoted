@@ -4,8 +4,7 @@
 # 只负责测试应用：渲染运行配置、校验固定产物、准备目录、
 # 执行迁移、运行 API 和 Worker；HTTPS 由宿主共享 Caddy 管理（ADR 0005）。
 # 数据库由宿主用户直接创建（ADR 0004，本机用 trust 认证连接 `xingjian`），
-# 编排只负责跑迁移，不建库、不建角色；Strata、共享模型根、ACME 证书与运行期工具
-# 仍由 /etc/nixos 提供。
+# 编排只负责跑迁移；ACME 证书与运行期工具仍由 /etc/nixos 提供。
 #
 # 所有路径与端口可用环境变量覆盖，默认值即本机测试实例（隔离验证用同样的入口
 # 指向临时根与临时端口）：
@@ -17,9 +16,7 @@
 #   DATABASE_URL          postgres://xingjian@127.0.0.1:5432/knoted_dev
 #   KNOTED_LOG_LEVEL      info
 #   KNOTED_OFFICE_ORIGIN / KNOTED_OFFICE_JWT_SECRET_FILE  可选，必须同时提供；只记录凭据路径
-#   KNOTED_VECTORS_ENABLED=1  启用固定模型向量发布
 #   KNOTED_SEARCH_ENABLED=1 / KNOTED_SEARCH_CREDENTIAL_FILE  启用本机索引；可选 [secrets].meilisearch 凭据文件
-#   KNOTED_CHAT_LOCAL_BASE_URL / KNOTED_CHAT_LOCAL_MODEL / KNOTED_CHAT_LOCAL_CREDENTIAL_FILE  本机模型，可选，必须同时提供
 set -euo pipefail
 # 与 tools/dev/build-artifact.sh 一致：清单排序必须固定字节序，否则 locale 会改变 sort 结果。
 export LC_ALL=C
@@ -50,7 +47,6 @@ runtime_root=${KNOTED_RUNTIME_ROOT:-/data/knoted-dev/runtime/current}
 runtime_root=$(readlink -f -- "$runtime_root" 2>/dev/null || printf '%s' "$runtime_root")
 [ -n "$runtime_root" ] || runtime_root=${KNOTED_RUNTIME_ROOT:-/data/knoted-dev/runtime/current}
 api_port=${KNOTED_API_PORT:-15602}
-intelligence_port=${KNOTED_INTELLIGENCE_PORT:-15603}
 https_port=${KNOTED_HTTPS_PORT:-15601}
 domain=${KNOTED_HTTPS_DOMAIN:-wlab.132140.xyz}
 # 开发/测试库由宿主用户直接创建与管理（ADR 0004）：沿用本机 trust 认证，
@@ -114,29 +110,19 @@ prepare_instance_root() {
 # 拒绝遗漏项、符号链接与特殊文件。
 verify_runtime() {
   test -d "$runtime_root" || die "运行根不存在：$runtime_root"
-  local revision
-  revision=$(cat "$runtime_root/share/knoted/REVISION" 2>/dev/null || true)
-  [[ $revision =~ ^[0-9a-f]{40}$ ]] || die "运行根缺少合法的 share/knoted/REVISION"
+  local marker="$runtime_root/share/knoted/REVISION" revision
+  test -f "$marker" && test ! -L "$marker" || die "运行根缺少合法的 share/knoted/REVISION"
   test -x "$runtime_root/bin/knoted-api" || die "运行根缺少可执行 bin/knoted-api"
   test -x "$runtime_root/bin/knoted-worker" || die "运行根缺少可执行 bin/knoted-worker"
   test -s "$runtime_root/share/knoted/web/index.html" || die "运行根缺少 share/knoted/web/index.html"
   test -n "$(find "$runtime_root/share/knoted/migrations" -maxdepth 1 -name '*.sql' -type f -print -quit 2>/dev/null)" ||
     die "运行根缺少 share/knoted/migrations/*.sql"
-  local python_root="$runtime_root/share/knoted/intelligence" required
-  test -x "$runtime_root/bin/knoted-intelligence" || die "Python 产物缺少可执行入口"
-  test -x "$python_root/python/bin/python3.12" || die "Python 产物缺少固定解释器"
-  for required in BUILD.json requirements.txt uv.lock \
-    python/lib/python3.12/os.py \
-    python/lib/python3.12/site-packages/knoted_intelligence/app.py \
-    python/lib/python3.12/site-packages/knoted_intelligence/guardian.py \
-    python/lib/python3.12/site-packages/knoted_intelligence/supervision.py \
-    python/lib/python3.12/site-packages/knoted_intelligence/parsing/pdf.py \
-    python/lib/python3.12/site-packages/docling/document_converter.py \
-    python/lib/python3.12/site-packages/torch/__init__.py \
-    python/lib/python3.12/site-packages/onnxruntime/__init__.py; do
-    test -s "$python_root/$required" || die "Python 产物缺少 $required"
-  done
+  if [ -e "$runtime_root/bin/knoted-intelligence" ] || [ -e "$runtime_root/share/knoted/intelligence" ]; then
+    die "运行根包含已退役的 intelligence 产物"
+  fi
   verify_runtime_manifest
+  revision=$(cat "$marker")
+  [[ $revision =~ ^[0-9a-f]{40}$ ]] || die "运行根缺少合法的 share/knoted/REVISION"
   printf '%s' "$revision"
 }
 
@@ -144,6 +130,9 @@ verify_runtime_manifest() {
   local unexpected actual
   test -f "$runtime_root/SHA256SUMS" && test -s "$runtime_root/SHA256SUMS" && test ! -L "$runtime_root/SHA256SUMS" ||
     die "运行根缺少普通文件 SHA256SUMS"
+  unexpected=$(cd "$runtime_root" && find . -mindepth 1 -maxdepth 1 ! -name bin ! -name share ! -name SHA256SUMS -print -quit) ||
+    die "无法枚举运行根"
+  test -z "$unexpected" || die "运行根包含意外的顶层条目：$unexpected"
   unexpected=$(cd "$runtime_root" && find bin share ! -type d ! -type f -print -quit) ||
     die "无法枚举运行根文件"
   test -z "$unexpected" || die "运行根含非普通文件（拒绝符号链接与特殊文件）：$unexpected"
@@ -182,12 +171,11 @@ check_ports() {
     log "跳过端口占用检查（KNOTED_ALLOW_BUSY_PORTS=1）"
     return 0
   fi
-  local port
-  for port in "$api_port" "$intelligence_port"; do
-    if ss -H -ltn "sport = :$port" | grep -q .; then
-      die "端口 $port 已被占用；先停止占用者（本实例用 pnpm pc down）"
-    fi
-  done
+  local listeners
+  listeners=$(ss -H -ltn "sport = :$api_port") || die "无法核对 API 端口 $api_port"
+  if [ -n "$listeners" ]; then
+    die "端口 $api_port 已被占用；先停止占用者（本实例用 pnpm pc down）"
+  fi
 }
 
 office_config_block() {
@@ -222,61 +210,20 @@ search_config_block() {
   fi
 }
 
-chat_local_config_block() {
-  local base_url=${KNOTED_CHAT_LOCAL_BASE_URL:-} model=${KNOTED_CHAT_LOCAL_MODEL:-}
-  local path=${KNOTED_CHAT_LOCAL_CREDENTIAL_FILE:-}
-  if [[ -z $base_url && -z $model && -z $path ]]; then
-    return 0
-  fi
-  if [[ -z $base_url || -z $model || $path != /* ]]; then
-    die "KNOTED_CHAT_LOCAL_BASE_URL、KNOTED_CHAT_LOCAL_MODEL 与绝对 KNOTED_CHAT_LOCAL_CREDENTIAL_FILE 必须一起提供"
-  fi
-  local value
-  for value in "$base_url" "$model" "$path"; do
-    if [[ $value == *['"\']* || $value =~ [[:cntrl:]] ]]; then
-      die "KNOTED_CHAT_LOCAL 配置包含不安全的 TOML 字符"
-    fi
-  done
-
-  # Use the WHATWG URL parsing already available in pcwrap's Node runtime.
-  # Suppress parser diagnostics because a malformed URL could include userinfo.
-  command -v node >/dev/null || die "KNOTED_CHAT_LOCAL 配置需要 node 校验回环 URL"
-  if ! node - >/dev/null 2>&1 <<'JS'
-const url = new URL(process.env.KNOTED_CHAT_LOCAL_BASE_URL);
-const model = process.env.KNOTED_CHAT_LOCAL_MODEL;
-const loopback = url.hostname === "[::1]" || /^127(?:\.[0-9]+){3}$/.test(url.hostname);
-if (!loopback || !["http:", "https:"].includes(url.protocol) || url.username || url.password ||
-    /[?#]/.test(url.href) || /\p{Cc}|^\p{White_Space}|\p{White_Space}$/u.test(model)) {
-  process.exitCode = 1;
-}
-JS
-  then
-    die "KNOTED_CHAT_LOCAL_BASE_URL 必须是无凭据、查询和片段的 HTTP(S) 回环地址，KNOTED_CHAT_LOCAL_MODEL 不得含控制字符或首尾空白"
-  fi
-
-  printf '\n[chat.local]\nbase_url = "%s"\nmodel = "%s"\ncredential_file = "%s"\n' "$base_url" "$model" "$path"
-}
-
 command_prepare() {
-  # 顺序：守卫 → 验产物 → 验依赖 → 建目录 → 渲染，失败时不留半个实例。
+  # 先校验产物、配置参数和端口，再创建目录和渲染配置。
   guard_worktree
   local revision
   revision=$(verify_runtime)
   log "固定产物 revision=$revision"
   require_tools
-  local office search chat_local vectors=''
+  local office search
   office=$(office_config_block)
   search=$(search_config_block)
-  chat_local=$(chat_local_config_block)
-  case "${KNOTED_VECTORS_ENABLED:-0}" in
-    0) ;;
-    1) vectors=$'\n[vectors]\nenabled = true' ;;
-    *) die "KNOTED_VECTORS_ENABLED 必须是 0 或 1" ;;
-  esac
+  check_ports
   prepare_instance_root
   install -d -m 0700 "$config_dir" "$state_dir" \
-    "$logs_dir" "$assets_dir" "$staging_dir" "$backups_dir" \
-    "$state_dir/intelligence" "$instance_root/cache/intelligence" "$instance_root/tmp/intelligence"
+    "$logs_dir" "$assets_dir" "$staging_dir" "$backups_dir"
 
   if [ -L "$config_file" ]; then
     log "替换旧的 Nix store 配置链接：$config_file"
@@ -284,7 +231,6 @@ command_prepare() {
 
   render_template "$script_dir/knoted.toml.tmpl" "$config_file" \
     @API_PORT@ "$api_port" \
-    @INTELLIGENCE_PORT@ "$intelligence_port" \
     @DATABASE_URL@ "$database_url" \
     @DOMAIN@ "$domain" \
     @HTTPS_PORT@ "$https_port" \
@@ -292,11 +238,8 @@ command_prepare() {
     @ASSETS_ROOT@ "$instance_root/assets" \
     @STAGING_ROOT@ "$instance_root/staging" \
     @OFFICE_CONFIG@ "$office" \
-    @SEARCH_CONFIG@ "$search" \
-    @VECTORS_CONFIG@ "$vectors" \
-    @CHAT_LOCAL_CONFIG@ "$chat_local"
+    @SEARCH_CONFIG@ "$search"
 
-  check_ports
   log "prepare 完成：配置 $config_file；HTTPS 由宿主 Caddy 管理"
 }
 
@@ -324,34 +267,6 @@ command_worker() {
   exec "$runtime_root/bin/knoted-worker" --config "$config_file"
 }
 
-command_intelligence() {
-  guard_worktree
-  test -r "$config_file" || die "缺少运行配置；先完成 prepare"
-  test -d "${KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR:-}" || die "缺少 Docling 只读模型根配置"
-  test -d "${KNOTED_INTELLIGENCE_BGE_M3_DIR:-}" || die "缺少 BGE-M3 只读模型根配置"
-  # Whitelist the child environment: no PostgreSQL credentials or test hooks.
-  exec env -i PATH="$PATH" HOME="$state_dir/intelligence" \
-    NIX_LD="${NIX_LD:-}" NIX_LD_LIBRARY_PATH="${NIX_LD_LIBRARY_PATH:-}" \
-    LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" \
-    KNOTED_INTELLIGENCE_HOST=127.0.0.1 KNOTED_INTELLIGENCE_PORT="$intelligence_port" \
-    KNOTED_INTELLIGENCE_STATE_DIR="$state_dir/intelligence" \
-    KNOTED_INTELLIGENCE_STAGING_DIR="$staging_dir" \
-    XDG_CACHE_HOME="$instance_root/cache/intelligence" TMPDIR="$instance_root/tmp/intelligence" \
-    KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR="$KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR" \
-    KNOTED_INTELLIGENCE_BGE_M3_DIR="$KNOTED_INTELLIGENCE_BGE_M3_DIR" \
-    KNOTED_INTELLIGENCE_DOCLING_DEVICE=cpu KNOTED_INTELLIGENCE_GPU_SLOTS=1 \
-    CUDA_VISIBLE_DEVICES= KNOTED_EMBED_GPU_UUID= \
-    "$runtime_root/bin/knoted-intelligence"
-}
-
-command_probe_intelligence() {
-  local response
-  response=$(curl -fsS --max-time 3 "http://127.0.0.1:$intelligence_port/internal/v1/health") || return 1
-  "$runtime_root/share/knoted/intelligence/python/bin/python3.12" -I -B -c \
-    'import json,sys; data=json.loads(sys.argv[1]); sys.exit(0 if data.get("status")=="ok" else 1)' "$response" || \
-    die "intelligence 未就绪（degraded 或无效响应）"
-}
-
 command_probe_api() {
   curl -fsS --max-time 3 "http://127.0.0.1:$api_port/health/ready" >/dev/null
 }
@@ -369,16 +284,14 @@ command_paths() {
 command=${1:-}
 case "$command" in
 prepare) command_prepare ;;
-verify-manifest) verify_runtime_manifest ;;
+verify-artifact) verify_runtime ;;
 migrate) command_migrate ;;
 api) command_api ;;
 worker) command_worker ;;
-intelligence) command_intelligence ;;
-probe-intelligence) command_probe_intelligence ;;
 probe-api) command_probe_api ;;
 paths) command_paths ;;
 *)
-  echo "usage: service.sh {prepare|verify-manifest|migrate|api|worker|intelligence|probe-api|probe-intelligence|paths}" >&2
+  echo "usage: service.sh {prepare|verify-artifact|migrate|api|worker|probe-api|paths}" >&2
   exit 2
   ;;
 esac

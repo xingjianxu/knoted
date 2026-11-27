@@ -15,30 +15,24 @@ const ENGINE_BATCH: usize = 100;
 #[serde(rename_all = "snake_case")]
 pub enum SearchType {
     Note,
-    File,
     Task,
     Project,
-    Chat,
 }
 
 impl SearchType {
     fn source(self) -> SourceType {
         match self {
             Self::Note => SourceType::Note,
-            Self::File => SourceType::File,
             Self::Task => SourceType::Task,
             Self::Project => SourceType::Project,
-            Self::Chat => SourceType::ChatMessage,
         }
     }
 
     fn from_source(source: SourceType) -> Self {
         match source {
             SourceType::Note => Self::Note,
-            SourceType::File => Self::File,
             SourceType::Task => Self::Task,
             SourceType::Project => Self::Project,
-            SourceType::ChatMessage => Self::Chat,
         }
     }
 }
@@ -73,8 +67,6 @@ pub struct SearchFilters {
     pub updated_from: Option<DateTime<Utc>>,
     pub updated_to: Option<DateTime<Utc>>,
     pub archived: Option<bool>,
-    pub path: Option<String>,
-    pub format: Option<String>,
     pub sort: SearchSort,
 }
 
@@ -93,10 +85,7 @@ pub struct SearchHit {
     pub title: String,
     pub snippet: String,
     pub updated_at: DateTime<Utc>,
-    pub path: Option<String>,
     pub score: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<Uuid>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -151,18 +140,16 @@ async fn visible(
     filters: &SearchFilters,
 ) -> Result<Vec<VisibleHit>, sqlx::Error> {
     let keys: Vec<&str> = candidates.iter().map(|entry| entry.key.as_str()).collect();
-    // Projection metadata can lag file moves, tagging, and relation changes
-    // which leave the content version intact. Read their current values here.
+    // Read current tags and relations, which can change without republishing the source.
     sqlx::query_as(
         r#"
         WITH tag_links AS (
             SELECT entity_id, tag_id FROM note_tags
-            UNION ALL SELECT entity_id, tag_id FROM file_tags
             UNION ALL SELECT entity_id, tag_id FROM project_tags
             UNION ALL SELECT entity_id, tag_id FROM task_tags
         )
         SELECT hits.ordinality, source.source_type, source.source_id,
-               live.title, live.path, source.updated_at, live.session_id
+               live.title, source.updated_at
         FROM unnest($1::text[]) WITH ORDINALITY hits(document_key, ordinality)
         JOIN fulltext_publications publication ON publication.document_key=hits.document_key
           AND publication.engine='meilisearch' AND publication.index_uid=$2
@@ -170,50 +157,34 @@ async fn visible(
         JOIN source_documents source ON source.id=publication.document_id
           AND source.superseded_at IS NULL AND NOT source.deleted
         JOIN LATERAL (
-            SELECT n.title, NULL::text AS path,
-                   false AS archived, NULL::uuid AS project_id, NULL::uuid AS session_id
+            SELECT n.title, false AS archived, NULL::uuid AS project_id
             FROM notes n
             WHERE source.source_type='note' AND n.id=source.source_id
               AND n.deleted_at IS NULL AND n.content_version=source.source_version
             UNION ALL
-            SELECT regexp_replace(f.relative_path, '^.*/', ''), f.relative_path,
-                   false, NULL::uuid, NULL::uuid
-            FROM file_sources f
-            WHERE source.source_type='file' AND f.id=source.source_id
-              AND f.status='present' AND f.content_fresh
-              AND f.content_version=source.source_version
-            UNION ALL
-            SELECT p.title, NULL::text, p.archived_at IS NOT NULL, p.id, NULL::uuid
+            SELECT p.title, p.archived_at IS NOT NULL, p.id
             FROM projects p
             WHERE source.source_type='project' AND p.id=source.source_id
               AND p.deleted_at IS NULL AND p.version=source.source_version
             UNION ALL
-            SELECT t.title, NULL::text, t.archived_at IS NOT NULL, t.project_id, NULL::uuid
+            SELECT t.title, t.archived_at IS NOT NULL, t.project_id
             FROM tasks t
             WHERE source.source_type='task' AND t.id=source.source_id
               AND t.deleted_at IS NULL AND t.version=source.source_version
-            UNION ALL
-            SELECT s.title, NULL::text, false, NULL::uuid, s.id
-            FROM chat_messages m JOIN chat_sessions s ON s.id=m.session_id
-            WHERE source.source_type='chat_message' AND m.id=source.source_id
-              AND m.deleted_at IS NULL AND s.deleted_at IS NULL AND NOT m.incomplete
-              AND m.content_version=source.source_version
         ) live ON true
         WHERE ($3::text IS NULL OR source.source_type=$3)
           AND ($4::timestamptz IS NULL OR source.updated_at >= $4)
           AND ($5::timestamptz IS NULL OR source.updated_at <= $5)
           AND ($6::bool IS NULL OR live.archived=$6)
-          AND ($7::text IS NULL OR live.path=$7 OR starts_with(live.path, $7 || '/'))
-          AND ($8::text IS NULL OR lower(substring(live.path FROM '\.([^./]+)$'))=$8)
-          AND ($9::uuid IS NULL OR (EXISTS (
-                  SELECT 1 FROM projects p WHERE p.id=$9 AND p.deleted_at IS NULL
-              ) AND (live.project_id=$9 OR EXISTS (
+          AND ($7::uuid IS NULL OR (EXISTS (
+                  SELECT 1 FROM projects p WHERE p.id=$7 AND p.deleted_at IS NULL
+              ) AND (live.project_id=$7 OR EXISTS (
                   SELECT 1 FROM entity_links l
-                  WHERE (l.source_id=source.source_id AND l.target_id=$9)
-                     OR (l.source_id=$9 AND l.target_id=source.source_id)
+                  WHERE (l.source_id=source.source_id AND l.target_id=$7)
+                     OR (l.source_id=$7 AND l.target_id=source.source_id)
               ))))
           AND NOT EXISTS (
-              SELECT 1 FROM unnest($10::uuid[]) requested(tag_id)
+              SELECT 1 FROM unnest($8::uuid[]) requested(tag_id)
               WHERE NOT EXISTS (
                   SELECT 1 FROM tag_links link JOIN tags tag ON tag.id=link.tag_id
                   WHERE link.entity_id=source.source_id AND link.tag_id=requested.tag_id
@@ -229,8 +200,6 @@ async fn visible(
     .bind(filters.updated_from)
     .bind(filters.updated_to)
     .bind(filters.archived)
-    .bind(&filters.path)
-    .bind(&filters.format)
     .bind(filters.project)
     .bind(&filters.tags)
     .fetch_all(ctx.pool())
@@ -243,9 +212,7 @@ struct VisibleHit {
     source_type: String,
     source_id: Uuid,
     title: String,
-    path: Option<String>,
     updated_at: DateTime<Utc>,
-    session_id: Option<Uuid>,
 }
 
 /// Searches the active document index, with a query-bound engine offset.
@@ -266,24 +233,11 @@ pub async fn search(ctx: &AppContext, input: SearchQuery) -> Result<Page<SearchH
             .updated_from
             .zip(filters.updated_to)
             .is_some_and(|(from, to)| from > to)
-        || filters
-            .path
-            .as_ref()
-            .is_some_and(|value| value.len() > 4096 || value.contains('\0'))
-        || filters
-            .format
-            .as_ref()
-            .is_some_and(|value| value.len() > 32 || value.contains('\0'))
     {
         return Err(DomainError::InvalidQuery);
     }
     filters.tags.sort_unstable();
     filters.tags.dedup();
-    filters.path = filters
-        .path
-        .map(|path| path.trim_end_matches('/').to_owned())
-        .filter(|path| !path.is_empty());
-    filters.format = filters.format.map(|format| format.to_ascii_lowercase());
     let filter_bytes =
         serde_json::to_vec(&(&ctx.search().index_uid, &filters)).expect("search scope serializes");
     let scope = format!("{:x}", Sha256::digest(&filter_bytes));
@@ -303,9 +257,7 @@ pub async fn search(ctx: &AppContext, input: SearchQuery) -> Result<Page<SearchH
             "deleted = false AND source_type = \"{}\"",
             kind.source().as_str()
         ),
-        None => {
-            "deleted = false AND source_type IN [file, note, project, task, chat_message]".into()
-        }
+        None => "deleted = false AND source_type IN [note, project, task]".into(),
     };
     while offset < MAX_SEARCH_HITS {
         let count = ENGINE_BATCH.min(MAX_SEARCH_HITS - offset);
@@ -338,9 +290,7 @@ pub async fn search(ctx: &AppContext, input: SearchQuery) -> Result<Page<SearchH
                 title: entry.title,
                 snippet: candidate.formatted.body.chars().take(600).collect(),
                 updated_at: entry.updated_at,
-                path: entry.path,
                 score: candidate.score,
-                session_id: entry.session_id,
             });
         }
         if candidates.len() < count {
@@ -358,7 +308,6 @@ struct SourceEvent {
     source_id: Uuid,
     #[serde(alias = "content_version")]
     source_version: i64,
-    extraction_id: Option<Uuid>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -369,7 +318,6 @@ struct ProjectionRow {
     project_id: Option<Uuid>,
     archived: bool,
     deleted: bool,
-    path: Option<String>,
     updated_at: DateTime<Utc>,
 }
 
@@ -387,41 +335,25 @@ async fn source_document(
         SourceType::Note => {
             "SELECT title, '' AS body, CASE WHEN deleted_at IS NULL THEN document END AS document,
                     NULL::uuid AS project_id, false AS archived, deleted_at IS NOT NULL AS deleted,
-                    NULL::text AS path, updated_at
+                    updated_at
              FROM notes WHERE id=$1 AND content_version=$2"
         }
         SourceType::Project => {
             "SELECT title, CASE WHEN deleted_at IS NULL THEN COALESCE(description, '') ELSE '' END AS body,
                     NULL::jsonb AS document, id AS project_id, archived_at IS NOT NULL AS archived,
-                    deleted_at IS NOT NULL AS deleted, NULL::text AS path, updated_at
+                    deleted_at IS NOT NULL AS deleted, updated_at
              FROM projects WHERE id=$1 AND version=$2"
         }
         SourceType::Task => {
             "SELECT title, CASE WHEN deleted_at IS NULL THEN COALESCE(description, '') ELSE '' END AS body,
                     NULL::jsonb AS document, project_id, archived_at IS NOT NULL AS archived,
-                    deleted_at IS NOT NULL AS deleted, NULL::text AS path, updated_at
+                    deleted_at IS NOT NULL AS deleted, updated_at
              FROM tasks WHERE id=$1 AND version=$2"
         }
-        SourceType::File => {
-            "SELECT regexp_replace(source.relative_path, '^.*/', '') AS title,
-                    COALESCE((SELECT string_agg(block->>'text', E'\\n' ORDER BY ord)
-                      FROM jsonb_array_elements(extraction.blocks) WITH ORDINALITY blocks(block, ord)
-                    ), '') AS body, NULL::jsonb AS document, NULL::uuid AS project_id,
-                    false AS archived, false AS deleted, source.relative_path AS path, source.updated_at
-             FROM file_sources source JOIN file_extractions extraction
-               ON extraction.source_id=source.id AND extraction.content_version=source.content_version
-             WHERE source.id=$1 AND source.content_version=$2 AND extraction.id=$3"
-        }
-        SourceType::ChatMessage => {
-            return super::chat_projection::document(tx, event.source_id, event.source_version).await;
-        }
     };
-    let mut query = sqlx::query_as::<_, ProjectionRow>(sql)
+    let query = sqlx::query_as::<_, ProjectionRow>(sql)
         .bind(event.source_id)
         .bind(event.source_version);
-    if source == SourceType::File {
-        query = query.bind(event.extraction_id);
-    }
     let Some(mut row) = query.fetch_optional(&mut **tx).await? else {
         // The source was removed, or a newer version has its own event.
         return Ok(None);
@@ -461,20 +393,12 @@ async fn source_document(
         }
     }
 
-    // T53 bounds the document projection. Retain the full text in the source
-    // and extracted blocks so downstream chunking can operate independently.
+    // Bound the projection while preserving the original source text.
     if row.body.len() > meili::MAX_BODY_BYTES {
         row.body
             .truncate(row.body.floor_char_boundary(meili::MAX_BODY_BYTES));
     }
 
-    let format = row.path.as_ref().and_then(|path| {
-        std::path::Path::new(path)
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .filter(|ext| ext.len() <= 32)
-            .map(str::to_ascii_lowercase)
-    });
     Ok(Some(meili::SourceDocument {
         source_type: source,
         source_id: event.source_id,
@@ -485,8 +409,6 @@ async fn source_document(
         tags: Vec::new(), // Association-only changes are read from PG.
         archived: row.archived,
         deleted: row.deleted,
-        path: row.path,
-        format,
         updated_at: row.updated_at,
     }))
 }
@@ -502,7 +424,7 @@ pub async fn project_pending(ctx: &AppContext) -> Result<usize, meili::DomainErr
         let mut tx = ctx.pool().begin().await?;
         let pending: Option<(Uuid, String, serde_json::Value)> = sqlx::query_as(
             "SELECT id, topic, payload FROM outbox WHERE published_at IS NULL
-             AND topic IN ('note.changed', 'project.changed', 'task.changed', 'file.extracted', 'chat.changed')
+             AND topic IN ('note.changed', 'project.changed', 'task.changed')
              ORDER BY created_at, id LIMIT 1 FOR UPDATE SKIP LOCKED",
         )
         .fetch_optional(&mut *tx)
@@ -515,8 +437,6 @@ pub async fn project_pending(ctx: &AppContext) -> Result<usize, meili::DomainErr
             "note.changed" => SourceType::Note,
             "project.changed" => SourceType::Project,
             "task.changed" => SourceType::Task,
-            "file.extracted" => SourceType::File,
-            "chat.changed" => SourceType::ChatMessage,
             _ => unreachable!("outbox query restricts topics"),
         };
         match serde_json::from_value(payload) {

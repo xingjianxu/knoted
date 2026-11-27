@@ -19,11 +19,8 @@ pkgs.runCommand "knoted-${builtins.substring 0 12 revision}" {
   cmp SHA256SUMS "$TMPDIR/actual-sums"
   test -x bin/knoted-api
   test -x bin/knoted-worker
-  test -x bin/knoted-intelligence
-  test -x share/knoted/intelligence/python/bin/python3.12
-  test -s share/knoted/intelligence/requirements.txt
-  test -s share/knoted/intelligence/python/lib/python3.12/site-packages/knoted_intelligence/app.py
-  ${pkgs.python3}/bin/python3 ${./verify-intelligence.py} '${revision}'
+  test ! -e bin/knoted-intelligence
+  test ! -e share/knoted/intelligence
   test -s share/knoted/web/index.html
   test -n "$(find share/knoted/migrations -maxdepth 1 -name '*.sql' -type f -print -quit)"
   mkdir -p "$out"

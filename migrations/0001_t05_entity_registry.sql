@@ -11,6 +11,6 @@ CREATE TABLE entity_registry (
     entity_type text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT entity_registry_entity_type_check CHECK (
-        entity_type IN ('note', 'file', 'project', 'task', 'chat_message')
+        entity_type IN ('note', 'file', 'project', 'task')
     )
 );

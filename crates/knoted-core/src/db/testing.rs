@@ -74,7 +74,7 @@ impl TestDb {
         let guard = SchemaGuard::new(url, schema.clone());
 
         // `public` stays on the path so extension types installed there
-        // (pgvector `vector`, pg_trgm) remain visible to schema-scoped tests.
+        // remain visible to schema-scoped tests.
         let search_path = format!("SET search_path TO {schema}, public");
         let pool = PgPoolOptions::new()
             .max_connections(2)

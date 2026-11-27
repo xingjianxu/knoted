@@ -76,8 +76,6 @@ impl Fixture {
                 tags: Vec::new(),
                 archived: false,
                 deleted: false,
-                path: None,
-                format: None,
                 updated_at: note.updated_at,
             },
         )
@@ -136,6 +134,51 @@ impl Fixture {
             );
         }
         self.db.drop().await;
+    }
+}
+
+#[tokio::test]
+async fn search_rejects_retired_file_and_chat_filters() {
+    let fixture = Fixture::new().await;
+    for query in [
+        "q=report&type=file",
+        "q=report&type=chat",
+        "q=report&path=archive",
+        "q=report&format=pdf",
+    ] {
+        let (status, _) = fixture.search(query).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
+    }
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn retired_application_routes_are_unavailable() {
+    let fixture = Fixture::new().await;
+    let mut statuses = Vec::new();
+    for (method, endpoint) in [
+        ("GET", "/api/v1/chat/sessions"),
+        ("GET", "/api/v1/jobs"),
+        ("POST", "/api/v1/jobs/scan"),
+    ] {
+        let response = fixture
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(endpoint)
+                    .header("cookie", &fixture.cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        statuses.push((endpoint, response.status()));
+    }
+    fixture.finish().await;
+    for (endpoint, status) in statuses {
+        assert_eq!(status, StatusCode::NOT_FOUND, "{endpoint}");
     }
 }
 
@@ -202,7 +245,7 @@ async fn t54_2_cursor_is_bound_to_current_filters() {
 }
 
 #[tokio::test]
-async fn t54_3_only_latest_fulltext_is_visible_without_vectors() {
+async fn t54_3_only_latest_fulltext_is_visible() {
     let fixture = Fixture::new().await;
     let note = fixture.create_note("First title").await;
     fixture.publish(&note, "obsolete").await;
@@ -387,74 +430,4 @@ async fn t54_6_updated_sort_takes_precedence_over_relevance_within_one_second() 
     assert_eq!(descending.1["items"][0]["id"], new.id.to_string());
     assert_eq!(ascending.0, StatusCode::OK);
     assert_eq!(ascending.1["items"][0]["id"], old.id.to_string());
-}
-
-#[tokio::test]
-async fn t54_7_only_fresh_file_content_with_current_path_is_returned() {
-    let fixture = Fixture::new().await;
-    let pool = fixture.ctx.pool();
-    let root: Uuid = sqlx::query_scalar(
-        "INSERT INTO file_roots(id,configured_path) VALUES(gen_random_uuid(),'/unavailable') RETURNING id",
-    ).fetch_one(pool).await.unwrap();
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO entity_registry(id,entity_type) VALUES(gen_random_uuid(),'file') RETURNING id",
-    )
-    .fetch_one(pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO file_sources(id,root_id,relative_path,device,inode,size,mtime_ns,ctime_ns,nlink,
-                                  sha256,content_version,version,status,observation,last_seen_at,content_fresh)
-         VALUES($1,$2,'archive/Quarter.pdf',1,2,3,4,5,1,repeat('a',64),1,1,'present','{}',now(),true)",
-    ).bind(id).bind(root).execute(pool).await.unwrap();
-    let job: Uuid = sqlx::query_scalar(
-        "INSERT INTO jobs(kind,state) VALUES('fixture.extract','succeeded') RETURNING id",
-    )
-    .fetch_one(pool)
-    .await
-    .unwrap();
-    let extraction: Uuid = sqlx::query_scalar(
-        "INSERT INTO file_extractions(source_id,content_version,input_sha256,parser_revision,options_hash,job_id,blocks)
-         VALUES($1,1,repeat('a',64),'fixture',repeat('b',64),$2,$3) RETURNING id",
-    ).bind(id).bind(job).bind(json!([{"text":"quarterly projections"}])).fetch_one(pool).await.unwrap();
-    sqlx::query("INSERT INTO outbox(job_id,topic,payload) VALUES($1,'file.extracted',$2)")
-        .bind(job)
-        .bind(json!({"source_id":id, "source_version":1, "extraction_id":extraction}))
-        .execute(pool)
-        .await
-        .unwrap();
-    knoted_core::search::service::project_pending(&fixture.ctx)
-        .await
-        .unwrap();
-    fixture.run_publication().await;
-
-    let original = fixture
-        .search("q=quarterly&path=archive&format=pdf&type=file")
-        .await;
-    sqlx::query("UPDATE file_sources SET relative_path='current/Quarter.pdf' WHERE id=$1")
-        .bind(id)
-        .execute(pool)
-        .await
-        .unwrap();
-    let old_path = fixture
-        .search("q=quarterly&path=archive&format=pdf&type=file")
-        .await;
-    let new_path = fixture
-        .search("q=quarterly&path=current&format=pdf&type=file")
-        .await;
-    sqlx::query("UPDATE file_sources SET content_fresh=false WHERE id=$1")
-        .bind(id)
-        .execute(pool)
-        .await
-        .unwrap();
-    let stale = fixture.search("q=quarterly&type=file").await;
-    fixture.finish().await;
-
-    let empty = (StatusCode::OK, json!({"items":[],"next_cursor":null}));
-    assert_eq!(original.0, StatusCode::OK);
-    assert_eq!(original.1["items"][0]["path"], "archive/Quarter.pdf");
-    assert_eq!(old_path, empty);
-    assert_eq!(new_path.0, StatusCode::OK);
-    assert_eq!(new_path.1["items"][0]["path"], "current/Quarter.pdf");
-    assert_eq!(stale, empty);
 }
