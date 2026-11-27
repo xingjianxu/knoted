@@ -29,8 +29,28 @@ function FileEditor({ bundle, source, onSelectFile }: {
     const [tagPage, setTagPage] = useState<string | null>(null), [tagNames, setTagNames] = useState<Record<string, string>>({});
     const [preview, setPreview] = useState<{ file: FileSource; stale: boolean } | null>(null);
     const previewEntry = useRef<HTMLButtonElement | null>(null);
+    const pendingPreviewFocus = useRef<HTMLButtonElement | null>(null);
     const lifetime = useRef<AbortController | null>(null);
     useEffect(() => { const owner = new AbortController(); lifetime.current = owner; return () => { owner.abort(); }; }, []);
+    useEffect(() => {
+        const entry = pendingPreviewFocus.current;
+        if (!entry || preview)
+            return;
+        const doc = entry.ownerDocument;
+        if (revoked || !entry.isConnected || doc.activeElement !== doc.body) {
+            pendingPreviewFocus.current = null;
+            return;
+        }
+        if (busy) {
+            // A new focus target cancels the pending return even if it blurs later.
+            const cancel = () => { pendingPreviewFocus.current = null; };
+            doc.addEventListener("focusin", cancel, { once: true });
+            return () => doc.removeEventListener("focusin", cancel);
+        }
+        pendingPreviewFocus.current = null;
+        if (!entry.disabled)
+            entry.focus();
+    }, [busy, preview, revoked]);
     const noteChanged = note !== (base.note ?? "");
     const tagsChanged = !same(tags, base.tag_ids);
     const dirty = noteChanged || tagsChanged;
@@ -47,6 +67,21 @@ function FileEditor({ bundle, source, onSelectFile }: {
         setTagNames(old => ({ ...old, ...Object.fromEntries(options.data!.items.map(tag => [tag.id, tag.name])) }));
     }
     const active = (owner: AbortController) => !owner.signal.aborted;
+    function closePreview() {
+        setPreview(null);
+        const owner = lifetime.current;
+        const entry = previewEntry.current;
+        if (!owner || !active(owner) || !entry)
+            return;
+        if (busy) {
+            pendingPreviewFocus.current = entry;
+            return;
+        }
+        queueMicrotask(() => {
+            if (active(owner) && entry.isConnected && !entry.disabled)
+                entry.focus();
+        });
+    }
     function failure(e: unknown, owner: AbortController) { if (!active(owner))
         return; if (e instanceof ApiRequestError && e.status === 401) {
         owner.abort();
@@ -261,17 +296,9 @@ function FileEditor({ bundle, source, onSelectFile }: {
         </div>
         <Paragraph muted className="wrap-anywhere">{source.relative_path}</Paragraph>
       </header>
- <FilePreview api={bundle.api} file={preview?.file ?? null} staleDownload={preview?.stale} open={preview !== null} onDownload={selected => download(selected, true)} onOpenChange={open => {
-        if (open) return;
-        setPreview(null);
-        const owner = lifetime.current;
-        // The business opener can disappear on navigation/session loss. Never
-        // move focus back into a different file or an expired session.
-        queueMicrotask(() => {
-            const entry = previewEntry.current;
-            if (owner && active(owner) && entry?.isConnected && !entry.disabled) entry.focus();
-        });
-    }}/>
+      <FilePreview api={bundle.api} file={preview?.file ?? null} staleDownload={preview?.stale} open={preview !== null} onDownload={selected => download(selected, true)} onOpenChange={open => {
+          if (!open) closePreview();
+      }}/>
 
       {notice && <p role="status">{notice}</p>}
       {error && <Alert tone="error">{error}</Alert>}

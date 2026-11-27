@@ -247,6 +247,54 @@ it("B missing sources expose a disabled preview action and never request content
     expect(await screen.findByRole("button",{name:"预览文件"})).toBeDisabled();
     expect(h.requests.some(r=>r.url.endsWith("/content"))).toBe(false);
 });
+it.each(["button", "Escape", "moved focus", "changed file", "unauthorized"])(
+    "only restores the preview opener when a pending download leaves it available (%s)",
+    async (method) => {
+        const download = deferred<Response>();
+        let contentRequests = 0;
+        vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+        const h = detailHarness(undefined, () => ++contentRequests === 1
+            ? response(enc.encode("preview text")) : download.promise);
+        const { opener, dialog } = await openDetailPreview();
+        await within(dialog).findByLabelText("文件文本");
+        const action = within(dialog).getByRole("button", { name: "下载原文件" });
+        const close = within(dialog).getByRole("button", { name: "关闭预览" });
+        action.focus();
+        fireEvent.click(action);
+        expect(opener).toBeDisabled();
+        if (method === "Escape") {
+            close.focus();
+            fireEvent.keyDown(close, { key: "Escape", code: "Escape" });
+        }
+        else {
+            close.focus();
+            fireEvent.click(close);
+        }
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+        expect(opener).not.toHaveFocus();
+
+        const elsewhere = screen.getByRole("button", { name: "手动重关联" });
+        if (method === "moved focus") {
+            elsewhere.focus();
+            elsewhere.blur();
+        }
+        if (method === "changed file") {
+            h.select(fileB);
+            await screen.findByRole("heading", { name: "second.txt" });
+        }
+        await act(async () => download.resolve(method === "unauthorized"
+            ? jsonResponse({ code: "unauthorized", message: "expired", request_id: fileA }, 401)
+            : response(enc.encode("original"))));
+        if (method === "button" || method === "Escape") {
+            expect(opener).toBeEnabled();
+            expect(opener).toHaveFocus();
+        }
+        else {
+            expect(opener).not.toHaveFocus();
+            expect(document.activeElement).not.toBe(screen.queryByRole("button", { name: "预览文件" }));
+        }
+    },
+);
 it("B ordinary download uses the opened snapshot and original bytes after detail metadata refresh",async()=>{
     const original = new Uint8Array([255,254,45,78]);
     const downloads:string[]=[];
