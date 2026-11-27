@@ -387,10 +387,9 @@ test("笔记目录选中新笔记和切换到宽屏后焦点仍在可见界面",
   await page.route(`**/api/v1/notes/${child.id}`, route => route.fulfill({ json: child }));
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`http://127.0.0.1:4178/notes/${note.id}`);
-  await expect(page.getByRole("complementary", { name: "笔记目录" })).toBeHidden();
-  const splitter = page.locator(".notes-splitter");
-  await expect(splitter).toHaveCSS("border-width", "1px");
-  await expect(splitter).toHaveCSS("border-style", "solid");
+  await expect(page.getByRole("navigation", { name: "笔记目录" })).toBeHidden();
+  await expect(page.locator(".notes-app-layout.mt-app-layout")).toBeVisible();
+  await expect(page.locator(".notes-topbar.mt-topbar")).toBeVisible();
   const opener = page.getByRole("button", { name: "目录", exact: true });
   await opener.click();
   const dialog = page.getByRole("dialog", { name: "笔记目录" });
@@ -405,36 +404,56 @@ test("笔记目录选中新笔记和切换到宽屏后焦点仍在可见界面",
   await page.setViewportSize({ width: 1440, height: 900 });
   await expect(dialog).toBeHidden();
   await expect(page.getByRole("heading", { name: "笔记目录" })).toBeFocused();
-  const sidebarBox = await page.getByRole("complementary", { name: "笔记目录" }).boundingBox();
+  const sidebarBox = await page.locator(".notes-app-layout .mt-app-layout-sidebar").boundingBox();
   expect(sidebarBox?.width ?? 0).toBeGreaterThan(150);
 });
 
-test("笔记页使用 Splitter 左右分栏，默认展示树根首篇笔记并支持拖拽调节", async ({ page }) => {
+test("笔记页使用 AppLayout 与 Topbar 布局，默认展示树根首篇笔记并支持拖拽调宽与面包屑导航", async ({ page }) => {
   test.skip(baseline, "改版后的布局回归");
   await fixtures(page);
   const child = { ...note, id: id(15), title: "后续问题", parent_id: note.id, document: { blocks: [{ id: id(150), type: "paragraph", content: [{ type: "text", text: "子笔记正文内容", styles: {} }] }] } };
   await page.route(`**/api/v1/notes/${child.id}`, route => route.fulfill({ json: child }));
+  await page.route(`**/api/v1/notes/${child.id}/snapshots`, route => route.fulfill({
+    json: route.request().method() === "POST" ? { ...child, note_id: child.id, snapshot_id: id(52), reason: "flush" } : list([]),
+  }));
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("http://127.0.0.1:4178/notes");
 
-  const sidebar = page.getByRole("complementary", { name: "笔记目录" });
+  const appLayout = page.locator(".notes-app-layout.mt-app-layout");
+  const sidebar = appLayout.locator(".mt-app-layout-sidebar");
+  const sidebarHeading = sidebar.locator("> .mt-sidebar-heading");
   const current = page.getByRole("region", { name: "当前笔记" });
+  const topbar = current.locator(".notes-topbar.mt-topbar");
+  const bodyScroll = current.locator(".notes-body-scroll");
   const rootItem = sidebar.getByRole("treeitem", { name: /调研手记/ });
   await expect(rootItem).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("textbox", { name: "笔记标题" })).toHaveValue(note.title);
   await expect(current).toContainText("调研记录第 1 段");
-  const splitter = page.locator(".notes-splitter");
-  await expect(splitter).toHaveCSS("border-width", "1px");
-  await expect(splitter).toHaveCSS("border-style", "solid");
+  await expect(topbar).toBeVisible();
+  await expect(topbar.getByRole("navigation", { name: "笔记路径" })).toContainText(note.title);
+  await expect(topbar.getByRole("status")).toContainText("已保存");
+  await expect(topbar.getByRole("status")).toContainText("v2");
 
-  const [beforeSidebar, beforeContent] = await Promise.all([sidebar.boundingBox(), current.boundingBox()]);
+  const [beforeSidebar, beforeHeading, beforeTopbar, beforeBody, beforeContent] = await Promise.all([
+    sidebar.boundingBox(),
+    sidebarHeading.boundingBox(),
+    topbar.boundingBox(),
+    bodyScroll.boundingBox(),
+    current.boundingBox(),
+  ]);
   expect(beforeSidebar).toBeTruthy();
+  expect(beforeHeading).toBeTruthy();
+  expect(beforeTopbar).toBeTruthy();
+  expect(beforeBody).toBeTruthy();
   expect(beforeContent).toBeTruthy();
   expect(beforeSidebar!.x + beforeSidebar!.width).toBeLessThanOrEqual(beforeContent!.x + 1);
   expect(beforeSidebar!.height).toBeGreaterThan(700);
   expect(beforeContent!.height).toBeGreaterThan(700);
+  expect(Math.abs((beforeHeading!.y + beforeHeading!.height) - (beforeTopbar!.y + beforeTopbar!.height))).toBeLessThanOrEqual(1);
+  expect(beforeTopbar!.y + beforeTopbar!.height).toBeLessThanOrEqual(beforeBody!.y + 1);
 
   const separator = page.getByRole("separator", { name: "调整分栏 1" });
+  await expect(separator).toHaveClass(/mt-splitter-separator-bordered/);
   const sepBox = await separator.boundingBox();
   expect(sepBox).toBeTruthy();
   const startX = sepBox!.x + sepBox!.width / 2;
@@ -452,6 +471,12 @@ test("笔记页使用 Splitter 左右分栏，默认展示树根首篇笔记并�
   await expect(page).toHaveURL(new RegExp(`/notes/${child.id}$`));
   await expect(page.getByRole("textbox", { name: "笔记标题" })).toHaveValue(child.title);
   await expect(current).toContainText("子笔记正文内容");
+
+  const noteBreadcrumb = topbar.getByRole("navigation", { name: "笔记路径" });
+  await expect(noteBreadcrumb).toContainText(child.title);
+  await noteBreadcrumb.getByRole("button", { name: note.title }).click();
+  await expect(page).toHaveURL(new RegExp(`/notes/${note.id}$`));
+  await expect(page.getByRole("textbox", { name: "笔记标题" })).toHaveValue(note.title);
 });
 
 test("笔记标题和编辑器共用居中的 Container，并随分栏和窄屏收缩", async ({ page }) => {
@@ -464,13 +489,13 @@ test("笔记标题和编辑器共用居中的 Container，并随分栏和窄屏�
   await page.goto(`http://127.0.0.1:4178/notes/${note.id}`);
 
   const pane = page.getByRole("region", { name: "当前笔记" });
-  const paneBar = pane.locator(".notes-pane-bar");
+  const paneBar = pane.locator(".notes-topbar");
   const container = pane.locator(".mt-container");
   const heading = container.locator(".notes-document-heading");
   const title = container.getByRole("textbox", { name: "笔记标题" });
   const blockEditor = container.locator(".mt-block-editor");
   const editor = container.getByRole("textbox", { name: "笔记编辑器" });
-  const sidebar = page.getByRole("complementary", { name: "笔记目录" });
+  const sidebar = page.locator(".notes-app-layout .mt-app-layout-sidebar");
   const expectFilled = async () => {
     await expect(title).toHaveValue(note.title);
     await expect(editor).toBeVisible();
@@ -711,7 +736,8 @@ test("笔记表格可自动保存、刷新重开并在历史中预览", async ({
   });
   await expect.poll(() => saved.document.blocks).toContainEqual(table("插入的项目"));
   await inserted.locator("td").last().click();
-  await page.getByRole("group", { name: "表格操作" }).getByRole("button", { name: "添加行", exact: true }).click();
+  await page.getByRole("group", { name: "表格操作" }).getByRole("button", { name: "行操作", exact: true }).click();
+  await page.getByRole("menu", { name: "行操作" }).getByRole("menuitem", { name: "向下添加行", exact: true }).click();
   await expect(inserted.locator("tr")).toHaveCount(3);
 
   await editor.getByText("粘贴位置", { exact: true }).click();
@@ -861,7 +887,7 @@ test("笔记侧栏原生拖放时目录保持稳定，支持嵌套、失败回�
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("http://127.0.0.1:4178/notes");
-  const sidebar = page.getByRole("complementary", { name: "笔记目录" });
+  const sidebar = page.locator(".notes-app-layout .mt-app-layout-sidebar");
   const row = (name: string) => sidebar.getByRole("treeitem", { name, exact: true });
   const expectOrder = (level: number, titles: string[]) => expect(sidebar.locator(`[role="treeitem"][aria-level="${level}"] span[title]`)).toHaveText(titles);
   const drag = async (from: string, to: string, ratio: number) => {
@@ -1038,7 +1064,7 @@ test("笔记左侧 Tree 节点右侧按钮仅在悬停时显示，支持添加�
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("http://127.0.0.1:4178/notes");
 
-  const sidebar = page.getByRole("complementary", { name: "笔记目录" });
+  const sidebar = page.locator(".notes-app-layout .mt-app-layout-sidebar");
   const secondRow = sidebar.getByRole("treeitem", { name: "方案备忘" });
   await expect(secondRow).toBeVisible();
 

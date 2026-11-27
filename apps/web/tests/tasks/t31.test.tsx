@@ -651,7 +651,7 @@ it("returning A→B→A seeds a new real editor from the saved draft, retaining 
   const anchor = selection.anchorNode; const offset = selection.anchorOffset;
   // Observe the real 1000ms debounce; do not replace a timer already created by the editor.
   await waitFor(() => expect(calls("PATCH", id(1))).toHaveLength(1), { timeout: 2500 });
-  await waitFor(() => expect(current.querySelector("p[role=status]")).toHaveTextContent("已保存 · 当前基础版本 2"));
+  await waitFor(() => expect(current.querySelector("[role=status]")).toHaveTextContent("已保存· v2"));
   expect(current.querySelector('[contenteditable="true"]')).toBe(editable);
   expect(selection.anchorNode).toBe(anchor); expect(selection.anchorOffset).toBe(offset);
   const saved = await calls("PATCH", id(1))[0]!.json();
@@ -718,7 +718,7 @@ it("uppercase UUID retains the initialized draft after401 and a failed reauthent
   expect(screen.getByRole("textbox", { name: "笔记标题" })).toHaveValue("大写路径失效后保留草稿");
   expect(screen.getByText("认证失败仍保留的正文")).toBeInTheDocument();
   expect(screen.getByRole("region", { name: "当前笔记" }).querySelector('[contenteditable="false"]')).toBe(editor);
-  expect(screen.getByText(/当前基础版本 1/)).toBeInTheDocument(); expect(router.state.location.pathname).toBe(path);
+  expect(screen.getByTitle("当前基础版本 1")).toHaveTextContent("v1"); expect(router.state.location.pathname).toBe(path);
   expect(calls("PATCH", canonical)).toHaveLength(1);
   await selectNoteAction("复制当前草稿");
   expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("大写路径失效后保留草稿"));
@@ -771,7 +771,7 @@ it("move dialog uses TreeSelect to pick a non-root parent while excluding the cu
   expect(await calls("POST", "/move")[0]!.json()).toEqual({ expected_version: 1, parent_id: id(2), position: 0 });
 });
 
-it("notes index opens the first root note by default inside the Splitter layout and keeps it stable across move/delete", async () => {
+it("notes index opens the first root note by default inside the AppLayout with Topbar and keeps it stable across move/delete", async () => {
   notes = [
     { ...note(2), position: 0, title: "首篇根笔记", document: doc("首篇根正文") },
     { ...note(1), position: 1, title: "次篇根笔记", document: doc("次篇根正文") },
@@ -780,7 +780,12 @@ it("notes index opens the first root note by default inside the Splitter layout 
   const { router } = await mount("/notes");
   expect(router.state.location.pathname).toBe("/notes");
   expect(await title()).toHaveValue("首篇根笔记");
-  expect(screen.getByRole("region", { name: "当前笔记" })).toHaveTextContent("首篇根正文");
+  const current = screen.getByRole("region", { name: "当前笔记" });
+  expect(current).toHaveTextContent("首篇根正文");
+  expect(current.closest(".mt-app-layout")).toBeInTheDocument();
+  expect(current.querySelector(".mt-topbar")).toBeInTheDocument();
+  expect(screen.getByRole("navigation", { name: "笔记目录" })).toBeInTheDocument();
+  expect(within(screen.getByRole("navigation", { name: "笔记路径" })).getByText("首篇根笔记")).toBeInTheDocument();
   expect(screen.getByRole("treeitem", { name: "首篇根笔记" })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByRole("separator", { name: "调整分栏 1" })).toBeInTheDocument();
 
@@ -796,8 +801,9 @@ it("notes index opens the first root note by default inside the Splitter layout 
   expect(await title()).toHaveValue("首篇根笔记");
   expect(router.state.location.pathname).toBe("/notes");
 
-  // Switching to another note navigates cleanly to its canonical detail route.
-  fireEvent.click(screen.getByRole("treeitem", { name: "次篇根笔记" }));
+  // Breadcrumb reflects the new parent and navigates back to it on click.
+  const pathNav = screen.getByRole("navigation", { name: "笔记路径" });
+  fireEvent.click(within(pathNav).getByRole("button", { name: "次篇根笔记" }));
   await waitFor(() => expect(router.state.location.pathname).toBe(`/notes/${id(1)}`));
   expect(await title()).toHaveValue("次篇根笔记");
 });
@@ -1076,4 +1082,72 @@ it("rename dialog keeps cancel enabled after 401 expiry and active duplicate cap
   fireEvent.click(cancelBtn);
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "重命名页面" })).not.toBeInTheDocument());
   expect(await screen.findByText("会话已失效，本地草稿已保留")).toBeInTheDocument();
+});
+
+it("switching between already-opened notes resets ConflictDialog draft state and note body scroll position without remounting NotePane", async () => {
+  await mount(`/notes/${id(1)}`);
+  await title();
+
+  // Open note 2 once and return to note 1 so both notes live in `opened` and switching keeps NotePane mounted.
+  fireEvent.click(screen.getByRole("treeitem", { name: "笔记2" }));
+  await waitFor(() => expect(screen.getByRole("textbox", { name: "笔记标题" })).toHaveValue("笔记2"));
+  fireEvent.click(screen.getByRole("treeitem", { name: "笔记1" }));
+  await waitFor(() => expect(screen.getByRole("textbox", { name: "笔记标题" })).toHaveValue("笔记1"));
+
+  const scrollBefore = document.querySelector<HTMLElement>(".notes-body-scroll")!;
+  expect(scrollBefore).not.toBeNull();
+  scrollBefore.scrollTop = 320;
+
+  await selectNoteAction("版本与冲突处理");
+  const dialog1 = await screen.findByRole("dialog", { name: "笔记保存冲突" });
+  const copyTitle1 = within(dialog1).getByRole("textbox", { name: "副本标题" });
+  fireEvent.change(copyTitle1, { target: { value: "笔记1的自定义副本" } });
+  fireEvent.click(within(dialog1).getByRole("button", { name: "关闭" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "笔记保存冲突" })).not.toBeInTheDocument());
+
+  fireEvent.click(screen.getByRole("treeitem", { name: "笔记2" }));
+  await waitFor(() => expect(screen.getByRole("textbox", { name: "笔记标题" })).toHaveValue("笔记2"));
+  const scrollAfter = document.querySelector<HTMLElement>(".notes-body-scroll")!;
+  expect(scrollAfter).toBe(scrollBefore);
+  expect(scrollAfter.scrollTop).toBe(0);
+
+  await selectNoteAction("版本与冲突处理");
+  const dialog2 = await screen.findByRole("dialog", { name: "笔记保存冲突" });
+  expect(within(dialog2).getByRole("textbox", { name: "副本标题" })).toHaveValue("笔记2（冲突副本）");
+});
+
+it("failed note load from narrow directory drawer clears pending return focus instead of stealing focus later", async () => {
+  let failNote2 = true;
+  intercept = (request, url) => {
+    if (request.method === "GET" && url.pathname.endsWith(id(2)) && failNote2) return failure(503);
+    return undefined;
+  };
+  const origGetClientRects = HTMLButtonElement.prototype.getClientRects;
+  const rectSpy = vi.spyOn(HTMLButtonElement.prototype, "getClientRects").mockImplementation(function (this: HTMLButtonElement) {
+    if (this.getAttribute("title") === "目录") return [new DOMRect(0, 0, 28, 28)] as unknown as DOMRectList;
+    return origGetClientRects.call(this);
+  });
+  try {
+    await mount(`/notes/${id(1)}`);
+    await title();
+
+    fireEvent.click(screen.getByRole("button", { name: "目录" }));
+    const drawer = await screen.findByRole("dialog", { name: "笔记目录" });
+    fireEvent.click(within(drawer).getByRole("treeitem", { name: "笔记2" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "笔记目录" })).not.toBeInTheDocument());
+    await screen.findByRole("button", { name: "重试笔记" });
+    await act(async () => { await new Promise(requestAnimationFrame); });
+
+    // After the failed load settles, retrying and loading note 2 must not steal focus back to the directory button.
+    failNote2 = false;
+    const retryBtn = screen.getByRole("button", { name: "重试笔记" });
+    retryBtn.focus();
+    fireEvent.click(retryBtn);
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "笔记标题" })).toHaveValue("笔记2"));
+    await act(async () => { await new Promise(requestAnimationFrame); });
+    expect(screen.getByRole("button", { name: "目录" }).getClientRects().length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "目录" })).not.toHaveFocus();
+  } finally {
+    rectSpy.mockRestore();
+  }
 });
