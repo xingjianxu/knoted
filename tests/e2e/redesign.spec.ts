@@ -20,6 +20,7 @@ const file = { id: id(7), name: "调研结果.txt", relative_path: "资料/项�
 const current = { id: id(2), user_id: id(3), current: true, created_at: now, last_seen_at: now,
   idle_expires_at: "2026-11-30T00:00:00Z", absolute_expires_at: "2026-12-19T00:00:00Z" };
 const fixtureFileText = "合成文本文件用于核对鉴权预览界面。";
+const sessionRequired = { code: "unauthenticated", message: "a live session cookie is required", request_id: id(52) };
 
 async function fixtures(page: Page, authenticated = true) {
   const fileItems = Array.from({ length: 20 }, (_, i) => ({ ...file, id: id(200 + i), name: `资料 ${i + 1}.txt` }));
@@ -32,7 +33,7 @@ async function fixtures(page: Page, authenticated = true) {
     const json = (data: unknown) => route.fulfill({ json: data });
     switch (pathname.replace("/api/v1", "")) {
       case "/auth/session": return activeSession ? json({ session: current, csrf_token: "synthetic-redesign-fixture" }) :
-        route.fulfill({ status: 401, json: { code: "unauthorized", message: "未登录" } });
+        route.fulfill({ status: 401, json: sessionRequired });
       case "/auth/passkeys": return json(list([{ id: id(9), name: "验收凭据", created_at: now, last_used_at: now }]));
       case "/auth/sessions": return json(list([current]));
       case `/auth/sessions/${current.id}`:
@@ -295,6 +296,42 @@ test("笔记历史立即可读，保存冲突后离开及退出均保留草稿",
   await expect(page).toHaveURL(new RegExp(`/notes/${note.id}$`));
   await expect(editor).toHaveValue("当前草稿不能丢失");
 });
+
+for (const path of ["/notes", `/notes/${note.id}`]) {
+  test(`匿名直达笔记 ${path} 时登录页保留回跳地址`, async ({ page }) => {
+    await fixtures(page, false);
+    const noteRequests: string[] = [];
+    page.on("request", request => {
+      const { pathname } = new URL(request.url());
+      if (/^\/api\/v1\/notes(?:\/|$)/.test(pathname)) noteRequests.push(pathname);
+    });
+    const [session] = await Promise.all([
+      page.waitForResponse("**/api/v1/auth/session"),
+      page.goto(`http://127.0.0.1:4178${path}`),
+    ]);
+    expect(session.status()).toBe(401);
+    expect(await session.json()).toEqual(sessionRequired);
+    await expect(page.getByRole("heading", { name: "登录", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "使用 Passkey 登录" })).toBeEnabled();
+    expect(new URL(page.url()).pathname).toBe("/login");
+    expect(new URL(page.url()).searchParams.get("redirect")).toBe(path);
+    expect(noteRequests).toEqual([]);
+  });
+}
+
+for (const failure of [503, "网络错误"] as const) {
+  test(`笔记会话读取失败（${failure}）时显示可重试的加载错误`, async ({ page }) => {
+    await fixtures(page, false);
+    await page.route("**/api/v1/auth/session", route => failure === 503
+      ? route.fulfill({ status: 503, json: { code: "dependency_unavailable", message: "暂时不可用", request_id: id(53) } })
+      : route.abort());
+    await page.goto("http://127.0.0.1:4178/notes");
+    await expect(page.getByRole("heading", { name: "无法加载页面" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "重试" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "使用 Passkey 登录" })).toHaveCount(0);
+    expect(new URL(page.url()).pathname).toBe("/notes");
+  });
+}
 
 test("安全页撤销当前会话，旧保护页重新打开仍需登录", async ({ page }) => {
   test.skip(baseline, "改版后的布局回归");
