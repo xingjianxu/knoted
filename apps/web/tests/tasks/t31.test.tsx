@@ -139,6 +139,39 @@ it("t31_registered_routes_and_url_safety protects the real notes destination", a
   await screen.findByRole("button", { name: "使用 Passkey 登录" }); expect(router.state.location.pathname).toBe("/login");
   expect(router.state.location.search).toEqual({ redirect: `/notes/${id(1)}` });
 });
+it("evicts the cache at session 401 headers while retaining queries cached during body parsing", async () => {
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  let started!: () => void;
+  const reading = new Promise<void>(resolve => { started = resolve; });
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) { stream = controller; },
+    pull() { started(); },
+  }, { highWaterMark: 0 });
+  const unauthorized = new Response(body, { status: 401, headers: { "Content-Type": "application/json" } });
+  intercept = (_r, url) => url.pathname.endsWith("/auth/session") ? unauthorized : undefined;
+
+  const router = createAppRouter({ history: createMemoryHistory({ initialEntries: ["/notes"] }) });
+  const queryClient = router.options.context!.queryClient;
+  const before = queryKeys.notes.detail("before-401");
+  const after = queryKeys.notes.detail("after-401");
+  queryClient.setQueryData(before, "old cache");
+  render(<UiProvider><App router={router}/></UiProvider>);
+
+  try {
+    await reading;
+    queryClient.setQueryData(after, "new cache");
+    await waitFor(() => expect(queryClient.getQueryData(before)).toBeUndefined());
+    expect(queryClient.getQueryData(after)).toBe("new cache");
+  } finally {
+    await act(async () => {
+      stream.enqueue(new TextEncoder().encode(JSON.stringify({ code: "unauthenticated", message: "no session", request_id: id(500) })));
+      stream.close();
+    });
+  }
+  expect(await screen.findByRole("button", { name: "使用 Passkey 登录" })).toBeInTheDocument();
+  expect(router.state.location.search).toEqual({ redirect: "/notes" });
+  expect(queryClient.getQueryData(after)).toBe("new cache");
+});
 it("t31_navigation_barrier_and_draft_failures keeps route/editor selected until mounted save and history finish", async () => {
   const pending = deferred(); intercept = (r) => r.method === "PATCH" ? pending.promise : undefined;
   const { router } = await mount(); const input = await title();

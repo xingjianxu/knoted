@@ -73,14 +73,11 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         return;
       }
 
-      const error = await ApiRequestError.fromResponse(response);
       if (response.status === 401) {
-        // Cache eviction runs in the next task. Finish reading the body first
-        // so the typed rejection propagates through promises before eviction.
         options.onUnauthorized?.();
       }
 
-      throw error;
+      throw await ApiRequestError.fromResponse(response);
     },
   });
 
