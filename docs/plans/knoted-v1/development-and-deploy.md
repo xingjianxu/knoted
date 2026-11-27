@@ -57,7 +57,7 @@ schema 由编排里的 `migrate` 进程管理（`sqlx migrate run`）；库不�
 | --- | --- |
 | 前置 | 拒绝在 `.worktrees/` 路径上的实例/运行根/构建根/主检出；对实例和运行根加 `flock` 防并发；缺 `git`/`pnpm`/`curl`/`sha256sum`/`flock`/`realpath` 在改动任何状态前失败。从任务 worktree 调用时，构建用被调用的那份脚本，但 `pnpm pc` 一律在主检出执行（daemon 的 cwd 决定后续 prepare/restart 用哪份 `service.sh`） |
 | 定版 | 校验提交存在于本地仓库；`/data/knoted-dev/runtime/<sha>` 已存在且 `SHA256SUMS` 通过就复用；已存在但校验失败（构建中断、磁盘损坏）则移到 `<sha>.incomplete.<UTC 时间>.<pid>` 后重建 |
-| 运行变量 | 调用者环境 > `<instance_root>/deploy.env`（0600）> 从活动 api/worker/intelligence 的 `/proc/<pid>/environ` 取并集；最终结果回写文件，所以下次无 shell 环境也能复现 |
+| 运行变量 | 部署先取调用者的非空环境变量，再读 `<instance_root>/deploy.env`。从旧编排切换时可从旧 TOML 补齐，最后尝试从活动 API/Worker 环境补齐。部署回写的文件权限为 0600 |
 | 构建 | 在运行变量就绪之后执行——Vite 用 `KNOTED_OFFICE_ORIGIN` 决定是否编入 Office，变量必须在构建前确定 |
 | 判迁移 | 比对旧 `current` 与新产物 `share/knoted/migrations/*.sql` 文件名集合 |
 | 切换 | `current` 用 `ln` + `mv -Tf` 原子替换；共享 Caddy 静态根随即指向新产物 |
@@ -82,7 +82,11 @@ schema 由编排里的 `migrate` 进程管理（`sqlx migrate run`）；库不�
 sg strata-clients -c 'pnpm deploy:dev'
 ```
 
-运行变量白名单（只存路径与开关，不存密钥）：`KNOTED_INTELLIGENCE_DOCLING_ARTIFACTS_DIR`、`KNOTED_INTELLIGENCE_BGE_M3_DIR`（这两个缺失时脚本在切换前拒绝）、`KNOTED_SEARCH_ENABLED`、`KNOTED_SEARCH_CREDENTIAL_FILE`、`KNOTED_VECTORS_ENABLED`、`KNOTED_OFFICE_ORIGIN`、`KNOTED_OFFICE_JWT_SECRET_FILE`、`KNOTED_CHAT_LOCAL_BASE_URL`、`KNOTED_CHAT_LOCAL_MODEL`、`KNOTED_CHAT_LOCAL_CREDENTIAL_FILE`。
+手动运行 `pnpm pc up -D` 时，`prepare` 与部署脚本读取同一份 `<instance_root>/deploy.env`。调用者的非空变量优先。手动启动只读此文件，修改持久设置后重新执行 `down`、`up -D` 以重新渲染 TOML。
+
+- 搜索使用 `KNOTED_SEARCH_ENABLED`（`0` 或 `1`）。启用搜索时可用 `KNOTED_SEARCH_CREDENTIAL_FILE` 指定绝对凭据文件路径。
+- OnlyOffice 同时需要 HTTPS 来源 `KNOTED_OFFICE_ORIGIN` 与绝对凭据路径 `KNOTED_OFFICE_JWT_SECRET_FILE`。更换来源也需要重新构建包含该来源的 Web 产物。
+- 每行写 `KEY=VALUE`，值按字面读取，可含空格或等号。空行与以 `#` 开头的注释行会跳过，只有上述四个键生效。格式错误会报告行号并中止。缺少文件时只使用调用者环境，缺省关闭这些可选能力。
 
 其它可覆盖项（默认值即本机 dev）：`KNOTED_INSTANCE_ROOT`、`KNOTED_DEPLOY_RUNTIME_PARENT`、`KNOTED_DEPLOY_PROC_ROOT`、`KNOTED_DEPLOY_BUILD_CMD`、`KNOTED_DEPLOY_READY_TIMEOUT`（默认 180s）、`KNOTED_BUILD_ROOT`、`CARGO_BUILD_JOBS`、`KNOTED_API_PORT`、`KNOTED_INTELLIGENCE_PORT`、`KNOTED_HTTPS_PORT`、`KNOTED_HTTPS_DOMAIN`。
 
