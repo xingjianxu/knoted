@@ -1,12 +1,12 @@
-import { useCallback, useContext, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useBlocker, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
-  Alert, Button, ConfirmDialog, Container, Dialog, Divider, Drawer, Empty, Form, Input, Link,
-  Popover, Sidebar, Spinner, Splitter, Status, Toolbar, Tooltip, Tree, TreeSelect, moveTreeItem, useToast, type TreeDropInfo,
+  Alert, AppLayout, Breadcrumb, Button, ConfirmDialog, Container, Dialog, Divider, Drawer, Empty, Form, Input, Link,
+  Popover, Spinner, Status, Tooltip, Topbar, Tree, TreeSelect, moveTreeItem, useToast, type BreadcrumbItem, type TreeDropInfo,
 } from "@bixlab/mtone";
 import {
-  Copy, CopyPlus, Ellipsis, File, FilePlus2, FolderInput, GitCompareArrows, History, Link2, PanelLeft, Pencil, Plus, Save, Trash2,
+  Copy, CopyPlus, Ellipsis, File, FilePlus2, FolderInput, GitCompareArrows, History, Link2, PanelLeft, Pencil, Plus, Save, Tags, Trash2,
 } from "lucide-react";
 import { ApiRequestError } from "@knoted/api-client";
 import type { QueryClientBundle } from "../../lib/query";
@@ -34,6 +34,20 @@ const displayNoteTitle = (title: string) => title.trim() || "未命名笔记";
 function duplicateNoteTitle(title: string): string {
   const suffix = "（副本）";
   return [...displayNoteTitle(title)].slice(0, 500 - [...suffix].length).join("") + suffix;
+}
+function buildNoteAncestors(notes: Note[], currentId: string): Note[] {
+  const byId = new Map(notes.map(note => [note.id, note] as const));
+  const ancestors: Note[] = [];
+  const seen = new Set<string>([currentId]);
+  let parentId = byId.get(currentId)?.parent_id ?? null;
+  while (parentId && !seen.has(parentId)) {
+    seen.add(parentId);
+    const parent = byId.get(parentId);
+    if (!parent) break;
+    ancestors.unshift(parent);
+    parentId = parent.parent_id;
+  }
+  return ancestors;
 }
 function captureTreeKeyboardReturnFocus(): (() => void) | undefined {
   const activeEl = document.activeElement;
@@ -105,6 +119,8 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
   const [pinnedDefaultId, setPinnedDefaultId] = useState<string>();
   const [openDirectoryFor, setOpenDirectoryFor] = useState<string>();
   const directoryTrigger = useRef<HTMLDivElement>(null);
+  const directoryButton = useRef<HTMLButtonElement>(null);
+  const pendingDirectoryReturnFocus = useRef(false);
   const directoryHeading = useRef<HTMLHeadingElement>(null);
   const [receipts, setReceipts] = useState<DeleteReceipt[]>([]);
   const [rootRecovery, setRootRecovery] = useState<string | null>(null);
@@ -158,20 +174,8 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
   }
   const activeNoteId = noteId ?? (pinnedDefaultId && !writeAccess.isDeleted(pinnedDefaultId) ? pinnedDefaultId : firstRootId);
 
-  // The opener stays mounted as a completed navigation closes the drawer.
-  if (openDirectoryFor && openDirectoryFor !== activeNoteId) setOpenDirectoryFor(undefined);
-  useEffect(() => {
-    const trigger = directoryTrigger.current;
-    if (!openDirectoryFor || !trigger || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
-      if (trigger.getClientRects().length > 0) return;
-      setOpenDirectoryFor(undefined);
-      const heading = directoryHeading.current;
-      window.requestAnimationFrame(() => { if (heading?.isConnected) heading.focus(); });
-    });
-    observer.observe(trigger);
-    return () => observer.disconnect();
-  }, [openDirectoryFor]);
+  const directoryDrawerOpen = Boolean(openDirectoryFor && openDirectoryFor === (activeNoteId ?? "__root__"));
+  if (openDirectoryFor && openDirectoryFor !== (activeNoteId ?? "__root__")) setOpenDirectoryFor(undefined);
 
   const detail = useQuery({ ...noteQuery(bundle, activeNoteId ?? ""), enabled: Boolean(activeNoteId) && !writeAccess.isDeleted(activeNoteId!) });
 
@@ -196,6 +200,36 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
     setOpened({ ...opened, [detail.data.id]: detail.data });
   }
   const initialNote = activeNoteId ? opened[activeNoteId] ?? detail.data : undefined;
+  const hasActiveNote = Boolean(activeNoteId);
+  const hasInitialNote = Boolean(initialNote);
+
+  useEffect(() => {
+    const trigger = directoryTrigger.current;
+    if (!directoryDrawerOpen || !trigger || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (!trigger.isConnected || trigger.getClientRects().length > 0) return;
+      pendingDirectoryReturnFocus.current = false;
+      setOpenDirectoryFor(undefined);
+      const heading = directoryHeading.current;
+      window.requestAnimationFrame(() => { if (heading?.isConnected) heading.focus(); });
+    });
+    observer.observe(trigger);
+    return () => observer.disconnect();
+  }, [directoryDrawerOpen, hasActiveNote, hasInitialNote]);
+
+  useEffect(() => {
+    if (directoryDrawerOpen) {
+      pendingDirectoryReturnFocus.current = true;
+      return;
+    }
+    if (!pendingDirectoryReturnFocus.current) return;
+    const stillLoadingActive = Boolean(activeNoteId && !hasInitialNote && detail.isFetching);
+    if (!stillLoadingActive) pendingDirectoryReturnFocus.current = false;
+    window.requestAnimationFrame(() => {
+      const button = directoryButton.current;
+      if (button?.isConnected && button.getClientRects().length > 0) button.focus();
+    });
+  }, [directoryDrawerOpen, activeNoteId, hasInitialNote, detail.isFetching]);
 
   useEffect(() => {
     if (!initialNote && Object.keys(opened).length === 0 && (expired || detail.error instanceof ApiRequestError && detail.error.status === 401)) {
@@ -604,30 +638,21 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
     </div>
   );
 
-  const narrowDirectoryDrawer = activeNoteId ? (
+  const narrowDirectoryTrigger = (activeNoteId || tree.error) ? (
     <div ref={directoryTrigger} className="notes-directory-trigger">
-      <Drawer
-        open={openDirectoryFor === activeNoteId}
-        onOpenChange={open => setOpenDirectoryFor(open ? activeNoteId : undefined)}
-        title="笔记目录"
-        trigger={
-          <Button size="sm" variant="outline">
-            <PanelLeft size={15} aria-hidden="true" />
-            目录
-          </Button>
-        }
+      <Button
+        ref={directoryButton}
+        size="sm"
+        variant="ghost"
+        className="notes-topbar-action"
+        title="目录"
+        aria-haspopup="dialog"
+        aria-expanded={directoryDrawerOpen}
+        onClick={() => setOpenDirectoryFor(activeNoteId ?? "__root__")}
       >
-        <div className="space-y-3">
-          <div className="flex justify-end">
-            <Button size="sm" variant="outline" disabled={unavailable} onClick={() => void create(null)}>
-              <Plus size={14} aria-hidden="true" />
-              新建根笔记
-            </Button>
-          </div>
-          {error && <Alert tone="error">{error}</Alert>}
-          {directoryBody}
-        </div>
-      </Drawer>
+        <PanelLeft size={16} aria-hidden="true" />
+        <span className="notes-topbar-action-label">目录</span>
+      </Button>
     </div>
   ) : null;
 
@@ -670,113 +695,119 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
         </div>
       )}
 
-      <Splitter
-        orientation="horizontal"
-        bordered
-        className={activeNoteId ? "notes-splitter notes-splitter--detail" : "notes-splitter"}
-      >
-        <Splitter.Panel
-          id="notes-sidebar"
-          label="笔记目录"
-          defaultSize={260}
-          min="14%"
-          max="45%"
-          collapsible
-          groupResizeBehavior="preserve-pixel-size"
-          className="notes-splitter-sidebar"
-        >
-          <Sidebar
-            className="notes-sidebar"
-            aria-label="笔记目录"
-            header={
-              <div className="notes-sidebar-header">
-                {activeNoteId ? (
-                  <h2 ref={directoryHeading} tabIndex={-1} className="notes-sidebar-title">笔记目录</h2>
-                ) : (
-                  <h1 className="notes-sidebar-title">笔记</h1>
-                )}
-                <Tooltip content="新建根笔记" side="bottom">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    iconOnly
-                    disabled={unavailable}
-                    aria-label="新建根笔记"
-                    onClick={() => void create(null)}
-                  >
-                    <Plus size={16} aria-hidden="true" />
-                  </Button>
-                </Tooltip>
-              </div>
-            }
-          >
-            {directoryBody}
-          </Sidebar>
-        </Splitter.Panel>
-
-        <Splitter.Panel
-          id="notes-content"
-          label="笔记内容"
-          min="40%"
-          className="notes-splitter-content"
-        >
-          <div className="notes-content-shell">
-            {narrowDirectoryDrawer}
-            {initialNote ? (
-              <NotePane
-                key={initialNote.id}
-                initialNote={initialNote}
-                draftStore={draftStore}
-                bundle={bundle}
-                notes={liveDirectory ?? []}
-                expired={expired}
-                working={working}
-                isBusy={isBusy}
-                runCommand={runCommand}
-                onCreateChild={() => void create(initialNote.id)}
-                onRequestMove={returnFocus => openMoveDialog(noteById.get(initialNote.id) ?? initialNote, returnFocus)}
-                onRequestDelete={returnFocus => openDeleteDialog(noteById.get(initialNote.id) ?? initialNote, returnFocus)}
-                onSession={registerSession}
-                assertCanWrite={() => assertCanWrite(initialNote.id)}
-                onRefresh={refreshTree}
-                onError={setError}
-              />
-            ) : activeNoteId ? (
-              <div className="notes-pane">
-                <div className="notes-body-scroll">
-                  <Container className="notes-body-inner space-y-3">
-                    {detail.isFetching && <Spinner label="正在读取笔记" />}
-                    {detail.error && (
-                      <Alert tone="error">
-                        {detail.error instanceof ApiRequestError && detail.error.status === 404 ? "笔记不存在或已删除" : message(detail.error)}
-                        <div className="mt-2">
-                          <Button size="sm" onClick={() => void detail.refetch()}>重试笔记</Button>
-                        </div>
-                      </Alert>
-                    )}
-                  </Container>
-                </div>
-              </div>
+      <AppLayout
+        className="notes-app-layout"
+        sidebarWidth={260}
+        sidebarResize={{
+          defaultWidth: 260,
+          minWidth: 180,
+          maxWidth: 420,
+          separatorBordered: true,
+        }}
+        brand={
+          <div className="notes-sidebar-header">
+            {activeNoteId ? (
+              <h2 ref={directoryHeading} tabIndex={-1} className="notes-sidebar-title">笔记目录</h2>
             ) : (
-              <div className="notes-empty-pane">
-                {tree.isFetching ? (
-                  <Spinner label="正在读取笔记" />
-                ) : liveDirectory?.length === 0 && !tree.error ? (
-                  <Empty
-                    title="暂无笔记"
-                    action={
-                      <Button size="sm" variant="solid" disabled={unavailable} onClick={() => void create(null)}>
-                        <Plus size={14} aria-hidden="true" />
-                        新建笔记
-                      </Button>
-                    }
-                  />
-                ) : null}
-              </div>
+              <h1 ref={directoryHeading} tabIndex={-1} className="notes-sidebar-title">笔记</h1>
             )}
+            <Tooltip content="新建根笔记" side="bottom">
+              <Button
+                size="sm"
+                variant="ghost"
+                iconOnly
+                disabled={unavailable}
+                aria-label="新建根笔记"
+                onClick={() => void create(null)}
+              >
+                <Plus size={16} aria-hidden="true" />
+              </Button>
+            </Tooltip>
           </div>
-        </Splitter.Panel>
-      </Splitter>
+        }
+        navigationLabel="笔记目录"
+        navigation={directoryBody}
+        contentAs="div"
+      >
+        {initialNote ? (
+          <NotePane
+            initialNote={initialNote}
+            draftStore={draftStore}
+            bundle={bundle}
+            notes={liveDirectory ?? []}
+            expired={expired}
+            working={working}
+            isBusy={isBusy}
+            runCommand={runCommand}
+            directoryTrigger={narrowDirectoryTrigger}
+            onSelectNote={selectNote}
+            onCreateChild={() => void create(initialNote.id)}
+            onRequestMove={returnFocus => openMoveDialog(noteById.get(initialNote.id) ?? initialNote, returnFocus)}
+            onRequestDelete={returnFocus => openDeleteDialog(noteById.get(initialNote.id) ?? initialNote, returnFocus)}
+            onSession={registerSession}
+            assertCanWrite={() => assertCanWrite(initialNote.id)}
+            onRefresh={refreshTree}
+            onError={setError}
+          />
+        ) : activeNoteId ? (
+          <div className="notes-pane">
+            <Topbar as="div" className="notes-topbar" breadcrumb={narrowDirectoryTrigger} />
+            <div className="notes-body-scroll">
+              <Container className="notes-body-inner space-y-3">
+                {detail.isFetching && <Spinner label="正在读取笔记" />}
+                {detail.error && (
+                  <Alert tone="error">
+                    {detail.error instanceof ApiRequestError && detail.error.status === 404 ? "笔记不存在或已删除" : message(detail.error)}
+                    <div className="mt-2">
+                      <Button size="sm" onClick={() => void detail.refetch()}>重试笔记</Button>
+                    </div>
+                  </Alert>
+                )}
+              </Container>
+            </div>
+          </div>
+        ) : (
+          <div className="notes-pane">
+            <Topbar
+              as="div"
+              className={narrowDirectoryTrigger ? "notes-topbar" : "notes-topbar notes-topbar--empty"}
+              breadcrumb={narrowDirectoryTrigger}
+            />
+            <div className="notes-empty-pane">
+              {tree.isFetching ? (
+                <Spinner label="正在读取笔记" />
+              ) : liveDirectory?.length === 0 && !tree.error ? (
+                <Empty
+                  title="暂无笔记"
+                  action={
+                    <Button size="sm" variant="solid" disabled={unavailable} onClick={() => void create(null)}>
+                      <Plus size={14} aria-hidden="true" />
+                      新建笔记
+                    </Button>
+                  }
+                />
+              ) : null}
+            </div>
+          </div>
+        )}
+      </AppLayout>
+
+      <Drawer
+        open={directoryDrawerOpen}
+        onOpenChange={open => setOpenDirectoryFor(open ? (activeNoteId ?? "__root__") : undefined)}
+        title="笔记目录"
+      >
+        <div className="space-y-3">
+          <div className="flex justify-end">
+            <Button size="sm" variant="outline" disabled={unavailable} onClick={() => void create(null)}>
+              <Plus size={14} aria-hidden="true" />
+              新建根笔记
+            </Button>
+          </div>
+          {error && <Alert tone="error">{error}</Alert>}
+          {directoryBody}
+        </div>
+      </Drawer>
 
       <Dialog
         open={renameTarget !== null}
@@ -882,6 +913,8 @@ interface NotePaneProps {
   isBusy: () => boolean;
   runCommand: (operation: () => Promise<void>) => Promise<void>;
   assertCanWrite: () => void;
+  directoryTrigger: ReactNode;
+  onSelectNote: (id: string) => void;
   onCreateChild: () => void;
   onRequestMove: (returnFocus: () => void) => void;
   onRequestDelete: (returnFocus: () => void) => void;
@@ -891,23 +924,45 @@ interface NotePaneProps {
 }
 
 function NotePane({
-  initialNote, draftStore, bundle, notes, expired, working, isBusy, runCommand,
-  onCreateChild, onRequestMove, onRequestDelete, onSession, assertCanWrite, onRefresh, onError,
+  initialNote, draftStore, bundle, notes, expired, working, isBusy, runCommand, directoryTrigger,
+  onSelectNote, onCreateChild, onRequestMove, onRequestDelete, onSession, assertCanWrite, onRefresh, onError,
 }: NotePaneProps) {
   const autosave = useNoteAutosave({ initialNote, draftStore });
   const session = draftStore.open(initialNote);
   // Own the mounted session independently of server Query removal or background updates.
   useEffect(() => onSession(session), [session, onSession]);
+  const [noteStateId, setNoteStateId] = useState(initialNote.id);
   const [history, setHistory] = useState(false);
   const historyTrigger = useRef<HTMLButtonElement>(null);
+  const bodyScroll = useRef<HTMLDivElement>(null);
   const titleInput = useRef<HTMLInputElement>(null);
   const menuTrigger = useRef<HTMLButtonElement>(null);
   const [conflict, setConflict] = useState(false);
   const conflictTrigger = useRef<HTMLButtonElement>(null);
+  if (noteStateId !== initialNote.id) {
+    setNoteStateId(initialNote.id);
+    if (history) setHistory(false);
+    if (conflict) setConflict(false);
+  }
+  useLayoutEffect(() => {
+    if (bodyScroll.current) bodyScroll.current.scrollTop = 0;
+  }, [initialNote.id]);
   const unavailable = expired || working;
 
   const status = statusLabels[autosave.status];
   const hasConflictAlert = autosave.status === "conflict" || autosave.serverUpdated;
+  const ancestors = buildNoteAncestors(notes, initialNote.id);
+  const breadcrumbItems: BreadcrumbItem[] = [
+    ...ancestors.map(ancestor => ({
+      key: ancestor.id,
+      label: displayNoteTitle(ancestor.title),
+      onClick: () => onSelectNote(ancestor.id),
+    })),
+    {
+      key: initialNote.id,
+      label: displayNoteTitle(autosave.draft.title),
+    },
+  ];
 
   function closeHistory() {
     setHistory(false);
@@ -917,67 +972,99 @@ function NotePane({
   return (
     <section aria-label="当前笔记" className="notes-pane">
       <h1 className="sr-only">{autosave.draft.title || "未命名笔记"}</h1>
-      <div className="notes-pane-bar">
-        <Toolbar
-          background="white"
-          className="notes-pane-toolbar"
-          aria-label="笔记操作"
-          start={
-            <p role="status" className="notes-status">
-              <Status tone={statusTones[autosave.status]}>{status}</Status>
-              {" "}
-              <span className="text-muted">· 当前基础版本 {autosave.baseVersion}{autosave.unresolvedWrite ? " · 写入尚未确认" : ""}</span>
-            </p>
-          }
-          end={
-            <>
-              {hasConflictAlert && (
-                <Button ref={conflictTrigger} size="sm" variant="outline" disabled={unavailable} onClick={() => setConflict(true)}>
-                  <GitCompareArrows size={14} aria-hidden="true" />
-                  版本与冲突处理
-                </Button>
-              )}
-              <Button size="sm" variant="solid" disabled={unavailable} onClick={() => { void runCommand(async () => { await autosave.retrySave(); await autosave.flush(); }).catch(() => {}); }}>
-                <Save size={14} aria-hidden="true" />
-                保存并记录历史
-              </Button>
+      <Topbar
+        as="div"
+        className="notes-topbar"
+        breadcrumb={
+          <>
+            {directoryTrigger}
+            <Breadcrumb className="notes-topbar-breadcrumb" aria-label="笔记路径" items={breadcrumbItems} />
+          </>
+        }
+        status={
+          <span role="status" className="notes-status" title={`当前基础版本 ${autosave.baseVersion}`}>
+            <Status tone={statusTones[autosave.status]}>{status}</Status>
+            <span className="notes-status-version text-muted">
+              · v{autosave.baseVersion}{autosave.unresolvedWrite ? " · 写入尚未确认" : ""}
+            </span>
+          </span>
+        }
+        extra={
+          <>
+            {hasConflictAlert && (
               <Button
+                ref={conflictTrigger}
                 size="sm"
-                variant={history ? "soft" : "outline"}
-                ref={historyTrigger}
-                aria-expanded={history}
-                aria-controls={history ? "note-history" : undefined}
-                onClick={() => { if (history) closeHistory(); else setHistory(true); }}
+                variant="outline"
+                className="notes-topbar-action"
+                disabled={unavailable}
+                title="版本与冲突处理"
+                onClick={() => setConflict(true)}
               >
-                <History size={14} aria-hidden="true" />
-                历史版本
+                <GitCompareArrows size={14} aria-hidden="true" />
+                <span className="notes-topbar-action-label">版本与冲突处理</span>
               </Button>
-              <NoteAssociations noteId={initialNote.id} api={bundle.api} readOnly={unavailable} assertCanWrite={assertCanWrite} />
-              <Popover.Menu
-                align="end"
-                label="更多笔记操作"
-                trigger={
-                  <Button size="sm" variant="ghost" iconOnly ref={menuTrigger} aria-label="更多笔记操作" title="更多笔记操作">
-                    <Ellipsis size={16} aria-hidden="true" />
-                  </Button>
-                }
-                items={[
-                  { key: "new-child", label: "新建子笔记", icon: <FilePlus2 size={15} aria-hidden="true" />, disabled: unavailable, onSelect: onCreateChild },
-                  { key: "move", label: "移动笔记", icon: <FolderInput size={15} aria-hidden="true" />, disabled: unavailable || notes.length === 0, onSelect: () => onRequestMove(() => menuTrigger.current?.focus()) },
-                  { key: "copy", label: "复制当前草稿", icon: <Copy size={15} aria-hidden="true" />, onSelect: () => { void autosave.copyDraft().catch(cause => onError(message(cause))); } },
-                  ...(hasConflictAlert ? [] : [
-                    { key: "conflict", label: "版本与冲突处理", icon: <GitCompareArrows size={15} aria-hidden="true" />, disabled: unavailable, onSelect: () => setConflict(true) },
-                  ]),
-                  { type: "divider", key: "before-delete" },
-                  { key: "delete", label: "删除笔记", icon: <Trash2 size={15} aria-hidden="true" />, danger: true, disabled: unavailable, onSelect: () => onRequestDelete(() => menuTrigger.current?.focus()) },
-                ]}
-              />
-            </>
-          }
-        />
-      </div>
+            )}
+            <NoteAssociations
+              noteId={initialNote.id}
+              api={bundle.api}
+              readOnly={unavailable}
+              assertCanWrite={assertCanWrite}
+              trigger={
+                <Button size="sm" variant="ghost" className="notes-topbar-action" title="标签与关联">
+                  <Tags size={14} aria-hidden="true" />
+                  <span className="notes-topbar-action-label">标签与关联</span>
+                </Button>
+              }
+            />
+            <Button
+              size="sm"
+              variant={history ? "soft" : "ghost"}
+              className="notes-topbar-action"
+              ref={historyTrigger}
+              title="历史版本"
+              aria-expanded={history}
+              aria-controls={history ? "note-history" : undefined}
+              onClick={() => { if (history) closeHistory(); else setHistory(true); }}
+            >
+              <History size={14} aria-hidden="true" />
+              <span className="notes-topbar-action-label">历史版本</span>
+            </Button>
+            <Button
+              size="sm"
+              variant="solid"
+              className="notes-topbar-action"
+              disabled={unavailable}
+              title="保存并记录历史"
+              onClick={() => { void runCommand(async () => { await autosave.retrySave(); await autosave.flush(); }).catch(() => {}); }}
+            >
+              <Save size={14} aria-hidden="true" />
+              <span className="notes-topbar-action-label">保存并记录历史</span>
+            </Button>
+            <Popover.Menu
+              align="end"
+              label="更多笔记操作"
+              trigger={
+                <Button size="sm" variant="ghost" iconOnly ref={menuTrigger} aria-label="更多笔记操作" title="更多笔记操作">
+                  <Ellipsis size={16} aria-hidden="true" />
+                </Button>
+              }
+              items={[
+                { key: "new-child", label: "新建子笔记", icon: <FilePlus2 size={15} aria-hidden="true" />, disabled: unavailable, onSelect: onCreateChild },
+                { key: "move", label: "移动笔记", icon: <FolderInput size={15} aria-hidden="true" />, disabled: unavailable || notes.length === 0, onSelect: () => onRequestMove(() => menuTrigger.current?.focus()) },
+                { key: "copy", label: "复制当前草稿", icon: <Copy size={15} aria-hidden="true" />, onSelect: () => { void autosave.copyDraft().catch(cause => onError(message(cause))); } },
+                ...(hasConflictAlert ? [] : [
+                  { key: "conflict", label: "版本与冲突处理", icon: <GitCompareArrows size={15} aria-hidden="true" />, disabled: unavailable, onSelect: () => setConflict(true) },
+                ]),
+                { type: "divider", key: "before-delete" },
+                { key: "delete", label: "删除笔记", icon: <Trash2 size={15} aria-hidden="true" />, danger: true, disabled: unavailable, onSelect: () => onRequestDelete(() => menuTrigger.current?.focus()) },
+              ]}
+            />
+          </>
+        }
+      />
 
-      <div className="notes-body-scroll">
+      <div ref={bodyScroll} className="notes-body-scroll">
         <Container className={history ? "notes-body-inner space-y-4" : "notes-body-editor"}>
           <div className="notes-document-heading">
             {autosave.error && <Alert tone="error">{autosave.error.message}</Alert>}
@@ -1037,6 +1124,7 @@ function NotePane({
       </div>
 
       <ConflictDialog
+        key={initialNote.id}
         open={conflict}
         onOpenChange={open => {
           setConflict(open);

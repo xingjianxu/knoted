@@ -13,7 +13,7 @@
 
 ## 现状与目标
 
-当前精确依赖为 **`@bixlab/mtone@0.15.6`** 与 **`@bixlab/mtone-blockeditor@0.2.2`**（`apps/web/package.json` / `pnpm-lock.yaml`，仓库根目录 `.npmrc` 固定使用官方源 `https://registry.npmjs.org/`），已移除前端对 `@blocknote/core` / `@blocknote/react` 的直接依赖与自建编辑器 UI。笔记标题与编辑器通过 mtone 的 `Container` 统一居中限宽。下文保留 T17—T19 的原始接入与各版本升级记录。[升级任务 #310](../tasks/310.md) · [Container 任务 #298](../tasks/298.md)
+当前精确依赖为 **`@bixlab/mtone@1.0.0`** 与 **`@bixlab/mtone-blockeditor@1.1.0`**（`apps/web/package.json` / `pnpm-lock.yaml`，仓库根目录 `.npmrc` 固定使用官方源 `https://registry.npmjs.org/`），已移除前端对 `@blocknote/core` / `@blocknote/react` 的直接依赖与自建编辑器 UI。笔记主体采用 mtone `AppLayout`（左侧可拖拽调宽目录树侧栏、右侧上部 `Topbar` 与下部可滚动内容区），标题与编辑器继续通过 mtone 的 `Container` 统一居中限宽。下文保留 T17—T19 的原始接入与各版本升级记录。[升级与布局任务 #326](../tasks/326.md) · [升级任务 #310](../tasks/310.md) · [Container 任务 #298](../tasks/298.md)
 
 T17 已精确接入 npm `@bixlab/mtone@0.2.0`，迁移 App 静态类并移除 `packages/ui`；**PR #42 已普通 merge 至主线 `e3e1db2`，独立审查/主线验证/任务清理完成**。T17 接入时，生产入口使用应用层 `UiProvider` 配置公开 `MtoneProvider`，不转发控件 API；CSS 从应用样式入口导入。基础表单组合仅在测试夹具中，不建立生产演示路由或通用包装库。证据见 [T17](../plans/knoted-v1/evidence/t17.md)。
 
@@ -50,6 +50,14 @@ T17 实测：旧 `cn('p-2', 'p-4')` 返回 `p-4`，mtone 的 `cn` 返回 `p-2 p-
 0.2.0 在实施时距发布不足 pnpm 默认最小等待时间；`pnpm-workspace.yaml` 仅为已明确选择、检查过的精确版本添加 minimumReleaseAgeExclude，其他依赖策略保持不变。不改 workspace 通配范围。
 
 只使用 npm 已发布版本作为正式依赖；不以浮动 latest、Git、file/link、未发布 tarball 交付。不修改 API 或业务语义来迁就组件。
+
+## 1.0.0 与 BlockEditor 1.1.0 升级及笔记页 AppLayout / Topbar 重构
+
+将精确依赖升级至 **`@bixlab/mtone@1.0.0`** 与 **`@bixlab/mtone-blockeditor@1.1.0`**，同步更新 `pnpm-workspace.yaml` 精确等待期例外与 `pnpm-lock.yaml`（锁文件仅变更两包版本、完整性摘要及 `@bixlab/mtone` peer 范围，无无关依赖漂移）。两包公开入口、`styles.css` 导出路径与 React peers（`^19.2.0`）保持兼容。[mtone 1.0.0 发布说明](https://github.com/xingjianxu/mtone/releases/tag/v1.0.0) · [BlockEditor 1.1.0 发布说明](https://github.com/xingjianxu/mtone/releases/tag/v1.1.0-blockeditor) · [任务卡 #326](../tasks/326.md)
+
+- **笔记页 `AppLayout` 主体与 `Topbar`**：`NotesPage` 使用公开 `AppLayout`（`contentAs="div"` 避免与外层 `AdminLayout.Content` 的 `<main>` 冲突，`navigationLabel="笔记目录"`，`sidebarResize` 启用带 `separatorBordered` 的可调宽侧栏），左侧复用现有笔记目录树与悬停操作/拖放排序，右侧内容区上部放置 `Topbar`（`as="div"`）、下部为独立滚动的笔记内容区。
+- **`Topbar` 内容排布**：左侧组合窄屏目录抽屉按钮、当前笔记祖先路径 `Breadcrumb`（点击父级笔记触发受保存屏障保护的导航）与自动保存状态/版本号；右侧 `extra` 依次放置按需出现的冲突处理入口、标签与关联、历史版本、保存并记录历史主按钮与更多操作菜单；窄容器下通过容器查询收起按钮可见文案并保留完整无障碍名称与 `title`。
+- **BlockEditor 1.1.0 消费核验**：表格行列操作由上下文浮动工具栏中的「行操作」「列操作」菜单承载（移除旧独立手柄），Knoted 继续使用 `uploadImage` 对接 `/api/v1/assets` 图片资产上传，并已更新表格 E2E 回归用例。
 
 ## 0.15.3 与 BlockEditor 0.2.1 升级
 

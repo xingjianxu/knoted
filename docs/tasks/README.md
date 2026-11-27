@@ -42,6 +42,7 @@
 | [#308](308.md) | Bug | 修复笔记表格无法保存 | [ADR 0013](../decisions/0013-note-table-persistence.md)（已确认） |
 | [#310](310.md) | Task | 升级 mtone 0.15.6 并复核笔记侧栏拖动句柄控制 | 无 |
 | [#312](312.md) | Task | 给笔记页 Splitter 加上 mtone 外框 | 无 |
+| [#326](326.md) | Feature | 升级 mtone 1.0.0 与 blockeditor 1.1.0 并用 AppLayout 与 Topbar 重构笔记页面 | 无 |
 
 ## 开发部署
 

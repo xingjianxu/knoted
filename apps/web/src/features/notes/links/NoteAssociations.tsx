@@ -1,4 +1,4 @@
-import { useReducer, useRef, useState } from "react";
+import { useReducer, useRef, useState, type ReactElement } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Drawer, Empty, Form, Input, List, ListItem, SectionGroup, Select, Spinner, Tag } from "@bixlab/mtone";
 import { Tags } from "lucide-react";
@@ -14,12 +14,14 @@ export interface NoteAssociationsProps {
   readOnly?: boolean;
   /** Fresh workspace policy; readOnly alone cannot stop an awaited continuation. */
   assertCanWrite?: () => void;
+  /** Optional custom trigger button when embedded in a Topbar or compact bar. */
+  trigger?: ReactElement;
 }
 /** Keep association drafts scoped to the current note while the drawer is closed. */
 export function NoteAssociations(props: NoteAssociationsProps) {
   return <NoteAssociationsContent key={props.noteId} {...props} />;
 }
-function NoteAssociationsContent({ noteId, api, readOnly = false, assertCanWrite = () => {} }: NoteAssociationsProps) {
+function NoteAssociationsContent({ noteId, api, readOnly = false, assertCanWrite = () => {}, trigger }: NoteAssociationsProps) {
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
@@ -90,7 +92,7 @@ function NoteAssociationsContent({ noteId, api, readOnly = false, assertCanWrite
   const nextOption = options.data?.next_cursor ?? null;
   const nextLink = links.data?.next_cursor ?? null;
 
-  return <Drawer title="标签与关联" trigger={<Button size="sm" variant="outline"><Tags size={14} aria-hidden="true" />标签与关联</Button>}>
+  return <Drawer title="标签与关联" trigger={trigger ?? <Button size="sm" variant="outline"><Tags size={14} aria-hidden="true" />标签与关联</Button>}>
     <SectionGroup aria-label="笔记标签与资料关联" role="region">
       <SectionGroup.Section title="标签" headingLevel={3} aria-labelledby={undefined} aria-label="笔记标签">
         <div className="space-y-3">
