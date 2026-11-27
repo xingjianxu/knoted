@@ -300,6 +300,70 @@ async fn t05_3_drop_without_await_removes_schema() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn panic_with_pending_rollback_reclaims_schema_and_connection() {
+    // A server-side timeout keeps the failing version bounded even if Drop
+    // blocks this entire Tokio runtime waiting for its own relation lock.
+    let mut url = url::Url::parse(&test_database_url()).unwrap();
+    url.query_pairs_mut()
+        .append_pair("options[lock_timeout]", "3s");
+    let neighbor = TestDb::create_from_url(url.as_str()).await.unwrap();
+    let mut observer = neighbor.pool.acquire().await.unwrap();
+    let db = TestDb::create_from_url(url.as_str()).await.unwrap();
+    let schema = db.schema().to_owned();
+    let mut tx = db.pool.begin().await.unwrap();
+    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    let failure = tokio::spawn(async move {
+        let _fixture = db;
+        let mut transaction = tx;
+        // Decoding fails in the client; PostgreSQL still holds the relation
+        // lock until SQLx flushes the rollback queued on transaction drop.
+        let result =
+            sqlx::query_scalar::<_, String>("SELECT version FROM _sqlx_migrations LIMIT 1")
+                .fetch_one(&mut *transaction)
+                .await;
+        assert!(matches!(result, Err(sqlx::Error::ColumnDecode { .. })));
+        drop(transaction);
+        panic!("pending rollback probe");
+    })
+    .await
+    .unwrap_err()
+    .into_panic();
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"pending rollback probe")
+    );
+
+    let (schema_gone, connection_gone): (bool, bool) = sqlx::query_as(
+        "SELECT to_regnamespace($1) IS NULL,
+                NOT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid=$2)",
+    )
+    .bind(&schema)
+    .bind(pid)
+    .fetch_one(&mut *observer)
+    .await
+    .expect("another fixture's checked-out connection must remain usable");
+    if !schema_gone {
+        // Reclaim this fixture even on RED, after the original runtime resumes.
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&mut *observer)
+            .await
+            .unwrap();
+    }
+    let ready = db::is_ready(&neighbor.pool).await.unwrap();
+    drop(observer);
+    neighbor.drop().await;
+    assert!(ready, "another fixture's schema must stay intact");
+    assert!(schema_gone, "panic cleanup left its locked schema behind");
+    assert!(
+        connection_gone,
+        "panic cleanup left the transaction backend connected"
+    );
+}
+
 #[tokio::test]
 async fn t05_1_source_identity_round_trips() {
     for (source, name) in [
