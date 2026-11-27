@@ -1,6 +1,6 @@
 # Knoted 一致性备份
 
-以实例的宿主数据库用户调用固定产物中的命令。先核对运行中的 API、Worker、Python intelligence 服务与备份命令均来自同一固定修订，并确认数据库迁移已完成。用 API、Worker 的进程可执行文件路径及 Python 服务进程实际启动的解释器路径（命令行第一个参数）定位各自产物，再比对产物的 `share/knoted/REVISION`。旧版 Python 服务的健康响应字段与新版相同，其响应可能遗漏尚未确认退出的执行。首次切换仍使用停写备份，见 [ADR 0011](../../docs/decisions/0011-consistent-backup-and-isolated-restore.md) 和 [原实例升级回退要求](../../docs/decisions/0007-execution-exit-confirmation.md)。
+以实例的宿主数据库用户调用固定产物中的命令。先通过进程的实际可执行文件路径核对 API、Worker 与备份命令来自同一固定修订，并确认数据库迁移已完成。[当前备份契约](../../docs/decisions/0014-retire-file-index-rag.md)
 
 ```sh
 knoted-api admin backup --config /data/knoted-dev/service/config/knoted.toml \
@@ -13,7 +13,7 @@ knoted-api admin backup --config /data/knoted-dev/service/config/knoted.toml \
 
 命令成功退出且 `manifest.json` 存在时，归档才完成。归档由该清单、`database.dump` 和 `assets/<UUID>` 组成。数据库与各图片使用 SHA-256 和字节数校验。清单记录格式、应用版本、迁移校验和及恢复隔离所需的非密来源信息。无论检索是否启用，清单都记录其开关、来源实例地址和配置的索引名称，供恢复时核对隔离目标。使用固定发布包时另记录 `REVISION`。数据库归档含业务和认证记录，按实例数据权限保存。
 
-缺图、摘要不符、锁已断开或无法核实外部退出时，命令以非零退出。保留诊断和已生成的部分文件，重试使用新的输出目录。若目录同步与撤销发布均未能确认，命令报告发布不确定。隔离该目录，即使其中可见清单也应使用新目录重试。若维护记录显示未确认退出，先排查对应进程、数据库和外部副作用。原实例升级回退所需的 Python SQLite 账本、退出凭证和暂存文件依 [ADR 0007](../../docs/decisions/0007-execution-exit-confirmation.md) 单独处理。
+缺图、摘要不符、锁已断开或无法核实外部退出时，命令以非零退出。保留诊断和已生成的部分文件，重试使用新的输出目录。若目录同步与撤销发布均未能确认，命令报告发布不确定。隔离该目录，即使其中可见清单也应使用新目录重试。若维护记录显示未确认退出，先排查对应进程、数据库和外部副作用。
 
 ## 恢复到独立实例
 
@@ -24,14 +24,12 @@ instance_root = "/srv/knoted-rehearsal/run-01"
 app_config = "/srv/knoted-rehearsal/config/run-01.toml"
 ```
 
-在目标应用配置中设置新数据库名，使用与原实例相同的 RP ID，并使用该 RP ID 域名或其子域名下的独立 HTTPS origin。目标 API 使用空闲的 loopback 监听地址。`assets.root`、`files.staging_root` 分别使用实例根下的 `assets`、`staging`。实例根的父目录须存在，实例根须为新路径。文件源仅可指向获授权的只读目录。目标 PostgreSQL 须支持 pgvector，操作者使用本机账号连接并具有建库权限。
+在目标应用配置中设置新数据库名，使用与原实例相同的 RP ID，并使用该 RP ID 域名或其子域名下的独立 HTTPS origin。目标 API 使用空闲的 loopback 监听地址。`assets.root`、`files.staging_root` 分别使用实例根下的 `assets`、`staging`。实例根的父目录须存在，实例根须为新路径。文件源仅可指向获授权的只读目录。操作者使用有建库权限的本机 PostgreSQL 账号。
 
-为演练分配三个独立、空闲的 loopback 地址给 API、Python 和 Meilisearch。命令在恢复期间占用这三个监听地址，直至数据库启用。为 Meilisearch 配置两个新的索引 UID，通过凭据文件提供独立生成的认证密钥。归档不含源凭据，密钥独立性由供应过程保证。
-
-恢复成功后，先单独启动目标 Meilisearch，将其 HTTP 地址设置为目标 `search.base_url` 对应的主机和端口，`MEILI_DB_PATH` 指向新实例根下的空 `meili` 目录，并从独立的安全凭据源设置 `MEILI_MASTER_KEY`。启动目标 Python 时将 `KNOTED_INTELLIGENCE_STATE_DIR` 设为新实例根下的 `python`，`KNOTED_INTELLIGENCE_STAGING_DIR` 设为新实例根下的 `staging`。确认两个服务就绪后再启动目标 API 和 Worker。模型共享只读。
+为 API 和 Meilisearch 分配独立空闲的 loopback 地址。命令保留监听地址直至目标数据库启用。配置与原实例不同的 Meilisearch 索引 UID，使用独立凭据文件。恢复后从目标 `search.base_url` 启动 Meilisearch，数据路径为新实例根下的 `meili`。确认搜索服务就绪后启动目标 API 与 Worker。
 
 ```sh
 knoted-api admin restore --input /srv/backups/complete-01 --target /srv/knoted-rehearsal/config/target.toml
 ```
 
-命令验证清单、数据库和登记图片的摘要，在新目录和私有临时数据库恢复，核对迁移、图片及引用，撤销旧授权并冻结旧任务。最后重命名数据库以启用目标名。命令不启动服务。失败时保留的 `knoted_install_*` 数据库和新建目录供离线诊断，再次演练使用新路径。成功后以目标配置启动独立服务，Worker 从正常任务队列重新发布全文、词法及向量索引，文件扫描负责重新确认源文件。用专用 HTTPS origin 和既有 Passkey 登录验收。
+命令验证清单、数据库和登记图片的摘要，在新目录和私有临时数据库恢复，核对迁移、图片及引用，撤销旧授权并冻结旧任务。最后重命名数据库以启用目标名。命令不启动服务。失败时保留的 `knoted_install_*` 数据库和新建目录供离线诊断，再次演练使用新路径。成功后以目标配置启动独立服务，Worker 从正常任务队列重新发布笔记、项目和事项的全文索引，文件扫描负责重新确认源文件。用专用 HTTPS origin 和既有 Passkey 登录验收。

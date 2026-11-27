@@ -1,13 +1,13 @@
 # ADR 0007: 计算退出证明与持久监督
 
 - Date: 2026-11-18
-- Status: Accepted
+- Status: Superseded
 - Decision owner: 用户 Xingjian Xu
 - Confirmation: 2026-11-18 本会话，主 Agent 明确询问是否确认新的 11 月 18 日补充 RFC 并按推荐方案继续；用户紧接该问题回复原文“通过，基于执行”。确认对象为 [RFC 推荐方案](../rfcs/2026-11-18-t47-execution-exit-confirmation.md)，包括内部退出证明字段、guardian 与私有持久凭证、无法确认时保留占用，以及 Rust 持久尝试关联/迟到请求处理。不包含生产、破坏性恢复或宿主权限变更。
 - Related issues: T47 [#132](https://github.com/xingjianxu/knoted/issues/132)、T48 [#133](https://github.com/xingjianxu/knoted/issues/133)
 - Related PRs: 方案 [#152](https://github.com/xingjianxu/knoted/pull/152)、T47 [#157](https://github.com/xingjianxu/knoted/pull/157)
 - Supersedes: 无；补充 [ADR0006](0006-file-pipeline-and-aggregate-contracts.md)，其原决策继续有效
-- Superseded by: 无
+- Superseded by: [ADR 0014](0014-retire-file-index-rag.md)（计算执行服务）
 
 ## 背景与问题
 

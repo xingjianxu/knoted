@@ -1,14 +1,10 @@
 -- T53: unified searchable projection and the per-engine publication ledger.
 --
--- `source_documents` is the single searchable projection consumed by the unified
--- search (T54) and the lexical RAG index (T57). It is derived data: the domain
--- tables stay the source of truth, and every search hit is re-checked against
--- the current version at read time. Exactly one version per source is current;
--- the older rows stay until the background cleanup deletes them, which is why
--- visibility never depends on how fast a deletion reaches the engine.
+-- Search projection for notes, projects and tasks. Each search hit is checked
+-- against its current domain record. Exactly one version per source is current.
 CREATE TABLE source_documents (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    source_type text NOT NULL CHECK (source_type IN ('file', 'note', 'project', 'task', 'chat_message')),
+    source_type text NOT NULL CHECK (source_type IN ('note', 'project', 'task')),
     source_id uuid NOT NULL,
     source_version bigint NOT NULL CHECK (source_version > 0),
     title text NOT NULL CHECK (title <> ''),
@@ -17,8 +13,6 @@ CREATE TABLE source_documents (
     tags text[] NOT NULL DEFAULT '{}',
     archived boolean NOT NULL DEFAULT false,
     deleted boolean NOT NULL DEFAULT false,
-    path text,
-    format text,
     updated_at timestamptz NOT NULL,
     superseded_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),

@@ -36,8 +36,9 @@ fn parse_query(pairs: Vec<(String, String)>) -> Option<SearchQuery> {
             }
             "limit" => Value::from(value.parse::<usize>().ok()?),
             "archived" => Value::Bool(value.parse().ok()?),
-            "q" | "type" | "project" | "updated_from" | "updated_to" | "path" | "format"
-            | "sort" | "cursor" => Value::String(value),
+            "q" | "type" | "project" | "updated_from" | "updated_to" | "sort" | "cursor" => {
+                Value::String(value)
+            }
             _ => return None,
         };
         if fields.insert(key, value).is_some() {

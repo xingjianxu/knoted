@@ -7,13 +7,11 @@ pub mod context;
 pub mod dashboard;
 pub mod db;
 pub mod files;
-pub mod intelligence;
 pub mod jobs;
 pub mod links;
 pub mod maintenance;
 pub mod notes;
 pub mod projects;
-pub mod rag;
 pub mod search;
 pub mod tasks;
 

@@ -35,7 +35,6 @@ pub struct DashboardSummary {
     pub recent_notes: Vec<Note>,
     pub due_tasks: Vec<Task>,
     pub job_failures: i64,
-    pub indexing_enabled: bool,
 }
 pub struct GetDashboard;
 
@@ -92,7 +91,6 @@ pub async fn summary(ctx: &AppContext, _: GetDashboard) -> Result<DashboardSumma
         recent_notes,
         due_tasks: due.into_iter().take(10).map(|(_, _, task)| task).collect(),
         job_failures,
-        indexing_enabled: false,
     };
     tx.commit().await?;
     Ok(result)

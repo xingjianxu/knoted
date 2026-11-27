@@ -18,10 +18,6 @@ pnpm api:check
 pnpm api:verify
 pnpm run typecheck && pnpm run lint && pnpm run test && pnpm test:pc && pnpm run build
 
-# Python intelligence（改动 services/intelligence 时）
-# 在 services/intelligence 目录执行：
-# uv run --group dev pytest && uv run --group dev ruff check && uv run --group dev ruff format --check
-
 # Git 基础卫生
 git diff --check
 git diff --cached --check
@@ -33,9 +29,9 @@ git status --short --untracked-files=all
 
 ## 程序测试环境
 
-- Rust 全量入口 `bash tools/test/rust.sh` 调用 `cargo test --workspace --locked`，额外参数原样传给 Cargo。安装带中文分词的 Meilisearch，或用 `KNOTED_TEST_MEILI_BIN` 指定可执行文件。入口在 `127.0.0.1:17830` 启动一次性搜索进程，把 Meilisearch 数据及 `TMPDIR` 放入 `/data/knoted_dev/rust.*`，退出后清理。已有监听者时直接失败。真实分块和 intelligence 用例需要固定 BGE-M3 模型根与 Python 环境，分别通过 `KNOTED_INTELLIGENCE_BGE_M3_DIR` 和 `KNOTED_TEST_PYTHON` 设置。
+- Rust 全量入口 `bash tools/test/rust.sh` 调用 `cargo test --workspace --locked`，额外参数原样传给 Cargo。安装带中文分词的 Meilisearch，或用 `KNOTED_TEST_MEILI_BIN` 指定可执行文件。入口在 `127.0.0.1:17830` 启动一次性搜索进程，把 Meilisearch 数据及 `TMPDIR` 放入 `/data/knoted_dev/rust.*`，退出后清理。已有监听者时直接失败。
 - PostgreSQL 默认通过本机 socket 连接 `knoted_test`，每用例建临时 schema。可用 `KNOTED_TEST_DATABASE_URL` 指定其他以 `_test` 结尾的库。直接运行单项真实搜索测试时，显式将 `KNOTED_TEST_MEILI_URL` 指向专用测试实例。
-- [T71 夹具](../../tests/fixtures/t71/instance.sh) 在 `/data/knoted_dev/t71/instance.*` 内启动一次性的 API、Worker、Python、PostgreSQL、Meilisearch 和 Caddy。以固定构建产物设置 `T71_ARTIFACT`，以安装前缀设置 `T71_PGVECTOR`，准备锁定模型根后运行 `bash tests/fixtures/t71/instance.sh pnpm exec playwright test tests/e2e/t71.spec.ts`。夹具使用 `17820–17829`，退出后停止进程并回收当次状态。
+- [T71 夹具](../../tests/fixtures/t71/instance.sh) 在 `/data/knoted_dev/t71/instance.*` 内启动一次性的 API、Worker、PostgreSQL、Meilisearch 和 Caddy。以固定构建产物设置 `T71_ARTIFACT` 后运行 `bash tests/fixtures/t71/instance.sh pnpm exec playwright test tests/e2e/t71.spec.ts`。夹具使用 `17820–17829`，退出后停止进程并回收当次状态。
 
 ## 文档、Skills、钩子与 GitHub 模板
 

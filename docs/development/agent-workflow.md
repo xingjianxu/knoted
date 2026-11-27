@@ -50,7 +50,7 @@
 ## 交付定义与远程授权
 
 - 完整完成 = 代码/文档/任务卡安全提交 + 本地必需检查通过 + 独立审查完成 + PR 合入默认分支（普通 `merge`）+ 主线复核验证 + 开发服务器更新并验证 + Issue 回写并确认关闭 + 本任务干净 Worktree 与已合并本地分支安全清理。
-- 每次 Agent 任务（含纯文档任务）合入后，由主 Agent 在主工作区运行 `git pull --ff-only` 并做主线复核，再执行 `pnpm deploy:dev`。以脚本的实际输出确认部署 SHA 包含本次合并，且进程版本、API、intelligence 和 HTTPS 检查通过。部署命令用法见[一键部署](../plans/knoted-v1/development-and-deploy.md#一键部署)。
+- 每次 Agent 任务（含纯文档任务）合入后，由主 Agent 在主工作区运行 `git pull --ff-only` 并做主线复核，再执行 `pnpm deploy:dev`。以脚本的实际输出确认部署 SHA 包含本次合并，且 API、Worker 进程版本与 HTTPS 检查通过。部署命令用法见[一键部署](../plans/knoted-v1/development-and-deploy.md#一键部署)。
 - 常规 GitHub 操作默认已授权（Issue 建单/编辑/评论/关闭、原生 Type 与 `blocked-by`、`gh issue develop`、push 到非默认分支、PR 创建与普通合并、删除已合并远程分支）；仓库级设置（ruleset、分支保护、webhook、协作者与权限、Actions 设置、仓库可见性与删除、标签名增删）仍需逐次人工确认。
 - 上游 `xingjianxu/mtone` 仓库的默认授权仅覆盖新建 Issue 与在既有同能力 Issue 下补充评论（先查重、英文正文、仅用上游既有标签、回写编号与 URL），不含标签增删、仓库设置、PR 与 npm 发布，见 [UI 指南](ui-mtone.md)。
 - 合入前若缺少必需阶段、用户要求先看 PR 或遇到规则边界阻塞，如实报告“待提交/待审查/待集成”并保留 Worktree 与成果。合入后若部署受阻，保留该任务 Worktree，待部署验证通过后再清理。

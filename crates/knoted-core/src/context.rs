@@ -82,14 +82,8 @@ pub struct AppContext {
     clock: Arc<dyn Clock>,
     asset_root: std::path::PathBuf,
     files: crate::config::FilesConfig,
-    intelligence: crate::config::IntelligenceConfig,
     search: crate::config::SearchConfig,
-    vectors_enabled: bool,
     search_api_key: Option<String>,
-    chat_providers: Option<Arc<crate::rag::providers::ProviderRegistry>>,
-    // One admitted generation per instance. Keep its terminal receipt across
-    // the worker runner dropping the provider future to drive cancellation.
-    chat_terminal_receipt: Arc<Mutex<Option<(uuid::Uuid, uuid::Uuid)>>>,
     office: Option<Arc<crate::files::office::PreviewStore>>,
 }
 
@@ -108,12 +102,8 @@ impl AppContext {
             clock: Arc::new(SystemClock),
             asset_root: crate::config::AssetsConfig::default().root,
             files: crate::config::FilesConfig::default(),
-            intelligence: crate::config::IntelligenceConfig::default(),
             search: crate::config::SearchConfig::default(),
-            vectors_enabled: false,
             search_api_key: None,
-            chat_providers: None,
-            chat_terminal_receipt: Arc::default(),
             office: None,
         }
     }
@@ -134,28 +124,12 @@ impl AppContext {
         &self.asset_root
     }
 
-    pub fn with_intelligence(mut self, config: crate::config::IntelligenceConfig) -> Self {
-        self.intelligence = config;
-        self
-    }
-    pub fn intelligence(&self) -> &crate::config::IntelligenceConfig {
-        &self.intelligence
-    }
-
     pub fn with_files(mut self, config: crate::config::FilesConfig) -> Self {
         self.files = config;
         self
     }
     pub fn files(&self) -> &crate::config::FilesConfig {
         &self.files
-    }
-
-    pub fn with_vectors_enabled(mut self, enabled: bool) -> Self {
-        self.vectors_enabled = enabled;
-        self
-    }
-    pub fn vectors_enabled(&self) -> bool {
-        self.vectors_enabled
     }
 
     pub fn with_search(mut self, config: crate::config::SearchConfig) -> Self {
@@ -166,33 +140,6 @@ impl AppContext {
     /// Full-text publication target; disabled by default.
     pub fn search(&self) -> &crate::config::SearchConfig {
         &self.search
-    }
-
-    pub fn with_chat_providers(
-        mut self,
-        providers: Arc<crate::rag::providers::ProviderRegistry>,
-    ) -> Self {
-        self.chat_providers = Some(providers);
-        self
-    }
-
-    pub fn chat_providers(&self) -> Option<&crate::rag::providers::ProviderRegistry> {
-        self.chat_providers.as_deref()
-    }
-
-    pub(crate) fn remember_chat_terminal(&self, lease: &crate::jobs::Lease) {
-        *self
-            .chat_terminal_receipt
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some((lease.job_id, lease.token));
-    }
-
-    pub(crate) fn received_chat_terminal(&self, lease: &crate::jobs::Lease) -> bool {
-        *self
-            .chat_terminal_receipt
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            == Some((lease.job_id, lease.token))
     }
 
     /// Installs the search engine's API key from the credential file. The value

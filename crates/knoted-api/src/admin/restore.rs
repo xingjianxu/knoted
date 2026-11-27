@@ -225,7 +225,7 @@ fn isolated_config(
     manifest: &BackupManifest,
     target: &Target,
     config: &AppConfig,
-) -> Result<[TcpListener; 3], &'static str> {
+) -> Result<[TcpListener; 2], &'static str> {
     let source = &manifest.source;
     let origin = Url::parse(&config.auth.origin).map_err(|_| "invalid restore origin")?;
     let old_origin = Url::parse(&source.origin).map_err(|_| "invalid backup origin")?;
@@ -246,20 +246,11 @@ fn isolated_config(
     {
         return Err("target runtime roots do not match the descriptor");
     }
-    let old = [
-        port(&source.intelligence_origin)?,
-        port(&source.search.origin)?,
-    ];
-    let new = [
-        port(&config.intelligence.base_url)?,
-        port(&config.search.base_url)?,
-    ];
-    let old_indexes = [&source.search.document_index, &source.search.chunk_index];
-    if new[0] == new[1]
-        || new.iter().any(|p| old.contains(p))
-        || old_indexes.contains(&&config.search.index_uid)
-        || old_indexes.contains(&&config.search.rag_chunk_index_uid)
-        || config.search.index_uid == config.search.rag_chunk_index_uid
+    let source_ports = [source.api_port, port(&source.search.origin)?];
+    let new_search_port = port(&config.search.base_url)?;
+    if source_ports.contains(&0)
+        || source_ports.contains(&new_search_port)
+        || config.search.index_uid == source.search.document_index
         || !config.search.enabled
         || config.search_api_key().is_none_or(|s| s.is_empty())
     {
@@ -274,15 +265,14 @@ fn isolated_config(
         .map_err(|_| "invalid target server")?;
     if !bind.ip().is_loopback()
         || bind.port() == 0
-        || new.contains(&bind.port())
-        || old.contains(&bind.port())
+        || bind.port() == new_search_port
+        || source_ports.contains(&bind.port())
     {
         return Err("invalid target listener");
     }
     let api = TcpListener::bind(bind).map_err(|_| "target listener is occupied")?;
-    let python = reserve_endpoint(&config.intelligence.base_url)?;
     let meili = reserve_endpoint(&config.search.base_url)?;
-    Ok([api, python, meili])
+    Ok([api, meili])
 }
 
 fn reserve_endpoint(origin: &str) -> Result<TcpListener, &'static str> {
@@ -330,7 +320,7 @@ pub async fn run(command: &RestoreCommand) -> Result<(), &'static str> {
         .map_err(|_| "archive changed or private verification scratch unavailable")?;
     let root = safe_fs::create_backup_directory(&target.instance_root, &protected)
         .map_err(|_| "target instance root is occupied or overlaps protected data")?;
-    for name in ["assets", "staging", "python", "meili"] {
+    for name in ["assets", "staging", "meili"] {
         fs::mkdirat(&root, name, fs::Mode::RWXU)
             .map_err(|_| "private directory creation failed")?;
     }
@@ -441,14 +431,14 @@ mod tests {
         std::fs::write(&dump, dump_bytes).unwrap();
         std::fs::write(&image, image_bytes).unwrap();
         let manifest = serde_json::json!({
-            "format_version":1,"completed_at":"2026-01-01T00:00:00Z","app_version":"fixture",
+            "format_version":2,"completed_at":"2026-01-01T00:00:00Z","app_version":"fixture",
             "artifact_revision":null,"migrations":[],
             "database_dump":{"size":dump_bytes.len(),"sha256":Sha256Hex::digest(dump_bytes)},
             "assets":[{"id":id,"size":image_bytes.len(),"sha256":Sha256Hex::digest(image_bytes)}],
-            "source":{"database":"source","rp_id":"localhost","origin":"https://localhost",
+            "source":{"database":"source","rp_id":"localhost","origin":"https://localhost","api_port":15602,
                 "asset_root":"/original/assets","staging_root":null,"file_root":null,
-                "intelligence_origin":"http://127.0.0.1:1","search":{"enabled":false,
-                "origin":"http://127.0.0.1:2","document_index":"docs","chunk_index":"chunks"}}
+                "search":{"enabled":false,
+                "origin":"http://127.0.0.1:2","document_index":"docs"}}
         });
         std::fs::write(
             archive.join(backup::MANIFEST),

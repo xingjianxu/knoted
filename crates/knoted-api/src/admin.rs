@@ -24,6 +24,40 @@ use thiserror::Error;
 pub const USAGE: &str =
     "usage: knoted-api admin token --purpose <bootstrap|recovery> --config <PATH>";
 
+/// Requeues a terminal search job under the usual write admission lock.
+pub async fn retry_search(id: uuid::Uuid, config: &AppConfig) -> Result<uuid::Uuid, &'static str> {
+    use knoted_core::{
+        context::AppContext,
+        jobs::service,
+        search::meili::{CLEANUP_JOB_KIND, PUBLISH_JOB_KIND},
+    };
+
+    let database = config.database().ok_or("database configuration required")?;
+    let pool = db::connect(database)
+        .await
+        .map_err(|_| "database unavailable")?;
+    let ctx = AppContext::new(pool);
+    let kind = service::kind(&ctx, id)
+        .await
+        .map_err(|_| "search job unavailable")?;
+    if !matches!(kind.as_deref(), Some(PUBLISH_JOB_KIND | CLEANUP_JOB_KIND)) {
+        return Err("search job unavailable");
+    }
+    let guard = ctx
+        .try_write()
+        .await
+        .map_err(|_| "write admission unavailable")?
+        .ok_or("write admission is paused for maintenance")?;
+    let retry = service::retry_failed(&ctx, id).await;
+    guard
+        .finish()
+        .await
+        .map_err(|_| "search retry completion unconfirmed")?;
+    retry
+        .map(|job| job.id)
+        .map_err(|_| "search job cannot be retried")
+}
+
 /// Parsed arguments of `knoted-api admin token`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenCommand {

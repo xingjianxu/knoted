@@ -46,8 +46,6 @@ const MAX_TITLE_BYTES: usize = 2048;
 pub(crate) const MAX_BODY_BYTES: usize = 1024 * 1024;
 const MAX_TAGS: usize = 64;
 const MAX_TAG_BYTES: usize = 256;
-const MAX_PATH_BYTES: usize = 4096;
-const MAX_FORMAT_BYTES: usize = 32;
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 const TASK_POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -64,8 +62,6 @@ const FILTERABLE_ATTRIBUTES: &[&str] = &[
     "tags",
     "archived",
     "deleted",
-    "path",
-    "format",
 ];
 /// Sort keys; `version` mirrors `source_version` with a sort-friendly name.
 const SORTABLE_ATTRIBUTES: &[&str] = &["updated_at", "version", "id"];
@@ -81,38 +77,31 @@ const RANKING_RULES: &[&str] = &[
     "exactness",
 ];
 
-/// A kind of searchable source. The spellings match the shared source registry
-/// (`chat_message`, not `chat`) so T54/T57 need no translation layer.
+/// A searchable source from the shared entity registry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceType {
-    File,
     Note,
     Project,
     Task,
-    ChatMessage,
 }
 
 impl SourceType {
     /// Database and document-key spelling.
     pub fn as_str(self) -> &'static str {
         match self {
-            SourceType::File => "file",
             SourceType::Note => "note",
             SourceType::Project => "project",
             SourceType::Task => "task",
-            SourceType::ChatMessage => "chat_message",
         }
     }
 
     /// Inverse of [`SourceType::as_str`].
     pub fn parse(value: &str) -> Option<Self> {
         Some(match value {
-            "file" => SourceType::File,
             "note" => SourceType::Note,
             "project" => SourceType::Project,
             "task" => SourceType::Task,
-            "chat_message" => SourceType::ChatMessage,
             _ => return None,
         })
     }
@@ -133,8 +122,6 @@ pub struct SourceDocument {
     /// Derived deletion flag. It never replaces the read-time check against the
     /// domain row; it only keeps obviously stale hits out of a query.
     pub deleted: bool,
-    pub path: Option<String>,
-    pub format: Option<String>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -250,20 +237,6 @@ fn validate(document: &SourceDocument) -> Result<(), DomainError> {
     {
         return Err(DomainError::Invalid("tags are invalid"));
     }
-    if document
-        .path
-        .as_ref()
-        .is_some_and(|path| path.len() > MAX_PATH_BYTES)
-    {
-        return Err(DomainError::Invalid("path is too large"));
-    }
-    if document
-        .format
-        .as_ref()
-        .is_some_and(|format| format.len() > MAX_FORMAT_BYTES)
-    {
-        return Err(DomainError::Invalid("format is too large"));
-    }
     Ok(())
 }
 
@@ -289,7 +262,7 @@ async fn lock_source(
 /// publication of the same version is retried with a new job.
 ///
 /// The version identifies the projected content: a metadata-only change
-/// (`title`, `body`, `tags`, `archived`, `deleted`, `path`, `format`,
+/// (`title`, `body`, `tags`, `archived`, `deleted`,
 /// `updated_at`) must arrive as a new `source_version`. Re-sending an existing
 /// version keeps the stored projection.
 pub async fn publish_fulltext(
@@ -425,8 +398,8 @@ async fn insert_document(
 ) -> Result<Uuid, DomainError> {
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO source_documents (source_type, source_id, source_version, title, body, \
-         project_id, tags, archived, deleted, path, format, updated_at) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id",
+         project_id, tags, archived, deleted, updated_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id",
     )
     .bind(document.source_type.as_str())
     .bind(document.source_id)
@@ -437,8 +410,6 @@ async fn insert_document(
     .bind(&document.tags)
     .bind(document.archived)
     .bind(document.deleted)
-    .bind(document.path.as_deref())
-    .bind(document.format.as_deref())
     .bind(document.updated_at)
     .fetch_one(&mut **tx)
     .await?;
@@ -554,8 +525,6 @@ struct PublicationRecord {
     tags: Vec<String>,
     archived: bool,
     deleted: bool,
-    path: Option<String>,
-    format: Option<String>,
     updated_at: DateTime<Utc>,
 }
 
@@ -577,8 +546,6 @@ struct PublicationRecordRow {
     tags: Vec<String>,
     archived: bool,
     deleted: bool,
-    path: Option<String>,
-    format: Option<String>,
     updated_at: DateTime<Utc>,
 }
 
@@ -589,7 +556,7 @@ async fn load_record(
     let row: Option<PublicationRecordRow> = sqlx::query_as(
         "SELECT p.id, p.job_id, p.index_uid, p.document_key, p.status, p.meili_task_uid, \
          d.source_type, d.source_id, d.source_version, d.superseded_at IS NOT NULL AS superseded, \
-         d.title, d.body, d.project_id, d.tags, d.archived, d.deleted, d.path, d.format, d.updated_at \
+         d.title, d.body, d.project_id, d.tags, d.archived, d.deleted, d.updated_at \
          FROM fulltext_publications p JOIN source_documents d ON d.id=p.document_id \
          WHERE p.id=$1",
     )
@@ -614,8 +581,6 @@ async fn load_record(
             tags: row.tags,
             archived: row.archived,
             deleted: row.deleted,
-            path: row.path,
-            format: row.format,
             updated_at: row.updated_at,
         })
     }))
@@ -634,8 +599,6 @@ fn engine_document(record: &PublicationRecord) -> Value {
         "tags": record.tags,
         "archived": record.archived,
         "deleted": record.deleted,
-        "path": record.path,
-        "format": record.format,
         "updated_at": record.updated_at.timestamp_micros(),
     })
 }
@@ -748,10 +711,15 @@ impl MeiliClient {
         let id = Uuid::new_v4();
         if let Some(pool) = &self.pool {
             let mut tx = pool.begin().await?;
-            sqlx::query("INSERT INTO maintenance_external_targets VALUES ('meili',$1,$2) ON CONFLICT DO NOTHING")
+            sqlx::query("INSERT INTO maintenance_external_targets (origin,index_uid) VALUES ($1,$2) ON CONFLICT DO NOTHING")
                 .bind(&self.base).bind(uid).execute(&mut *tx).await?;
-            sqlx::query("INSERT INTO maintenance_external_submissions (id,service,index_uid) VALUES ($1,'meili',$2)")
-                .bind(id).bind(uid).execute(&mut *tx).await?;
+            sqlx::query(
+                "INSERT INTO maintenance_external_submissions (id,index_uid) VALUES ($1,$2)",
+            )
+            .bind(id)
+            .bind(uid)
+            .execute(&mut *tx)
+            .await?;
             tx.commit().await?;
         }
         let response = request.send().await.map_err(|_| DomainError::Unavailable)?;

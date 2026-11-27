@@ -463,12 +463,6 @@ async fn publish(
     lease_valid(&mut tx, &input.lease).await?;
     input.open()?;
     pending.validate()?;
-    super::extraction::enqueue(&mut tx, id)
-        .await
-        .map_err(extraction_error)?;
-    lease_valid(&mut tx, &input.lease).await?;
-    input.open()?;
-    pending.validate()?;
     if let Some(metadata) = reused
         && staged_metadata(&pending.directory, object.object_id.as_str())? != metadata
     {
@@ -619,27 +613,6 @@ async fn replay(
     };
     lease_valid(&mut tx, &input.lease).await?;
     validate_root(input)?;
-    if receipt.is_some() {
-        let id = source(&mut tx, input, true)
-            .await?
-            .ok_or(DomainError::Stale)?
-            .id;
-        super::extraction::enqueue(&mut tx, id)
-            .await
-            .map_err(extraction_error)?;
-    }
-    lease_valid(&mut tx, &input.lease).await?;
-    validate_root(input)?;
-    tx.commit().await?; // Receipt is unchanged; extraction may be newly enabled.
+    tx.commit().await?;
     Ok(receipt)
-}
-
-fn extraction_error(error: super::extraction::DomainError) -> DomainError {
-    match error {
-        super::extraction::DomainError::Database(e)
-        | super::extraction::DomainError::Queue(crate::db::DbError::Sqlx(e)) => {
-            DomainError::Database(e)
-        }
-        _ => DomainError::Stale,
-    }
 }

@@ -2,9 +2,9 @@
 
 ## 项目与入口
 
-Knoted 为 Rust 2024 workspace（`crates/knoted-core`、`knoted-api`、`knoted-worker`）加 pnpm workspace（`apps/web`、`packages/api-client`；Web 直接消费锁定的 [`@bixlab/mtone`](docs/development/ui-mtone.md#现状与目标)），以及 `services/intelligence/` 的 Python 执行服务（Docling+RapidOCR 离线解析、BGE-M3 dense 嵌入）。当前目录职责见 [架构现状](docs/architecture/README.md)，正在推进的任务从 [任务索引](docs/tasks/README.md) 领取，已完成的 v1 首版与全站 Web 重设计文档归档在 [docs/plans/](docs/plans/README.md)。不要根据项目名称推断产品需求。
+Knoted 为 Rust 2024 workspace（`crates/knoted-core`、`knoted-api`、`knoted-worker`）加 pnpm workspace（`apps/web`、`packages/api-client`；Web 直接消费锁定的 [`@bixlab/mtone`](docs/development/ui-mtone.md#现状与目标)）。当前目录职责见 [架构现状](docs/architecture/README.md)，正在推进的任务从 [任务索引](docs/tasks/README.md) 领取，已完成的 v1 首版与全站 Web 重设计文档归档在 [docs/plans/](docs/plans/README.md)。不要根据项目名称推断产品需求。
 
-- 开发实例由 `@bixlab/pcwrap` + process-compose 管理：`pnpm deploy:dev`（一键部署）或 `pnpm pc up -D` / `process list` / `process restart <name>` / `process logs <name>` / `down`，控制端口 `127.0.0.1:15600`，宿主共享 Caddy 提供 HTTPS `15601`（[ADR 0005](docs/decisions/0005-https-owned-by-caddy.md)），API `127.0.0.1:15602`，内部 intelligence `127.0.0.1:15603`。数据库由宿主用户 `xingjian` 直接创建（[ADR 0004](docs/decisions/0004-database-owned-by-host-user.md)），Strata/模型共享根/ACME/运行期工具仍由 `/etc/nixos` 管理，生产实例由 NixOS 运行（[ADR 0003](docs/decisions/0003-test-instance-process-management.md)）。
+- 开发实例由 `@bixlab/pcwrap` + process-compose 管理：`pnpm deploy:dev`（一键部署）或 `pnpm pc up -D` / `process list` / `process restart <name>` / `process logs <name>` / `down`，控制端口 `127.0.0.1:15600`，宿主共享 Caddy 提供 HTTPS `15601`（[ADR 0005](docs/decisions/0005-https-owned-by-caddy.md)），API `127.0.0.1:15602`。数据库由宿主用户 `xingjian` 直接创建（[ADR 0004](docs/decisions/0004-database-owned-by-host-user.md)），ACME 与运行期工具由 `/etc/nixos` 管理，生产实例由 NixOS 运行（[ADR 0003](docs/decisions/0003-test-instance-process-management.md)）。
 - 需要运行服务的程序测试使用 `/data/knoted_dev` 下的独立运行目录、测试数据库及搜索实例。未经明确要求，不使用开发实例验证会写入数据的场景。Rust 入口和浏览器夹具见 [验证方法](docs/development/validation.md)。
 - 入口目录：`.agents/skills/`（保留的项目专用 Skills 与 `git-commit`）、`docs/tasks/`（按 Issue 编号的任务索引与卡片）、`docs/development/`（操作指南与适配说明）、`docs/decisions/`（ADR）、`docs/rfcs/`（重大方案讨论）、`docs/plans/`（历史归档与跨卡设计计划）、`.worktrees/`（被 Git 忽略的唯一任务工作区父目录）。
 
@@ -45,7 +45,6 @@ cd "$tree"
 - **本地验证即唯一合并门禁**：修改行为时使用适合任务的 TDD，复杂故障先定位根因再修复，不编造覆盖。仓库不使用 GitHub CI，**本地必需检查是唯一的合并门禁**，必须实际运行并留存输出（不能用叙述替代）：
   - Rust：`cargo fmt --check`、`bash tools/test/rust.sh`（执行 `cargo test --workspace --locked`）、`cargo clippy --workspace --all-targets -- -D warnings`
   - Web/API 契约（按改动范围）：`pnpm install --frozen-lockfile`、`pnpm api:check`、`pnpm api:verify`、`pnpm run typecheck`、`pnpm run lint`、`pnpm run test`、`pnpm test:pc`、`pnpm run build`
-  - Python intelligence（改动 `services/intelligence` 时在其目录运行）：`uv run --group dev pytest`、`uv run --group dev ruff check`、`uv run --group dev ruff format --check`
   - 文档/配置/模板：YAML 1.2 解析、Markdown 链接、Skill frontmatter、脚本语法与 `git diff --check`；见 [验证方法](docs/development/validation.md)。
 - **PR 与独立审查**：PR 使用 [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md)，单个或最终 PR 写 `Closes #<编号>`，中间 PR 普通引用 `#<编号>`，正文记录已验证的 PR head SHA、默认分支 base SHA、环境、命令、实际输出、验收结果与未覆盖范围。合并前发起独立审查并核实反馈；head 更新或默认分支前进时同步基线并重新验证。
 - **合并、回写与清理**：本仓库仅允许普通 merge commit（`allow_merge_commit=true`），默认授权 Agent 使用 `gh pr merge <PR> --merge --match-head-commit <已验证SHA>` 合入；用户明确要求先看 PR 时保留待合并状态。合入后回到主工作区用 `git pull --ff-only` 同步并做主线复核。每次 Agent 任务（含纯文档任务）收尾时，由主 Agent 在主工作区执行 `pnpm deploy:dev` 更新开发服务器，确认部署版本包含本次合并且脚本验证通过。将 PR 链接、合并 SHA、验证摘要和部署结果回写原 Issue 并确认关闭。部署验证通过后再安全清理本次已合入且干净的 worktree 和本地分支。部署受阻时在 Issue 与交付报告标明「待部署」及原因。详见 [Agent 任务工作流](docs/development/agent-workflow.md#交付定义与远程授权)。

@@ -1,6 +1,6 @@
 # Knoted
 
-Knoted 提供 Passkey 单账号登录、带版本历史的笔记、项目与事项、只读文件采集和预览、中文全文检索及带引用的问答。应用由 Rust API 与 Worker、React/TypeScript Web、Python intelligence 组成，使用 PostgreSQL 和 Meilisearch。具体能力、验证版本和限制见 [架构现状](docs/architecture/README.md) 与 [Knoted v1 归档任务](docs/plans/knoted-v1/README.md)。
+Knoted 提供 Passkey 单账号登录、带版本历史的笔记、项目与事项、自动采集和预览只读文件，以及笔记、项目和事项的中文全文搜索。应用由 Rust API 与 Worker 和 React/TypeScript Web 组成，使用 PostgreSQL 与 Meilisearch。文件索引和 RAG 的旧实现可从归档分支取回。[当前架构](docs/architecture/README.md) · [退出决策](docs/decisions/0014-retire-file-index-rag.md)
 
 UI 方向已确认：通用组件直接消费 npm `@bixlab/mtone`，本项目只做业务组合与适配。当前锁定版本及升级记录见 [UI 指南](docs/development/ui-mtone.md#现状与目标) 与 [ADR 0002](docs/decisions/0002-mtone-ui-ownership.md)。
 
@@ -27,14 +27,14 @@ UI 方向已确认：通用组件直接消费 npm `@bixlab/mtone`，本项目只
 
 ```bash
 pnpm deploy:dev                      # 取最新主线：构建 → 切换 → 重启 → 验证
-pnpm pc up -D                        # prepare → migrate → intelligence、API 和 Worker
+pnpm pc up -D                        # prepare → migrate → API 和 Worker
 pnpm pc process list
 pnpm pc process restart knoted-api   # 只重启 API，不重跑迁移
 pnpm pc process logs knoted-api -n 200
 pnpm pc down                         # 停止实例（不影响 PostgreSQL 等外部依赖）
 ```
 
-运行根是固定提交产物（`tools/dev/build-artifact.sh` → `/data/knoted-dev/runtime/<sha>`），配置由 `tools/dev/pc/*.tmpl` 渲染。日常发版用 `pnpm deploy:dev`（[一键部署](docs/plans/knoted-v1/development-and-deploy.md#一键部署)）。HTTPS 由宿主共享 Caddy 提供。dev 使用 `knoted_dev`，数据库由宿主用户创建。独立生产实例由 NixOS 和共享 Caddy 运行，使用另一数据库和数据根。固定发布、生产入口与回退见 [T72 交接记录](docs/plans/knoted-v1/evidence/t72-deployment.md)。[ADR 0003](docs/decisions/0003-test-instance-process-management.md) · [ADR 0004](docs/decisions/0004-database-owned-by-host-user.md) · [ADR 0005](docs/decisions/0005-https-owned-by-caddy.md)
+运行根是固定提交产物（`tools/dev/build-artifact.sh` → `/data/knoted-dev/runtime/<sha>`），配置由 `tools/dev/pc/*.tmpl` 渲染。日常发版用 `pnpm deploy:dev`。HTTPS 由宿主共享 Caddy 提供。dev 使用 `knoted_dev`，数据库由宿主用户创建。独立生产实例由 NixOS 和共享 Caddy 运行，使用另一数据库和数据根。生产实例由宿主为当前提交构建固定产物。[旧部署交接](docs/plans/knoted-v1/evidence/t72-deployment.md)[ADR 0003](docs/decisions/0003-test-instance-process-management.md) · [ADR 0004](docs/decisions/0004-database-owned-by-host-user.md) · [ADR 0005](docs/decisions/0005-https-owned-by-caddy.md)
 
 ## 程序测试
 

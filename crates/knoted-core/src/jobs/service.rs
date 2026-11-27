@@ -8,9 +8,7 @@
 //! All time comes from [`AppContext::now`], never from `Utc::now()`, so tests
 //! advance a [`crate::context::FixedClock`] instead of sleeping.
 
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use chrono::{DateTime, Duration, Utc};
-use serde::{Deserialize, Serialize};
+use chrono::Duration;
 use uuid::Uuid;
 
 use super::{Job, JobOutcome, JobSpec, JobState, Lease, enqueue, repository};
@@ -400,101 +398,10 @@ async fn reconcile_cancelled(ctx: &AppContext, lease: &Lease) -> Result<Job, Dom
     Err(DomainJobError::LeaseLost { job_id })
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ListJobs {
-    pub cursor: Option<String>,
-    pub limit: Option<u32>,
-    pub state: Option<JobState>,
-}
-
-pub struct JobPage {
-    pub items: Vec<Job>,
-    pub next_cursor: Option<String>,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum ListJobsError {
-    #[error("invalid job list parameters")]
-    Invalid,
-    #[error("jobs unavailable")]
-    Unavailable,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct ListCursor {
-    version: u8,
-    scope: String,
-    state: Option<JobState>,
-    created_at: DateTime<Utc>,
-    id: Uuid,
-}
-
 /// Reads the dispatch kind without loading a job's private payload.
 pub async fn kind(ctx: &AppContext, job_id: Uuid) -> Result<Option<String>, DbError> {
     Ok(sqlx::query_scalar("SELECT kind FROM jobs WHERE id=$1")
         .bind(job_id)
         .fetch_optional(ctx.pool())
         .await?)
-}
-
-/// Lists the newest executions of the selected kinds, including terminal attempts.
-pub async fn list(
-    ctx: &AppContext,
-    input: ListJobs,
-    kinds: &[&str],
-) -> Result<JobPage, ListJobsError> {
-    let limit = input.limit.unwrap_or(50);
-    if !(1..=100).contains(&limit) {
-        return Err(ListJobsError::Invalid);
-    }
-    let cursor = input
-        .cursor
-        .map(|raw| {
-            if raw.len() > 2048 {
-                return Err(ListJobsError::Invalid);
-            }
-            let decoded = URL_SAFE_NO_PAD
-                .decode(raw)
-                .map_err(|_| ListJobsError::Invalid)?;
-            let cursor: ListCursor =
-                serde_json::from_slice(&decoded).map_err(|_| ListJobsError::Invalid)?;
-            if cursor.version != 1 || cursor.scope != "jobs" || cursor.state != input.state {
-                return Err(ListJobsError::Invalid);
-            }
-            Ok(cursor)
-        })
-        .transpose()?;
-    let mut items: Vec<Job> = sqlx::query_as(
-        "SELECT * FROM jobs WHERE ($1::text IS NULL OR state=$1) \
-         AND kind=ANY($5::text[]) AND ($2::timestamptz IS NULL OR (created_at,id) < ($2,$3)) \
-         ORDER BY created_at DESC,id DESC LIMIT $4",
-    )
-    .bind(input.state.map(JobState::as_str))
-    .bind(cursor.as_ref().map(|value| value.created_at))
-    .bind(cursor.as_ref().map(|value| value.id))
-    .bind(i64::from(limit) + 1)
-    .bind(kinds)
-    .fetch_all(ctx.pool())
-    .await
-    .map_err(|_| ListJobsError::Unavailable)?;
-
-    let has_next = items.len() > limit as usize;
-    items.truncate(limit as usize);
-    let next_cursor = if has_next {
-        let last = items.last().ok_or(ListJobsError::Unavailable)?;
-        let bytes = serde_json::to_vec(&ListCursor {
-            version: 1,
-            scope: "jobs".into(),
-            state: input.state,
-            created_at: last.created_at,
-            id: last.id,
-        })
-        .map_err(|_| ListJobsError::Unavailable)?;
-        Some(URL_SAFE_NO_PAD.encode(bytes))
-    } else {
-        None
-    };
-    Ok(JobPage { items, next_cursor })
 }

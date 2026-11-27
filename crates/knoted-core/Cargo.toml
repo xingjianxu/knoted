@@ -23,7 +23,6 @@ url.workspace = true
 # Needed by the test-only schema helper, which cleans up after a panicking test
 # from a dedicated runtime.
 tokio.workspace = true
-tokenizers = { version = "=0.23.2", default-features = false, features = ["fancy-regex"] }
 uuid.workspace = true
 webauthn-rs.workspace = true
 chrono-tz.workspace = true
@@ -32,6 +31,5 @@ libc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-# Stubs the internal HTTP protocol in `tests/t09.rs`; the Python service has its
-# own real-process tests and neither side replaces the other.
+# Exercises Meilisearch response and submission failures.
 wiremock = "0.6"

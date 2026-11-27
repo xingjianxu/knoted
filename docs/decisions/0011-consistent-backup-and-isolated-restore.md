@@ -7,7 +7,7 @@
 - Related issues: [#220](https://github.com/xingjianxu/knoted/issues/220)
 - Related PRs: [#221](https://github.com/xingjianxu/knoted/pull/221)
 - Supersedes: 无
-- Superseded by: 无
+- Superseded by: [ADR 0014](0014-retire-file-index-rag.md)（外部退出核验及恢复拓扑）
 
 ## 背景与问题
 

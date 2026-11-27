@@ -1,14 +1,13 @@
-//! Reclamation uses real note references and confirmed execution records.
-use std::{fs, os::unix::fs::symlink, path::Path, sync::Arc};
+//! Reclamation uses real note references.
+use std::{fs, os::unix::fs::symlink, sync::Arc};
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use knoted_core::{
     assets::{gc::collect_unreferenced_assets, references},
     auth,
-    config::{FilesConfig, IntelligenceConfig},
     context::{AppContext, FixedClock},
     db::testing::TestDb,
-    files::{Sha256Hex, gc::collect_staging},
+    files::Sha256Hex,
     notes::{
         history::{self, FlushSnapshot},
         service::{self as notes, CreateNote, UpdateNote},
@@ -16,10 +15,6 @@ use knoted_core::{
 };
 use serde_json::json;
 use uuid::Uuid;
-use wiremock::{
-    Mock, MockServer, ResponseTemplate,
-    matchers::{method, path},
-};
 
 const IMAGE: &[u8] = b"registered fixture object";
 
@@ -152,128 +147,6 @@ async fn t67_4_reference_committed_while_collection_waits_protects_the_file() {
     assert!(root.path().join(image.to_string()).exists());
 }
 
-fn execution_path(execution: Uuid) -> String {
-    format!("/internal/v1/executions/{execution}")
-}
-
-async fn execution(server: &MockServer, id: Uuid, state: &str, proof: bool, age: Duration) {
-    let started = now() - age - Duration::minutes(1);
-    let finished = now() - age;
-    let digest = Sha256Hex::digest(b"manifest").to_string();
-    Mock::given(method("GET"))
-        .and(path(execution_path(id)))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "execution_id": id,
-            "kind": "embed",
-            "state": state,
-            "compute_exit_confirmed": proof,
-            "input_sha256": digest,
-            "source_version": 1,
-            "options_revision": "fixture",
-            "created_at": started,
-            "updated_at": finished,
-            "started_at": started,
-            "finished_at": if state == "running" { None } else { Some(finished) },
-            "error": null,
-        })))
-        .mount(server)
-        .await;
-}
-
-fn staging(ctx: AppContext, root: &Path, server: &MockServer) -> AppContext {
-    ctx.with_clock(Arc::new(FixedClock::new(now())))
-        .with_files(FilesConfig {
-            staging_root: Some(root.into()),
-            ..FilesConfig::default()
-        })
-        .with_intelligence(IntelligenceConfig {
-            base_url: server.uri(),
-        })
-}
-
-fn output(root: &Path, id: Uuid) -> std::path::PathBuf {
-    let directory = root.join("output").join(id.to_string());
-    fs::create_dir_all(&directory).unwrap();
-    let artifact = directory.join(format!("{id}-embed.json"));
-    fs::write(&artifact, b"output").unwrap();
-    artifact
-}
-
-#[tokio::test]
-async fn t67_2_running_unproven_and_recent_objects_are_retained() {
-    let db = TestDb::create().await.unwrap();
-    let server = MockServer::start().await;
-    let root = tempfile::tempdir().unwrap();
-    let mut paths = Vec::new();
-    for (state, proof, age) in [
-        ("running", false, Duration::days(2)),
-        ("succeeded", false, Duration::days(2)),
-        ("succeeded", true, Duration::hours(23)),
-    ] {
-        let id = Uuid::new_v4();
-        execution(&server, id, state, proof, age).await;
-        paths.push(output(root.path(), id));
-    }
-    let ctx = staging(AppContext::new(db.pool.clone()), root.path(), &server);
-    let count = collect_staging(&ctx).await;
-    db.drop().await;
-
-    assert_eq!(count.unwrap(), 0);
-    assert!(paths.iter().all(|object| object.exists()));
-}
-
-#[tokio::test]
-async fn t67_3_reclaims_named_objects_and_preserves_other_directories() {
-    let db = TestDb::create().await.unwrap();
-    let server = MockServer::start().await;
-    let root = tempfile::tempdir().unwrap();
-    let unrelated = tempfile::tempdir().unwrap();
-    let id = Uuid::new_v4();
-    execution(&server, id, "succeeded", true, Duration::hours(24)).await;
-    Mock::given(method("GET"))
-        .and(path(format!("{}/result", execution_path(id))))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "object_id": format!("{id}-embed.json"),
-            "size": 6,
-            "sha256": Sha256Hex::digest(b"output").to_string(),
-            "media_type": "application/json",
-            "metadata": {
-              "kind": "embed", "source_version": "1", "options_revision": "fixture",
-              "input_sha256": Sha256Hex::digest(b"manifest").to_string(),
-            }
-        })))
-        .mount(&server)
-        .await;
-    let eligible = output(root.path(), id);
-    fs::create_dir(root.path().join("input")).unwrap();
-    let input = root.path().join("input").join(format!(
-        "embed-{id}-{}.json",
-        Sha256Hex::digest(b"manifest")
-    ));
-    fs::write(&input, b"manifest").unwrap();
-    let unknown = eligible.with_file_name("other-task.json");
-    fs::write(&unknown, b"unrecorded object").unwrap();
-    let foreign_id = Uuid::new_v4();
-    let foreign = unrelated.path().join(format!("{foreign_id}-embed.json"));
-    fs::write(&foreign, b"separate task").unwrap();
-    symlink(
-        unrelated.path(),
-        root.path().join("output").join(foreign_id.to_string()),
-    )
-    .unwrap();
-    let ctx = staging(AppContext::new(db.pool.clone()), root.path(), &server);
-
-    let collected = collect_staging(&ctx).await;
-    let second = collect_staging(&ctx).await;
-    db.drop().await;
-    assert_eq!(collected.unwrap(), 2);
-    assert_eq!(second.unwrap(), 0);
-    assert!(!eligible.exists());
-    assert!(!input.exists());
-    assert!(unknown.exists());
-    assert!(foreign.exists());
-}
-
 #[tokio::test]
 async fn t67_5_replay_preserves_the_registered_identity_after_reclamation() {
     use knoted_core::assets::service::{self as assets, DomainError, ReadAsset, UploadAsset};
@@ -358,26 +231,4 @@ async fn t67_6_retries_removal_without_following_a_substituted_image_path() {
     assert_eq!(recovered.unwrap(), 1);
     assert_eq!(completed, ("deleted".into(), true));
     assert!(!path.exists());
-}
-
-#[tokio::test]
-async fn t67_7_terminal_failure_can_leave_a_named_artifact() {
-    let db = TestDb::create().await.unwrap();
-    let server = MockServer::start().await;
-    let root = tempfile::tempdir().unwrap();
-    let id = Uuid::new_v4();
-    execution(&server, id, "cancelled", true, Duration::hours(25)).await;
-    let artifact = output(root.path(), id);
-    let partial =
-        artifact.with_file_name(format!(".{id}-embed.json.{}.part", Uuid::new_v4().simple()));
-    fs::write(&partial, b"partial write").unwrap();
-    let unknown = artifact.with_file_name("unrecorded.json");
-    fs::write(&unknown, b"preserve").unwrap();
-    let ctx = staging(AppContext::new(db.pool.clone()), root.path(), &server);
-    let collected = collect_staging(&ctx).await;
-    db.drop().await;
-    assert_eq!(collected.unwrap(), 2);
-    assert!(!artifact.exists());
-    assert!(!partial.exists());
-    assert!(unknown.exists());
 }

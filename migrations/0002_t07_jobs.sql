@@ -1,6 +1,6 @@
 -- T07: durable job queue, leases and the transactional outbox.
 --
--- A job is one unit of background work (parse, embed, index, ...). Workers
+-- A job is one unit of background work (capture, search publication, ...). Workers
 -- claim a job with a short transaction, receive a `lease_token`, keep the lease
 -- alive with heartbeats and may only commit a result while the token still
 -- matches. `attempts` counts claims, so an expired lease that is taken over
@@ -25,6 +25,7 @@ CREATE TABLE jobs (
     locked_by text,
     last_error text,
     created_at timestamptz NOT NULL DEFAULT now(),
+    started_at timestamptz,
     updated_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT jobs_state_check CHECK (
         state IN (
@@ -41,8 +42,7 @@ CREATE TABLE jobs (
     CONSTRAINT jobs_max_attempts_check CHECK (max_attempts >= 1),
     -- A lease exists exactly while a worker owns the job: `running` and
     -- `cancel_requested` both hold it, so a cancellation request keeps the
-    -- resources and the execution quota until the worker confirms (matching the
-    -- RAG rule that no resource is released without a cancel confirmation).
+    -- resources and the execution quota until the worker confirms cancellation.
     -- Every other state must have all three lease columns NULL, which forces the
     -- state machine to release the lease in the same statement that ends a run.
     CONSTRAINT jobs_lease_check CHECK (

@@ -49,20 +49,6 @@ impl Fixture {
             .execute(&control)
             .await
             .unwrap();
-        // On the local NixOS test instance pgvector's paths are per database.
-        // Copy only those extension lookup settings to this fresh fixture.
-        let extension_settings: Vec<String> = sqlx::query_scalar(
-            "SELECT format('ALTER DATABASE %I SET %I TO %L', $1::text, name, setting)
-             FROM pg_settings WHERE name IN ('extension_control_path','dynamic_library_path')
-             AND source='database'",
-        )
-        .bind(&name)
-        .fetch_all(&control)
-        .await
-        .unwrap();
-        for setting in extension_settings {
-            sqlx::query(&setting).execute(&control).await.unwrap();
-        }
         let options = options.database(&name);
         let pool = PgPoolOptions::new()
             .max_connections(4)
@@ -257,13 +243,11 @@ async fn t68_2_real_dump_contains_work_admitted_before_backup() {
 #[tokio::test]
 async fn t68_3_unknown_remote_submission_refuses_archive_and_reopens_admission() {
     let fixture = Fixture::create().await;
-    sqlx::query(
-        "INSERT INTO maintenance_external_submissions(id,service,index_uid) VALUES ($1,'meili','fixture')",
-    )
-    .bind(Uuid::new_v4())
-    .execute(fixture.context.pool())
-    .await
-    .unwrap();
+    sqlx::query("INSERT INTO maintenance_external_submissions(id,index_uid) VALUES ($1,'fixture')")
+        .bind(Uuid::new_v4())
+        .execute(fixture.context.pool())
+        .await
+        .unwrap();
     let output = fixture.directory.path().join("uncertain");
     let result = fixture.backup(&output).output().await.unwrap();
     let incomplete = !output.join(MANIFEST).exists();
@@ -432,13 +416,19 @@ async fn disabled_search_preserves_source_coordinates_after_a_historic_index_pro
         .append(true)
         .open(&fixture.config)
         .unwrap();
-    writeln!(config, "[search]\nenabled=false\nbase_url={origin:?}\nindex_uid=\"source_documents\"\nrag_chunk_index_uid=\"source_chunks\"").unwrap();
+    writeln!(
+        config,
+        "[search]\nenabled=false\nbase_url={origin:?}\nindex_uid=\"source_documents\""
+    )
+    .unwrap();
     drop(config);
-    sqlx::query("INSERT INTO maintenance_external_targets VALUES ('meili',$1,'previous')")
-        .bind(&origin)
-        .execute(fixture.context.pool())
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO maintenance_external_targets (origin,index_uid) VALUES ($1,'previous')",
+    )
+    .bind(&origin)
+    .execute(fixture.context.pool())
+    .await
+    .unwrap();
     let output = fixture.directory.path().join("backup");
     let result = fixture.backup(&output).output().await.unwrap();
     let manifest = fs::read(output.join(MANIFEST));
@@ -454,10 +444,48 @@ async fn disabled_search_preserves_source_coordinates_after_a_historic_index_pro
     assert_eq!(query["statuses"], "enqueued,processing");
     assert_eq!(query["limit"], "1");
     let manifest: serde_json::Value = serde_json::from_slice(&manifest.unwrap()).unwrap();
+    assert_eq!(manifest["source"]["api_port"], 17685);
     assert_eq!(
         manifest["source"]["search"],
         json!({
-            "enabled":false,"origin":origin,"document_index":"source_documents","chunk_index":"source_chunks"
+            "enabled":false,"origin":origin,"document_index":"source_documents"
         })
     );
+}
+
+#[tokio::test]
+async fn operator_can_retry_search_without_a_job_route() {
+    let fixture = Fixture::create().await;
+    let mut jobs = Vec::new();
+    for kind in ["fulltext.publish", "file.scan"] {
+        let id: Uuid = sqlx::query_scalar(
+            "INSERT INTO jobs (kind,state,payload) VALUES ($1,'failed','{}') RETURNING id",
+        )
+        .bind(kind)
+        .fetch_one(fixture.context.pool())
+        .await
+        .unwrap();
+        let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_knoted-api"))
+            .args([
+                "admin",
+                "retry-search",
+                "--job",
+                &id.to_string(),
+                "--config",
+            ])
+            .arg(&fixture.config)
+            .output()
+            .await
+            .unwrap();
+        let retried: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT FROM jobs WHERE retry_of=$1 AND state='queued')",
+        )
+        .bind(id)
+        .fetch_one(fixture.context.pool())
+        .await
+        .unwrap();
+        jobs.push((output.status.success(), retried));
+    }
+    fixture.close().await;
+    assert_eq!(jobs, [(true, true), (false, false)]);
 }

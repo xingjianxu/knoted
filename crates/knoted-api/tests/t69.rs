@@ -18,13 +18,12 @@ fn t69_1_digest_mismatch_rejects_archive() {
     std::fs::create_dir(root.join("assets")).unwrap();
     std::fs::write(root.join("database.dump"), b"PGDMP").unwrap();
     let manifest = serde_json::json!({
-        "format_version": 1, "completed_at": "2026-01-01T00:00:00Z", "app_version":"test",
+        "format_version": 2, "completed_at": "2026-01-01T00:00:00Z", "app_version":"test",
         "artifact_revision":null, "migrations":[], "assets":[],
         "database_dump":{"size":5, "sha256":"0".repeat(64)},
-        "source":{"database":"src","rp_id":"localhost","origin":"https://localhost",
+        "source":{"database":"src","rp_id":"localhost","origin":"https://localhost","api_port":15602,
         "asset_root":"/src/assets","staging_root":null,"file_root":null,
-        "intelligence_origin":"http://127.0.0.1:15603",
-        "search":{"enabled":true,"origin":"http://127.0.0.1:15605","document_index":"doc","chunk_index":"chunk"}}
+        "search":{"enabled":true,"origin":"http://127.0.0.1:15605","document_index":"doc"}}
     });
     std::fs::write(
         root.join("manifest.json"),
@@ -91,20 +90,7 @@ struct PrivatePostgres {
 
 impl PrivatePostgres {
     async fn start() -> Self {
-        use knoted_core::db::testing;
         use std::io::Write;
-        let url = testing::test_database_url();
-        let options: sqlx::postgres::PgConnectOptions = url.parse().unwrap();
-        assert!(options.get_database().unwrap().ends_with("_test"));
-        let reference = sqlx::PgPool::connect(&url).await.unwrap();
-        let extension_settings: Vec<String> = sqlx::query_scalar(
-            "SELECT format('%I = %L',name,setting) FROM pg_settings
-             WHERE name IN ('extension_control_path','dynamic_library_path')",
-        )
-        .fetch_all(&reference)
-        .await
-        .unwrap();
-        reference.close().await;
         let directory = tempfile::Builder::new()
             .prefix("knoted-t69-postgres-")
             .tempdir()
@@ -133,9 +119,8 @@ impl PrivatePostgres {
             .unwrap();
         writeln!(
             settings,
-            "listen_addresses = ''\nunix_socket_directories = '{}'\n{}",
-            directory.path().display(),
-            extension_settings.join("\n")
+            "listen_addresses = ''\nunix_socket_directories = '{}'",
+            directory.path().display()
         )
         .unwrap();
         assert!(
@@ -213,6 +198,12 @@ async fn t69_1_t69_2_t69_3_restore_real_dump_and_assets() {
         .await
         .unwrap();
     db::migrate(&source).await.unwrap();
+    let vector_installed: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT FROM pg_extension WHERE extname='vector')")
+            .fetch_one(&source)
+            .await
+            .unwrap();
+    assert!(!vector_installed);
     let owner = Uuid::new_v4();
     let image = Uuid::new_v4();
     let payload = include_bytes!("../../../tests/fixtures/ocr/sample_zh_en.png");
@@ -293,16 +284,10 @@ async fn t69_1_t69_2_t69_3_restore_real_dump_and_assets() {
     let old_publication: Uuid = sqlx::query_scalar(
         "INSERT INTO jobs(kind,state,idempotency_key) VALUES('fulltext.publish','failed',$1) RETURNING id",
     ).bind(format!("{key}:restored_documents:0")).fetch_one(&source).await.unwrap();
-    let other_derived = [
-        "rag_chunks.build",
-        "rag_chunks.publish",
-        "rag_vectors.embed",
-        "fulltext.cleanup",
-    ];
-    for kind in other_derived {
-        sqlx::query("INSERT INTO jobs(kind,state,idempotency_key) VALUES ($1,'succeeded','previous-destination')")
-            .bind(kind).execute(&source).await.unwrap();
-    }
+    sqlx::query("INSERT INTO jobs(kind,state,idempotency_key) VALUES ('fulltext.cleanup','succeeded','previous-destination')")
+        .execute(&source)
+        .await
+        .unwrap();
     let session = sessions::create_session(
         &mut source.acquire().await.unwrap(),
         owner,
@@ -355,10 +340,8 @@ rp_id = 'knoted.test'
     let target_config = home.join("destination.toml");
     let target = home.join("descriptor.toml");
     let available_api = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let available_python = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let bind = available_api.local_addr().unwrap();
-    let python = available_python.local_addr().unwrap();
-    drop((available_api, available_python));
+    drop(available_api);
     let config = format!(
         "[database]
 url={:?}
@@ -375,12 +358,9 @@ rp_id='knoted.test'
 enabled=true
 base_url='http://{addr}'
 index_uid='restored_documents'
-rag_chunk_index_uid='restored_chunks'
 api_key_credential='engine'
 [credentials]
 credential_file={:?}
-[intelligence]
-base_url='http://{python}'
 ",
         pg.url("isolated-test"),
         target_root.join("assets"),
@@ -424,7 +404,8 @@ base_url='http://{python}'
 
     for invalid_config in [
         config.replace(&pg.url("isolated-test"), &pg.url("archive_source")),
-        config.replace(&python.to_string(), "127.0.0.1:15603"),
+        config.replace(&bind.to_string(), "127.0.0.1:17685"),
+        config.replace(&addr.to_string(), "127.0.0.1:17685"),
         config.replace(&addr.to_string(), "127.0.0.2:15605"),
         config.replace("restored_documents", "knoted_documents"),
         config.replace("restore.knoted.test:15882", "source.knoted.test:15881"),
@@ -434,19 +415,6 @@ base_url='http://{python}'
         assert!(!restore().status.success());
         assert!(!target_root.exists());
     }
-    fs::write(&target_config, &config).unwrap();
-    let python_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    fs::write(
-        &target_config,
-        config.replace(
-            &python.to_string(),
-            &python_listener.local_addr().unwrap().to_string(),
-        ),
-    )
-    .unwrap();
-    assert!(!restore().status.success());
-    assert!(!target_root.exists());
-    drop(python_listener);
     fs::write(&target_config, &config).unwrap();
     let server = std::net::TcpListener::bind(bind).unwrap();
     assert!(!restore().status.success());

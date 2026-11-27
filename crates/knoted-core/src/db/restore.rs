@@ -8,7 +8,7 @@ use std::str::FromStr;
 use uuid::Uuid;
 
 /// Retires cloned runtime capabilities and schedules fresh projections. IDs
-/// referenced by domain history are retained, including jobs and chunk sets.
+/// referenced by domain history are retained, including jobs.
 pub async fn retire_source_runtime(pool: &PgPool) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
     sqlx::raw_sql(
@@ -23,17 +23,13 @@ pub async fn retire_source_runtime(pool: &PgPool) -> Result<(), sqlx::Error> {
              locked_by=NULL, updated_at=now()
            WHERE state IN ('queued','running','retry_wait','cancel_requested');
          UPDATE jobs SET idempotency_key=NULL WHERE kind IN (
-             'fulltext.publish','fulltext.cleanup','rag_chunks.build','rag_chunks.publish','rag_vectors.embed'
+             'fulltext.publish','fulltext.cleanup'
          ) AND idempotency_key IS NOT NULL;
          INSERT INTO outbox(job_id,topic,published_at)
              SELECT id,'restore.retired_job',now() FROM jobs j
              WHERE state IN ('failed','cancelled') AND NOT EXISTS (
                SELECT FROM outbox o WHERE o.job_id=j.id AND o.topic='restore.retired_job');
-         UPDATE generation_runs SET state='interrupted', admitted=false, updated_at=now()
-           WHERE admitted OR state IN ('queued','started','cancel_requested');
          DELETE FROM fulltext_publications;
-         DELETE FROM rag_chunk_publications;
-         DELETE FROM rag_embedding_sets;
          UPDATE file_sources SET input_object_id=NULL,captured_observation=NULL,
              captured_observation_version=NULL,captured_scan_id=NULL,content_fresh=false;
          UPDATE file_roots SET scan_token=NULL;
@@ -43,15 +39,7 @@ pub async fn retire_source_runtime(pool: &PgPool) -> Result<(), sqlx::Error> {
              SELECT 'note.changed' AS topic,id,content_version AS version FROM notes WHERE deleted_at IS NULL
              UNION ALL SELECT 'project.changed',id,version FROM projects WHERE deleted_at IS NULL
              UNION ALL SELECT 'task.changed',id,version FROM tasks WHERE deleted_at IS NULL
-             UNION ALL SELECT 'chat.changed',m.id,m.content_version FROM chat_messages m
-                 JOIN chat_sessions s ON s.id=m.session_id WHERE m.deleted_at IS NULL AND s.deleted_at IS NULL AND NOT m.incomplete
-           ) source;
-         INSERT INTO outbox(topic,payload)
-           SELECT 'file.extracted',jsonb_build_object('source_id',f.id,'source_version',f.content_version,'extraction_id',e.id)
-           FROM file_sources f JOIN LATERAL (
-             SELECT id FROM file_extractions WHERE source_id=f.id AND content_version=f.content_version
-                 AND input_sha256=f.sha256 ORDER BY created_at DESC,id DESC LIMIT 1
-           ) e ON true WHERE f.status='present';"
+           ) source;"
     ).execute(&mut *tx).await?;
     tx.commit().await
 }

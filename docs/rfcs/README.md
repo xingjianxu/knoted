@@ -18,4 +18,4 @@
 | T52 浏览器预览不向共享 OnlyOffice 发送 Knoted 会话 | [2026-11-18-office-preview-browser-isolation.md](2026-11-18-office-preview-browser-isolation.md) | 用户决策，主 Agent 整理 | Resolved | [ADR 0010](../decisions/0010-office-preview-credentialless-host.md) |
 | T68–T69 一致性备份与隔离恢复 | [2026-11-19-t68-t69-consistent-backup.md](2026-11-19-t68-t69-consistent-backup.md) | 用户决策，主 Agent 整理 | Resolved | [ADR 0011](../decisions/0011-consistent-backup-and-isolated-restore.md) |
 | 笔记表格保存 | [2026-11-26-note-table-persistence.md](2026-11-26-note-table-persistence.md) | 项目维护者 | Resolved | [ADR 0013](../decisions/0013-note-table-persistence.md) |
-| 文件全文索引与 RAG 退出 | [2026-11-27-retire-file-index-rag.md](2026-11-27-retire-file-index-rag.md) | 项目维护者 | Draft | 待确认 |
+| 文件全文索引与 RAG 退出 | [2026-11-27-retire-file-index-rag.md](2026-11-27-retire-file-index-rag.md) | 项目维护者 | Resolved | [ADR 0014](../decisions/0014-retire-file-index-rag.md) |

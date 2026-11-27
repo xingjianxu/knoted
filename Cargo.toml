@@ -20,7 +20,7 @@ rand = "0.8"
 base64 = "0.22"
 webauthn-rs = { version = "0.6", features = ["danger-allow-state-serialisation"] }
 
-# HTTP client for the internal Python protocol. `default-features = false`
+# HTTP client for the local search engine. `default-features = false`
 # keeps the OpenSSL-based native-tls backend out of the build; rustls is the
 # only TLS implementation the workspace links.
 reqwest = { version = "0.12", default-features = false, features = [

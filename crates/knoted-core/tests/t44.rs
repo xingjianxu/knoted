@@ -309,7 +309,7 @@ async fn rescan(ctx: &AppContext, root: &TempDir, input: &SourceObservation) -> 
         .unwrap()
 }
 #[tokio::test]
-async fn t44_unchanged_complete_scans_reuse_closed_object_and_refresh_extraction() {
+async fn t44_unchanged_scans_reuse_object_without_queuing_extraction() {
     let (db, ctx, root, staging, input) = fixture(3).await;
     let first = capture_stable(&ctx, input.clone()).await.unwrap();
     let source: uuid::Uuid = sqlx::query_scalar("SELECT id FROM file_sources")
@@ -327,25 +327,23 @@ async fn t44_unchanged_complete_scans_reuse_closed_object_and_refresh_extraction
         .fetch_one(ctx.pool())
         .await
         .unwrap();
-        let queued: Option<String> = sqlx::query_scalar(
-            "SELECT payload->>'input_object_id' FROM jobs WHERE kind='file.extract' AND payload->>'captured_scan_id'=$1",
-        )
-        .bind(scan.to_string())
-        .fetch_optional(ctx.pool())
-        .await
-        .unwrap();
-        captures.push((scan, object, row, queued, files(&staging)));
+        captures.push((scan, object, row, files(&staging)));
     }
+    let extractions: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM jobs WHERE kind='file.extract'")
+            .fetch_one(ctx.pool())
+            .await
+            .unwrap();
     db.drop().await;
+    assert_eq!(extractions, 0);
     assert!(input.metadata.identity.handle.is_some());
     let key = first.object_id.to_string();
     let original = staging.path().join("input").join(&key);
     assert_eq!(std::fs::read(&original).unwrap(), b"aaa");
-    for (scan, object, row, queued, staged) in captures {
+    for (scan, object, row, staged) in captures {
         assert_ne!(scan, input.scan_id);
         assert_eq!(object.object_id, first.object_id);
         assert_eq!(row, (source, key.clone(), scan, 1, 1));
-        assert_eq!(queued.as_deref(), Some(key.as_str()));
         assert_eq!(staged.as_slice(), std::slice::from_ref(&original));
     }
 }
@@ -356,11 +354,11 @@ async fn t44_cross_scan_reuse_rollback_keeps_the_existing_reference() {
     let first = capture_stable(&ctx, input.clone()).await.unwrap();
     let next = rescan(&ctx, &root, &input).await;
     sqlx::raw_sql(
-        "CREATE FUNCTION refuse_extraction_enqueue() RETURNS trigger LANGUAGE plpgsql AS $$
-            BEGIN RAISE EXCEPTION 'fixture refuses extraction enqueue'; END;
+        "CREATE FUNCTION refuse_capture_update() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN RAISE EXCEPTION 'fixture refuses capture update'; END;
         $$;
-        CREATE TRIGGER refuse_extraction_enqueue BEFORE INSERT ON jobs FOR EACH ROW
-            WHEN (NEW.kind='file.extract') EXECUTE FUNCTION refuse_extraction_enqueue();",
+        CREATE TRIGGER refuse_capture_update BEFORE UPDATE OF captured_scan_id ON file_sources FOR EACH ROW
+            WHEN (NEW.captured_scan_id IS DISTINCT FROM OLD.captured_scan_id) EXECUTE FUNCTION refuse_capture_update();",
     )
     .execute(ctx.pool())
     .await
@@ -376,7 +374,7 @@ async fn t44_cross_scan_reuse_rollback_keeps_the_existing_reference() {
     assert!(matches!(
         failure,
         Err(knoted_core::files::capture::DomainError::Database(error))
-            if error.as_database_error().is_some_and(|e| e.message() == "fixture refuses extraction enqueue")
+            if error.as_database_error().is_some_and(|e| e.message() == "fixture refuses capture update")
     ));
     assert_eq!(key, first.object_id.as_str());
     assert_eq!(scan, input.scan_id);
