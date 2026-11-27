@@ -84,6 +84,18 @@ it("t50_3 switch A→B→A cannot publish old A or overwrite current success", a
 it("revokes each loaded image URL on switch, close and unmount", async () => { const h = harness(async () => response(fixture("chinese.png")), source("a.png")); const first = (await screen.findByRole("img")).getAttribute("src"); expect(live.size).toBe(1); h.change({ file: source("b.png", { id: "b" }) }); await waitFor(() => expect(screen.getByRole("img").getAttribute("src")).not.toBe(first)); expect(live.size).toBe(1); expect(URL.revokeObjectURL).toHaveBeenCalledWith(first); h.change({ open: false }); expect(live.size).toBe(0); h.change({ open: true }); await screen.findByRole("img"); h.unmount(); expect(live.size).toBe(0); });
 it("StrictMode discarded generation never publishes or leaks", async () => { const api = createApiClient({ baseUrl: "http://localhost/api/v1", fetch: async () => response(fixture("chinese.png")) }); const h = render(<StrictMode><UiProvider><FilePreview api={api} file={source("a.png")} open onOpenChange={() => { }} onDownload={() => { }}/></UiProvider></StrictMode>); await screen.findByRole("img"); expect(live.size).toBe(1); h.unmount(); expect(live.size).toBe(0); });
 it("rejects oversized images before any object URL or img src and preserves download", async () => { const h = harness(async () => response(png(40000001, 1)), source("a.png")); await screen.findByText(/40,000,000/); expect(URL.createObjectURL).not.toHaveBeenCalled(); expect(screen.queryByRole("img")).toBeNull(); fireEvent.click(screen.getByRole("button", { name: "下载原文件" })); expect(h.props.onDownload).toHaveBeenCalledWith(h.props.file); });
+it.each([
+    ["a.constructor", null],
+    ["a.__proto__", "application/octet-stream"],
+])("rejects unsupported inherited image extensions before requesting content (%s)", async (name, mime) => {
+    const fetch = vi.fn(async () => response(fixture("chinese.png")));
+    harness(fetch, source(name, { mime }));
+    await act(async () => {});
+    expect(fetch).not.toHaveBeenCalled();
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(screen.getByText("此格式暂不支持预览，请下载原文件。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "下载原文件" })).toBeEnabled();
+});
 it("metadata ETag mismatch asks refresh without claiming content changed", async () => { harness(async () => response(enc.encode("secret"), { etag: '"8"' })); await screen.findByText(/元数据版本/); expect(screen.queryByLabelText("文件文本")).toBeNull(); expect(screen.queryByText(/正文.*变化/)).toBeNull(); });
 it("401 uses existing client handling and clears the dialog", async () => { const h = harness(async () => new Response(JSON.stringify({ code: "unauthorized", message: "unauthorized", request_id: "x" }), { status: 401, headers: { "content-type": "application/json" } })); await waitFor(() => expect(h.onUnauthorized).toHaveBeenCalledOnce()); await waitFor(() => expect(h.props.onOpenChange).toHaveBeenCalledWith(false)); expect(screen.queryByLabelText("文件文本")).toBeNull(); expect(live.size).toBe(0); });
 it("DTO oversize skips preview fetching but ordinary download remains usable", async () => { const fetch = vi.fn(async () => response(enc.encode("unused"))); const h = harness(fetch, source("a.txt", { size: 52428801 })); await screen.findByText(/50 MiB/); expect(fetch).not.toHaveBeenCalled(); fireEvent.click(screen.getByRole("button", { name: "下载原文件" })); expect(h.props.onDownload).toHaveBeenCalledOnce(); });
