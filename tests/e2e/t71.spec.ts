@@ -115,8 +115,6 @@ test("T71 自动扫描、原件预览及笔记项目事项搜索", async ({ play
       }
       const id = await capturedFile(page, updatedContent);
       expect(await originalBytes(page, id)).toEqual({ status: 200, bytes: [...Buffer.from(updatedContent)] });
-      expect(await search(page, "violetamber")).toEqual([]);
-      expect(await search(page, "glaciercobalt")).toEqual([]);
     });
 
     await test.step("全文搜索返回笔记、项目和事项", async () => {
@@ -132,6 +130,8 @@ test("T71 自动扫描、原件预览及笔记项目事项搜索", async ({ play
         expected.push(`${entityType}:${result.data.id}`);
       }
       await expect.poll(() => search(page, term), { timeout: 90_000 }).toEqual(expected.sort());
+      expect(await search(page, "violetamber")).toEqual([]);
+      expect(await search(page, "glaciercobalt")).toEqual([]);
     });
   } finally {
     await browser.close();

@@ -89,7 +89,7 @@ origin = "https://t71.knoted.test:17820"
 enabled = true
 root = "$run/files"
 staging_root = "$run/staging"
-rescan_seconds = 300
+rescan_seconds = 5
 [credentials]
 credential_file = "$run/credentials.toml"
 [search]

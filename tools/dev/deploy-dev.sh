@@ -14,7 +14,7 @@
 # 本脚本只运行迁移。清空数据库和处理既有运行数据须在部署前单独完成。
 # 验证通过后清理旧产物。同一 SHA 或 --prune-current 只核验当前运行版本。
 #
-# 运行变量按调用者环境、deploy.env、活动 API/Worker 的顺序解析。
+# 运行变量按调用者环境、deploy.env、旧渲染 TOML、活动 API/Worker 的顺序解析。
 # 搜索与 Office 的开关和凭据路径写入 <KNOTED_INSTANCE_ROOT>/deploy.env（0600）。
 #
 # 稳定实例锚定在主检出：pcwrap 的 daemon cwd 决定后续 prepare/restart 用哪份
@@ -142,6 +142,12 @@ resolve_revision() {
   if ! git -C "$repository" rev-parse --verify --quiet "$revision^{commit}" >/dev/null; then
     fail "本地没有该提交：$revision（先 git fetch origin）" 2
   fi
+  local generation selected_generation
+  generation=$(cat "$script_dir/artifact-generation")
+  if ! selected_generation=$(git -C "$repository" cat-file blob "$revision:tools/dev/artifact-generation" 2>/dev/null) ||
+     [[ -z $generation || $selected_generation != "$generation" ]]; then
+    fail "目标提交 $revision 的产物代不受当前部署规则支持" 2
+  fi
 }
 
 # deploy.env 只接受 KEY=VALUE 行，不 source（避免执行文件内容）。调用者环境优先。
@@ -157,6 +163,81 @@ read_deploy_env() {
       ;;
     esac
   done <"$deploy_env_file"
+}
+
+# 旧 prepare 只生成下列搜索和 Office 字段。配置中其他段落无需读取字段值。
+# 无法识别的设置交由操作者明确迁移，防止清空或错误地转换现有功能配置。
+read_legacy_runtime_config() {
+  local line section="" field value search_enabled="" key_configured=0
+  local search_file="" office_origin="" office_file=""
+  local table='^\[([A-Za-z0-9_.]+)\]$'
+  local quoted='^([a-z_]+) = "([^"]*)"$'
+  local https_origin='^https://([a-zA-Z0-9.-]+|\[[a-fA-F0-9:.]+\])(:[0-9]{1,5})?$'
+  local -A seen=()
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [[ $line =~ $table ]]; then
+      section=${BASH_REMATCH[1]}
+      case "$section" in
+      server|database|files|search|credentials|office)
+        [[ ! -v seen[$section] ]] || return 1
+        seen[$section]=1
+        ;;
+      esac
+      continue
+    fi
+    [[ $line =~ ^[[:blank:]]*\[ ]] && return 1
+    [[ -z $line || $line == \#* ]] && continue
+    case "$section" in
+    search)
+      case "$line" in
+      "enabled = true"|"enabled = false")
+        [[ -z $search_enabled ]] || return 1
+        if [[ $line == "enabled = true" ]]; then search_enabled=1; else search_enabled=0; fi
+        ;;
+      'api_key_credential = "meilisearch"')
+        [[ $key_configured == 0 ]] || return 1
+        key_configured=1
+        ;;
+      *) return 1 ;;
+      esac
+      ;;
+    credentials|office)
+      [[ $line =~ $quoted ]] || return 1
+      field=${BASH_REMATCH[1]}
+      value=${BASH_REMATCH[2]}
+      if [[ $section == office && $field == document_server_origin ]]; then
+        [[ -z $office_origin && $value =~ $https_origin ]] || return 1
+        office_origin=$value
+      else
+        [[ $value == /* && $value != *['"\']* && ! $value =~ [[:cntrl:]] ]] || return 1
+        case "$section.$field" in
+        credentials.credential_file) [[ -z $search_file ]] || return 1; search_file=$value ;;
+        office.jwt_secret_file) [[ -z $office_file ]] || return 1; office_file=$value ;;
+        *) return 1 ;;
+        esac
+      fi
+      ;;
+    esac
+  done <"$1" || return 1
+
+  [[ -v seen[server] && -v seen[database] && -v seen[files] ]] || return 1
+  [[ ! -v seen[search] || -n $search_enabled ]] || return 1
+  [[ $key_configured == 0 || ( $search_enabled == 1 && -n $search_file ) ]] || return 1
+  [[ ! -v seen[office] || ( -n $office_origin && -n $office_file ) ]] || return 1
+  if [[ -n $search_enabled && -z ${resolved[KNOTED_SEARCH_ENABLED]:-} ]]; then
+    resolved[KNOTED_SEARCH_ENABLED]=$search_enabled
+  fi
+  if [[ $key_configured == 1 && ${resolved[KNOTED_SEARCH_ENABLED]:-} == 1 &&
+        -z ${resolved[KNOTED_SEARCH_CREDENTIAL_FILE]:-} ]]; then
+    resolved[KNOTED_SEARCH_CREDENTIAL_FILE]=$search_file
+  fi
+  if [[ -n $office_origin && -z ${resolved[KNOTED_OFFICE_ORIGIN]:-} ]]; then
+    resolved[KNOTED_OFFICE_ORIGIN]=$office_origin
+  fi
+  if [[ -n $office_file && -z ${resolved[KNOTED_OFFICE_JWT_SECRET_FILE]:-} ]]; then
+    resolved[KNOTED_OFFICE_JWT_SECRET_FILE]=$office_file
+  fi
 }
 
 # 只从 exe 已确认的 API 或 Worker 读取环境，按发现顺序补齐缺省值。
@@ -217,8 +298,8 @@ write_deploy_env() {
   mv -f "$tmp" "$deploy_env_file"
 }
 
-# 解析顺序：调用者环境 > deploy.env > 活动进程抓取；最终结果回写文件，
-# 下一次没有 shell 环境时仍然拿到同一套变量。
+# 先解析调用者环境和 deploy.env，冷切换可从旧渲染配置补齐。
+# 同一编排更新还可以从活动进程读取环境，最终结果回写文件。
 resolve_runtime_variables() {
   local key captured=0 missing="" file_before=""
   declare -gA resolved=()
@@ -232,6 +313,20 @@ resolve_runtime_variables() {
   for key in "${runtime_variable_keys[@]}"; do
     [ -n "${resolved[$key]:-}" ] || missing="$missing $key"
   done
+  if [ "$legacy_transition" = 1 ] && [ -n "$missing" ]; then
+    local old_config=$instance_root/config/knoted.toml
+    if [ -f "$old_config" ]; then
+      read_legacy_runtime_config "$old_config" ||
+        fail "无法从旧渲染配置恢复搜索和 Office，请显式提供这些运行设置" 2
+    elif [ ! -f "$deploy_env_file" ] &&
+         [[ -z ${KNOTED_SEARCH_ENABLED:-} || ! -v KNOTED_OFFICE_ORIGIN || ! -v KNOTED_OFFICE_JWT_SECRET_FILE ]]; then
+      fail "旧实例没有可用的部署环境或渲染配置，请显式提供搜索和 Office 设置" 2
+    fi
+    missing=""
+    for key in "${runtime_variable_keys[@]}"; do
+      [ -n "${resolved[$key]:-}" ] || missing="$missing $key"
+    done
+  fi
   if [ -n "$missing" ]; then
     if capture_running_variables; then
       captured=1

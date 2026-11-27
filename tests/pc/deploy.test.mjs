@@ -28,12 +28,7 @@ import { resolve } from "node:path";
 import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-const repoRoot = resolve(import.meta.dirname, "../..");
-const deployScript = join(repoRoot, "tools/dev/deploy-dev.sh");
-const targetRevision = spawnSync("git", ["rev-parse", "HEAD"], {
-  cwd: repoRoot,
-  encoding: "utf8",
-}).stdout.trim();
+const worktree = resolve(import.meta.dirname, "../..");
 const previousRevision = "0".repeat(39) + "1";
 
 const temporary = [];
@@ -63,6 +58,36 @@ function run(command, args, options = {}) {
   }
   return result;
 }
+
+function releaseRepository() {
+  const root = makeTempDir("git");
+  const git = (...args) => {
+    const result = run("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-c", "commit.gpgsign=false", ...args], { cwd: root });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git("init", "--quiet");
+  mkdirSync(join(root, "services/intelligence"), { recursive: true });
+  writeFileSync(join(root, "services/intelligence/pyproject.toml"), "[project]\nname = \"legacy-fixture\"\n");
+  git("add", ".");
+  git("commit", "--quiet", "-m", "legacy release");
+  const legacyRevision = git("rev-parse", "HEAD");
+
+  rmSync(join(root, "services"), { recursive: true });
+  for (const relative of [
+    "tools/dev/build-artifact.sh", "tools/dev/deploy-dev.sh",
+    "tools/dev/pc/service.sh", "tools/dev/artifact-generation", "process-compose.yaml",
+  ]) {
+    mkdirSync(resolve(join(root, relative), ".."), { recursive: true });
+    cpSync(join(worktree, relative), join(root, relative));
+  }
+  git("add", "--all");
+  git("commit", "--quiet", "-m", "current release");
+  return { repoRoot: root, legacyRevision, targetRevision: git("rev-parse", "HEAD") };
+}
+
+const { repoRoot, legacyRevision, targetRevision } = releaseRepository();
+const deployScript = join(repoRoot, "tools/dev/deploy-dev.sh");
 
 function writeExecutable(path, contents) {
   mkdirSync(resolve(path, ".."), { recursive: true });
@@ -886,12 +911,87 @@ printf '%s\\n' "$STUB_MOUNT"
     context.env.STUB_INSTANCE_STOPPED = "1";
     context.env.STUB_HTTPS_FAIL = "1";
     attachLauncher(context);
+    writeDeployEnv(context.instanceRoot, runtimeVariables);
 
     const result = deploy(context);
     assert.notEqual(result.status, 0);
     assert.equal(currentTarget(context), join(context.runtimeParentDir, targetRevision));
     assert.deepEqual(pcArgs(context.logFile), ["pc up -D"]);
     assert.ok(existsSync(join(context.runtimeParentDir, previousRevision)));
+  });
+
+  it("旧手工启动没有 deploy.env 时从已渲染配置保留搜索和 Office", () => {
+    const context = fixture({ legacy: true, withTargetArtifact: false });
+    for (const pid of ["1000", "1001", "1002"]) rmSync(join(context.procRoot, pid), { recursive: true });
+    context.env.STUB_INSTANCE_STOPPED = "1";
+    attachLauncher(context);
+    const configDir = join(context.instanceRoot, "config");
+    mkdirSync(configDir);
+    const credentialPath = join(context.base, "not created search file");
+    const jwtPath = join(context.base, "not created Office file");
+    writeFileSync(join(configDir, "knoted.toml"), `[server]
+bind = "127.0.0.1:15602"
+[database]
+url = "postgres://fixture@localhost/do-not-copy"
+[files]
+enabled = true
+[intelligence]
+base_url = "http://127.0.0.1:15603"
+[office]
+document_server_origin = "${officeOrigin}"
+jwt_secret_file = "${jwtPath}"
+[credentials]
+credential_file = "${credentialPath}"
+[search]
+enabled = true
+api_key_credential = "meilisearch"
+`);
+
+    const result = deploy(context);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, targetRevision));
+    assert.ok(pcArgs(context.logFile).some(line => line.startsWith("build ") && line.endsWith(` ${officeOrigin}`)));
+    assert.equal(readFileSync(join(context.instanceRoot, "deploy.env"), "utf8"), [
+      "KNOTED_SEARCH_ENABLED=1",
+      `KNOTED_SEARCH_CREDENTIAL_FILE=${credentialPath}`,
+      `KNOTED_OFFICE_ORIGIN=${officeOrigin}`,
+      `KNOTED_OFFICE_JWT_SECRET_FILE=${jwtPath}`,
+      "",
+    ].join("\n"));
+    assert.equal(existsSync(credentialPath), false);
+    assert.equal(existsSync(jwtPath), false);
+    assert.doesNotMatch(result.stdout + result.stderr, /do-not-copy/);
+  });
+
+  it("没有旧部署环境且渲染配置不可用时拒绝清空保留功能配置", () => {
+    const context = fixture({ legacy: true });
+    for (const pid of ["1000", "1001", "1002"]) rmSync(join(context.procRoot, pid), { recursive: true });
+    context.env.STUB_INSTANCE_STOPPED = "1";
+
+    const result = deploy(context);
+
+    assert.notEqual(result.status, 0);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
+    assert.match(result.stderr, /旧.*配置.*显式/);
+    assert.deepEqual(pcArgs(context.logFile), []);
+  });
+
+  it("旧渲染配置使用不受支持的搜索字段时拒绝改写", () => {
+    const context = fixture({ legacy: true });
+    for (const pid of ["1000", "1001", "1002"]) rmSync(join(context.procRoot, pid), { recursive: true });
+    context.env.STUB_INSTANCE_STOPPED = "1";
+    const configDir = join(context.instanceRoot, "config");
+    mkdirSync(configDir);
+    writeFileSync(join(configDir, "knoted.toml"), '[server]\n[database]\n[files]\n[search]\nenabled = true\nindex_uid = "custom"\n');
+
+    const result = deploy(context);
+
+    assert.notEqual(result.status, 0);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
+    assert.match(result.stderr, /旧渲染配置.*显式/);
+    assert.equal(existsSync(join(context.instanceRoot, "deploy.env")), false);
+    assert.deepEqual(pcArgs(context.logFile), []);
   });
 
   it("当前指针已经更新但旧项目仍在时拒绝重启和清理", () => {
@@ -964,6 +1064,37 @@ printf '%s\\n' "$STUB_MOUNT"
     const result = deploy(context, ["8b0457e"]);
     assert.equal(result.status, 2);
     assert.match(result.stderr, /40/);
+  });
+
+  it("拒绝旧源码提交并保留已有的同 SHA 归档产物", () => {
+    const context = fixture();
+    const archived = createArtifact(context.runtimeParentDir, legacyRevision, undefined, { legacy: true });
+    writeDeployEnv(context.instanceRoot, runtimeVariables);
+
+    const result = deploy(context, [legacyRevision]);
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /目标提交.*产物代/);
+    assert.equal(currentTarget(context), join(context.runtimeParentDir, previousRevision));
+    assert.ok(existsSync(join(archived, "bin/knoted-intelligence")));
+    assert.equal(readdirSync(context.runtimeParentDir).some(path => path.includes(".incomplete.")), false);
+    assert.deepEqual(pcArgs(context.logFile), []);
+  });
+
+  it("独立构建入口在触碰构建根前拒绝旧源码提交", () => {
+    const context = fixture();
+    const output = join(context.base, "archived-build");
+    // The old builder reaches cargo. A stub makes the regression safe.
+    writeExecutable(join(context.base, "stubs/cargo"), "#!/usr/bin/env bash\nexit 91\n");
+    const result = run("bash", [join(repoRoot, "tools/dev/build-artifact.sh"), legacyRevision, output], {
+      cwd: repoRoot,
+      env: context.env,
+    });
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /目标提交.*产物代/);
+    assert.equal(existsSync(context.env.KNOTED_BUILD_ROOT), false);
+    assert.equal(existsSync(output), false);
   });
 
   it("拒绝不存在的提交", () => {
