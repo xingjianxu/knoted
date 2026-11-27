@@ -1,27 +1,24 @@
-import { queryOptions } from "@tanstack/react-query";
 import { ApiRequestError } from "@knoted/api-client";
 import { redirect } from "@tanstack/react-router";
 import { queryKeys, type QueryClientBundle } from "../../lib/query";
 
-export function sessionQuery(bundle: QueryClientBundle) {
-  return queryOptions({
-    queryKey: queryKeys.auth.session(),
-    queryFn: async ({ signal }) => {
-      const { data } = await bundle.api.raw.GET("/auth/session", { signal });
-      if (!data) throw new Error("无法读取会话，请重试。");
-      return data;
-    },
-    retry: false,
-    staleTime: 0,
-  });
-}
 /** AuthGate revalidates server authentication before protected routes render. */
-export async function AuthGate(bundle: QueryClientBundle, href: string) {
+export async function AuthGate(bundle: QueryClientBundle, href: string, signal: AbortSignal) {
   try {
-    await bundle.queryClient.fetchQuery(sessionQuery(bundle));
+    // The router owns this request. A 401 evicts cached queries as soon as
+    // headers arrive, while the route still needs to receive the parsed error.
+    const { data } = await bundle.api.raw.GET("/auth/session", { signal });
+    signal.throwIfAborted();
+    if (!data) throw new Error("无法读取会话，请重试。");
+    bundle.queryClient.setQueryData(queryKeys.auth.session(), data);
   } catch (error) {
+    signal.throwIfAborted();
     if (error instanceof ApiRequestError && error.status === 401) {
-      bundle.queryClient.clear();
+      if (bundle.evictsQueriesOnUnauthorized) {
+        bundle.queryClient.getMutationCache().clear();
+      } else {
+        bundle.queryClient.clear();
+      }
       throw redirect({
         to: "/login",
         search: { redirect: href },
