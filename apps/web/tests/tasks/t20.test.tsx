@@ -84,7 +84,7 @@ beforeEach(() => {
         return new Response(null, { status: 204 });
       }
       if (path.endsWith("/dashboard"))
-        return json({counts:{notes:0,tasks_open:0,tasks_due_today:0,projects_active:0,files:0},tasks_by_status:{todo:0,in_progress:0,done:0,cancelled:0},recent_tasks:[],recent_notes:[],due_tasks:[],job_failures:0,indexing_enabled:false});
+        return json({counts:{notes:0,tasks_open:0,tasks_due_today:0,projects_active:0,files:0},tasks_by_status:{todo:0,in_progress:0,done:0,cancelled:0},recent_tasks:[],recent_notes:[],due_tasks:[],job_failures:0});
       if (path.endsWith("/auth/passkeys"))
         return json({ items: [], next_cursor: null });
       if (path.endsWith("/auth/sessions"))
@@ -203,6 +203,9 @@ describe("t20 auth routes", () => {
       "/recovery",
       "/%2F%2Fevil.example",
       "/unknown",
+      "/chat",
+      "/chat/00000000-0000-4000-8000-000000000001?message=00000000-0000-4000-8000-000000000002",
+      "/files/jobs",
       "/projects",
       "/projects/00000000-0000-4000-8000-000000000001",
     ])
@@ -225,7 +228,7 @@ describe("t20 auth routes", () => {
     await mount("/");
     expect(await screen.findByRole("button", { name: "文件" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "搜索" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "问答" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "问答" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "笔记" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "项目" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "事项" })).toBeEnabled();

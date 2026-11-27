@@ -22,7 +22,6 @@ import {
   LibraryBig,
   ListTodo,
   LogOut,
-  MessageSquare,
   Search,
   Settings,
   ShieldCheck,
@@ -45,7 +44,6 @@ const sectionLabels: Readonly<Record<string, string>> = {
   "/trash": "回收站",
   "/files": "文件",
   "/search": "搜索",
-  "/chat": "问答",
   "/settings": "凭据与会话",
 };
 
@@ -72,7 +70,7 @@ function Shell() {
   });
   // The existing tasks route hosts both the list and the board.
   const notesLayout = /^\/notes(?:\/|$)/.test(pathname);
-  const wide = /^\/(tasks|chat)(?:\/|$)/.test(pathname);
+  const wide = /^\/tasks(?:\/|$)/.test(pathname);
   const frameClass = notesLayout
     ? "workspace-frame workspace-frame--flush"
     : wide
@@ -149,8 +147,6 @@ function Shell() {
               onClick={() => void navigate({ to: "/files" })}>文件</NavItem>
             <NavItem icon={<Search size={16} aria-hidden="true" />} active={pathname === "/search"}
               onClick={openSearch}>搜索</NavItem>
-            <NavItem icon={<MessageSquare size={16} aria-hidden="true" />} active={/^\/chat(?:\/|$)/.test(pathname)}
-              onClick={() => void navigate({ to: "/chat" })}>问答</NavItem>
           </NavGroup>
           <NavGroup label="账号">
             <NavItem icon={<ShieldCheck size={16} aria-hidden="true" />} active={pathname === "/settings/security"}
@@ -261,8 +257,7 @@ function useWorkspaceScrollFrame() {
       location.state.__TSR_key === resolvedLocation?.state.__TSR_key ? location.state.__TSR_key : undefined,
   });
   const hasTarget = useRouterState({
-    select: ({ location }) => Boolean(location.hash ||
-      (location.pathname.startsWith("/chat/") && typeof location.search.message === "string")),
+    select: ({ location }) => Boolean(location.hash),
   });
   const savedTop = useElementScrollRestoration({ id: "workspace" })?.scrollY ?? 0;
 

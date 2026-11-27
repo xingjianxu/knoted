@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 /**
- * Offline contract check for the Knoted public and internal OpenAPI documents.
+ * Offline contract check for the Knoted browser OpenAPI document.
  *
  * Run from anywhere with `pnpm api:check` or `node api/examples/check.mjs`.
- * No network access is used: both documents, the example manifest and every
- * fixture are read from this repository, and Ajv validates against the schemas
- * embedded in the documents themselves.
+ * The OpenAPI document, example manifest and fixtures are local files.
+ * Ajv validates the examples against the schemas in the OpenAPI document.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
@@ -29,7 +28,6 @@ const HTTP_METHODS = new Set([
 ]);
 
 const BROWSER_DOCUMENT = "openapi.yaml";
-const INTERNAL_DOCUMENT = "intelligence.openapi.yaml";
 
 /** This list is the acceptance contract; keep it hard-coded. */
 const REQUIRED_BROWSER_OPERATIONS = [
@@ -101,91 +99,27 @@ const REQUIRED_BROWSER_OPERATIONS = [
   "DELETE /files/{fileId}/office-preview",
   "GET /office-preview-sources/{previewId}",
   "GET /search",
-  "GET /jobs",
-  "POST /jobs/{jobId}/retry",
-  "POST /jobs/{jobId}/cancel",
-  "POST /jobs/scan",
-  "GET /chat/sessions",
-  "POST /chat/sessions",
-  "GET /chat/sessions/{sessionId}",
-  "PATCH /chat/sessions/{sessionId}",
-  "DELETE /chat/sessions/{sessionId}",
-  "POST /chat/sessions/{sessionId}/messages",
-  "GET /chat/runs/{runId}",
-  "POST /chat/runs/{runId}/events",
-  "POST /chat/runs/{runId}/cancel",
-  "POST /chat/runs/{runId}/retry",
-  "GET /chat/messages/{messageId}/citations",
-  "POST /chat/messages/{messageId}/save-note",
-];
-
-const REQUIRED_INTERNAL_OPERATIONS = [
-  "POST /internal/v1/executions",
-  "GET /internal/v1/executions/{executionId}",
-  "POST /internal/v1/executions/{executionId}/cancel",
-  "GET /internal/v1/executions/{executionId}/result",
-  "GET /internal/v1/health",
-];
-
-const EXECUTION_STATES = [
-  "queued",
-  "running",
-  "succeeded",
-  "failed",
-  "cancel_requested",
-  "cancelled",
-  "interrupted",
-];
-
-const EXECUTION_KINDS = ["parse", "embed"];
-
-const EXECUTION_REQUEST_FIELDS = [
-  "execution_id",
-  "kind",
-  "input_object_id",
-  "input_sha256",
-  "source_version",
-  "deadline",
-  "options_revision",
 ];
 
 const CLOSED_ENUMS = {
-  "openapi.yaml": {
-    TaskStatus: ["todo", "in_progress", "done", "cancelled"],
-    TaskPriority: ["none", "low", "medium", "high"],
-    EntityEndType: ["note", "file", "project", "task"],
-    ActivityAuthorKind: ["manual", "system"],
-    JobState: [
-      "queued",
-      "running",
-      "retry_wait",
-      "succeeded",
-      "failed",
-      "cancel_requested",
-      "cancelled",
-    ],
-    BlockType: [
-      "heading",
-      "paragraph",
-      "bulletListItem",
-      "numberedListItem",
-      "checkListItem",
-      "image",
-      "codeBlock",
-      "table",
-    ],
-  },
-  "intelligence.openapi.yaml": {
-    ExecutionState: EXECUTION_STATES,
-    ExecutionKind: EXECUTION_KINDS,
-  },
+  TaskStatus: ["todo", "in_progress", "done", "cancelled"],
+  TaskPriority: ["none", "low", "medium", "high"],
+  EntityEndType: ["note", "file", "project", "task"],
+  ActivityAuthorKind: ["manual", "system"],
+  SearchType: ["note", "task", "project"],
+  BlockType: [
+    "heading",
+    "paragraph",
+    "bulletListItem",
+    "numberedListItem",
+    "checkListItem",
+    "image",
+    "codeBlock",
+    "table",
+  ],
 };
 
-const IDEMPOTENT_OPERATION_IDS = [
-  "createAsset",
-  "createChatMessage",
-  "scanJobs",
-];
+const IDEMPOTENT_OPERATION_IDS = ["createAsset"];
 
 const VERSIONED_DELETE_OPERATION_IDS = [
   "deleteNote",
@@ -194,7 +128,6 @@ const VERSIONED_DELETE_OPERATION_IDS = [
   "deleteTag",
   "deleteLink",
   "deleteTaskActivity",
-  "deleteChatSession",
 ];
 
 const EXPECTED_VERSION_SCHEMAS = [
@@ -210,40 +143,9 @@ const EXPECTED_VERSION_SCHEMAS = [
   "FileSourceUpdate",
   "FileRelinkRequest",
   "ActivityUpdate",
-  "ChatSessionUpdate",
 ];
 
 const REQUIRED_EXAMPLES = [
-  {
-    "document": "intelligence.openapi.yaml",
-    "schema": "ExecutionRecord",
-    "file": "valid/execution-record-exit-confirmed.json",
-    "valid": true
-  },
-  {
-    "document": "intelligence.openapi.yaml",
-    "schema": "ExecutionRecord",
-    "file": "valid/execution-record-exit-unconfirmed.json",
-    "valid": true
-  },
-  {
-    "document": "intelligence.openapi.yaml",
-    "schema": "ExecutionRecord",
-    "file": "valid/execution-record-legacy.json",
-    "valid": true
-  },
-  {
-    "document": "intelligence.openapi.yaml",
-    "schema": "ExecutionRecord",
-    "file": "invalid/execution-record-running-exit-confirmed.json",
-    "valid": false
-  },
-  {
-    "document": "intelligence.openapi.yaml",
-    "schema": "ExecutionRecord",
-    "file": "invalid/execution-record-exit-nonboolean.json",
-    "valid": false
-  },
   {
     document: "openapi.yaml",
     schema: "FileRelinkRequest",
@@ -291,7 +193,7 @@ const REQUIRED_EXAMPLES = [
   {
     document: "openapi.yaml",
     schema: "DashboardSummary",
-    file: "invalid/dashboard-summary-missing-indexing.json",
+    file: "invalid/dashboard-summary-with-indexing.json",
     valid: false,
   },
   {
@@ -372,24 +274,6 @@ const REQUIRED_EXAMPLES = [
     file: "invalid/api-error-missing-request-id.json",
     valid: false,
   },
-  {
-    document: "intelligence.openapi.yaml",
-    schema: "ExecutionRequest",
-    file: "valid/execution-request-parse.json",
-    valid: true,
-  },
-  {
-    document: "intelligence.openapi.yaml",
-    schema: "ExecutionRequest",
-    file: "invalid/execution-request-bad-kind.json",
-    valid: false,
-  },
-  {
-    document: "intelligence.openapi.yaml",
-    schema: "ExecutionState",
-    file: "valid/execution-state-interrupted.json",
-    valid: true,
-  },
 ];
 
 const CSRF_EXEMPT_PATHS = new Set([
@@ -414,9 +298,6 @@ const LIST_RESPONSE_SCHEMAS = new Set([
   "TrashPage",
   "FileSourcePage",
   "SearchResponse",
-  "JobPage",
-  "ChatSessionPage",
-  "CitationPage",
 ]);
 
 const ETAG_ENTITY_SCHEMAS = new Set([
@@ -425,8 +306,6 @@ const ETAG_ENTITY_SCHEMAS = new Set([
   "Task",
   "Tag",
   "FileSource",
-  "ChatSession",
-  "ChatSessionDetail",
 ]);
 
 class ContractError extends Error {}
@@ -665,30 +544,28 @@ function checkOperations(document, documentName, operations, requiredInventory) 
       );
     }
 
-    if (documentName === BROWSER_DOCUMENT) {
-      if (operation.operationId === "getOfficePreviewSource") {
-        // No query or browser auth fallback; hide every authorization failure as 404.
-        const scheme = document.components?.securitySchemes?.OfficeOutboxJWT;
-        check(
-          operation.security?.length === 1 &&
-            Object.keys(operation.security[0]).length === 1 &&
-            operation.security[0].OfficeOutboxJWT?.length === 0 &&
-            scheme?.type === "http" && scheme.scheme === "bearer" &&
-            scheme.bearerFormat === "JWT" &&
-            ![...(pathItem.parameters ?? []), ...(operation.parameters ?? [])].some((parameter) =>
-              resolveLocal(document, parameter, `${label} parameter`).in !== "path"
-            ) &&
-            operation.responses["401"] === undefined &&
-            operation.responses["403"] === undefined &&
-            operation.responses["404"] !== undefined,
-          `${label}: Document Server 取源仅接受出站 JWT 请求头，授权失败统一返回 404`,
-        );
-      } else {
-        check(
-          operation.responses["401"] !== undefined,
-          `${label}: 缺少 401 Unauthorized`,
-        );
-      }
+    if (operation.operationId === "getOfficePreviewSource") {
+      // No query or browser auth fallback; hide every authorization failure as 404.
+      const scheme = document.components?.securitySchemes?.OfficeOutboxJWT;
+      check(
+        operation.security?.length === 1 &&
+          Object.keys(operation.security[0]).length === 1 &&
+          operation.security[0].OfficeOutboxJWT?.length === 0 &&
+          scheme?.type === "http" && scheme.scheme === "bearer" &&
+          scheme.bearerFormat === "JWT" &&
+          ![...(pathItem.parameters ?? []), ...(operation.parameters ?? [])].some((parameter) =>
+            resolveLocal(document, parameter, `${label} parameter`).in !== "path"
+          ) &&
+          operation.responses["401"] === undefined &&
+          operation.responses["403"] === undefined &&
+          operation.responses["404"] !== undefined,
+        `${label}: Document Server 取源仅接受出站 JWT 请求头，授权失败统一返回 404`,
+      );
+    } else {
+      check(
+        operation.responses["401"] !== undefined,
+        `${label}: 缺少 401 Unauthorized`,
+      );
     }
 
     const response200Or201 = operation.responses["200"] ?? operation.responses["201"];
@@ -717,7 +594,6 @@ function checkOperations(document, documentName, operations, requiredInventory) 
     }
 
     const csrfRequired =
-      documentName === BROWSER_DOCUMENT &&
       method !== "GET" &&
       !CSRF_EXEMPT_PATHS.has(path);
     if (csrfRequired) {
@@ -819,14 +695,7 @@ function checkParameter(document, { operation, path }, name, inValue, required) 
 
 function runChecks() {
   const browser = readYaml(join(API_DIR, BROWSER_DOCUMENT));
-  const internal = readYaml(join(API_DIR, INTERNAL_DOCUMENT));
-  const documents = new Map([
-    [BROWSER_DOCUMENT, browser],
-    [INTERNAL_DOCUMENT, internal],
-  ]);
-
   checkInfo(browser, BROWSER_DOCUMENT, "/api/v1");
-  checkInfo(internal, INTERNAL_DOCUMENT, "http://127.0.0.1:15603");
 
   const infoDescription = browser.info?.description;
   check(
@@ -864,47 +733,33 @@ function runChecks() {
   );
 
   const browserOperations = collectOperations(browser, BROWSER_DOCUMENT);
-  const internalOperations = collectOperations(internal, INTERNAL_DOCUMENT);
   checkOperations(
     browser,
     BROWSER_DOCUMENT,
     browserOperations,
     REQUIRED_BROWSER_OPERATIONS,
   );
-  checkOperations(
-    internal,
-    INTERNAL_DOCUMENT,
-    internalOperations,
-    REQUIRED_INTERNAL_OPERATIONS,
-  );
-
-  for (const [documentName, document] of documents) {
-    walkRefs(document, document, documentName);
-  }
-
-  for (const [documentName, enums] of Object.entries(CLOSED_ENUMS)) {
-    for (const [schemaName, expected] of Object.entries(enums)) {
-      const schema = documents.get(documentName)?.components?.schemas?.[schemaName];
-      check(
-        schema !== undefined,
-        `${documentName}: 缺少闭集枚举 schema ${schemaName}`,
-      );
-      check(
-        schema.type === "string",
-        `${documentName}#/components/schemas/${schemaName}: 枚举必须 type: string`,
-      );
-      check(
-        Array.isArray(schema.enum),
-        `${documentName}#/components/schemas/${schemaName}: 枚举必须显式列出 enum`,
-      );
-      check(
-        JSON.stringify(schema.enum) === JSON.stringify(expected),
-        `${documentName}#/components/schemas/${schemaName}: 枚举值不符，期望 ${expected.join("|")}，实际 ${schema.enum.join("|")}`,
-      );
-    }
-  }
-
+  walkRefs(browser, browser, BROWSER_DOCUMENT);
   const browserSchemas = browser.components?.schemas ?? {};
+  for (const [schemaName, expected] of Object.entries(CLOSED_ENUMS)) {
+    const schema = browserSchemas[schemaName];
+    check(
+      schema !== undefined,
+      `openapi.yaml: 缺少闭集枚举 schema ${schemaName}`,
+    );
+    check(
+      schema.type === "string",
+      `openapi.yaml#/components/schemas/${schemaName}: 枚举必须 type: string`,
+    );
+    check(
+      Array.isArray(schema.enum),
+      `openapi.yaml#/components/schemas/${schemaName}: 枚举必须显式列出 enum`,
+    );
+    check(
+      JSON.stringify(schema.enum) === JSON.stringify(expected),
+      `openapi.yaml#/components/schemas/${schemaName}: 枚举值不符，期望 ${expected.join("|")}，实际 ${schema.enum.join("|")}`,
+    );
+  }
 
   const dateValue = browserSchemas.DateValue;
   check(dateValue !== undefined, "openapi.yaml: 缺少 DateValue");
@@ -966,32 +821,6 @@ function runChecks() {
     "openapi.yaml#/components/schemas/NoteUpdate: position 必须保持只读",
   );
 
-  const chatSessionDetail = browserSchemas.ChatSessionDetail;
-  check(
-    chatSessionDetail !== undefined,
-    "openapi.yaml: 缺少 ChatSessionDetail",
-  );
-  check(
-    chatSessionDetail.required?.includes("messages"),
-    "openapi.yaml#/components/schemas/ChatSessionDetail: required 缺少 messages",
-  );
-  check(
-    chatSessionDetail.properties?.messages?.items?.$ref ===
-      "#/components/schemas/ChatMessage",
-    "openapi.yaml#/components/schemas/ChatSessionDetail: messages 必须引用 ChatMessage",
-  );
-  const getChatSession = findOperation(browserOperations, "getChatSession");
-  const getChatSessionResponse = resolveLocal(
-    browser,
-    getChatSession.operation.responses["200"],
-    "getChatSession 200",
-  );
-  check(
-    getChatSessionResponse.content?.["application/json"]?.schema?.$ref ===
-      "#/components/schemas/ChatSessionDetail",
-    "getChatSession: 200 必须返回 ChatSessionDetail",
-  );
-
   for (const schemaName of ["NoteUpdate", "TaskUpdate", "ProjectUpdate"]) {
     const schema = browserSchemas[schemaName];
     check(
@@ -1025,61 +854,6 @@ function runChecks() {
       csrfParameterComponent.description.includes("knoted_csrf") &&
       csrfParameterComponent.description.includes("Origin"),
     "openapi.yaml#/components/parameters/CsrfToken: 必须定义 X-CSRF-Token 头并与 knoted_csrf/Origin 关联",
-  );
-
-  const streamChatRunEvents = findOperation(
-    browserOperations,
-    "streamChatRunEvents",
-  );
-  const sseResponse = resolveLocal(
-    browser,
-    streamChatRunEvents.operation.responses["200"],
-    "streamChatRunEvents 200",
-  );
-  const sseMedia = sseResponse.content?.["text/event-stream"];
-  check(
-    typeof sseMedia?.schema?.description === "string" &&
-      sseMedia.schema.description.includes("ChatEvent"),
-    "streamChatRunEvents: SSE schema description 必须点名 ChatEvent",
-  );
-  check(
-    typeof sseMedia?.example === "string" &&
-      sseMedia.example.includes("event: delta") &&
-      sseMedia.example.includes("data: {") &&
-      sseMedia.example.endsWith("\n\n"),
-    "streamChatRunEvents: 必须提供一条 event/data SSE 示例帧",
-  );
-
-  const internalSchemas = internal.components?.schemas ?? {};
-  check(
-    internalSchemas.ExecutionRecord?.properties?.state?.$ref ===
-      "#/components/schemas/ExecutionState",
-    "intelligence.openapi.yaml: ExecutionRecord.state 必须引用闭集 ExecutionState",
-  );
-  check(
-    internalSchemas.ExecutionRequest?.additionalProperties === false,
-    "intelligence.openapi.yaml: ExecutionRequest 必须 additionalProperties: false",
-  );
-  check(
-    JSON.stringify(internalSchemas.ExecutionRequest?.required ?? []) ===
-      JSON.stringify(EXECUTION_REQUEST_FIELDS),
-    `intelligence.openapi.yaml: ExecutionRequest.required 必须精确为 ${EXECUTION_REQUEST_FIELDS.join(",")}`,
-  );
-  const resultSchema = internalSchemas.ExecutionResult;
-  check(
-    resultSchema?.additionalProperties === false,
-    "intelligence.openapi.yaml: ExecutionResult 必须 additionalProperties: false",
-  );
-  for (const field of ["object_id", "sha256", "size", "media_type"]) {
-    check(
-      resultSchema?.required?.includes(field),
-      `intelligence.openapi.yaml: ExecutionResult.required 缺少 ${field}`,
-    );
-  }
-  check(
-    JSON.stringify(resultSchema?.properties?.metadata?.additionalProperties) ===
-      JSON.stringify({ type: "string" }),
-    "intelligence.openapi.yaml: ExecutionResult.metadata 必须限制为 string 值",
   );
 
   for (const schemaName of EXPECTED_VERSION_SCHEMAS) {
@@ -1138,15 +912,10 @@ function runChecks() {
     "api/examples/manifest.json: 根必须是对象",
   );
   check(
-    Array.isArray(manifest.documents) && manifest.documents.length > 0,
-    "api/examples/manifest.json: documents 必须是非空数组",
+    Array.isArray(manifest.documents) &&
+      manifest.documents.length === 1 && manifest.documents[0] === BROWSER_DOCUMENT,
+    "api/examples/manifest.json: documents 只能登记 openapi.yaml",
   );
-  for (const documentName of manifest.documents) {
-    check(
-      documents.has(documentName),
-      `api/examples/manifest.json: 未知文档 ${documentName}`,
-    );
-  }
   check(
     Array.isArray(manifest.examples),
     "api/examples/manifest.json: examples 必须是数组",
@@ -1242,7 +1011,7 @@ function runChecks() {
       `${where}: 必须是对象`,
     );
     check(
-      typeof example.document === "string" && documents.has(example.document),
+      example.document === BROWSER_DOCUMENT,
       `${where}: document 无效：${JSON.stringify(example.document)}`,
     );
     check(
@@ -1255,8 +1024,7 @@ function runChecks() {
     );
     check(typeof example.valid === "boolean", `${where}: valid 必须是布尔值`);
 
-    const document = documents.get(example.document);
-    const schema = document.components?.schemas?.[example.schema];
+    const schema = browserSchemas[example.schema];
     check(
       schema !== undefined,
       `${where}: ${example.document} 缺少 #/components/schemas/${example.schema}`,
@@ -1284,7 +1052,7 @@ function runChecks() {
     let validate;
     try {
       validate = ajv.compile({
-        components: document.components,
+        components: browser.components,
         $ref: `#/components/schemas/${example.schema}`,
       });
     } catch (error) {
@@ -1305,41 +1073,6 @@ function runChecks() {
         `${where}: 非法样例被接受：${example.file} → ${example.document}#/components/schemas/${example.schema}`,
       );
       invalidRejected += 1;
-    }
-  }
-
-  // A sample SSE frame must actually be valid for the documented ChatEvent schema:
-  // substring checks alone would let a malformed frame pass.
-  const sseFrameExample = sseMedia?.example;
-  if (typeof sseFrameExample === "string") {
-    const dataLines = sseFrameExample
-      .split("\n")
-      .filter((line) => line.startsWith("data: "))
-      .map((line) => line.slice("data: ".length));
-    check(
-      dataLines.length > 0,
-      "streamChatRunEvents: SSE 示例帧缺少 data 行",
-    );
-    let validateChatEvent;
-    try {
-      validateChatEvent = ajv.compile({
-        components: browser.components,
-        $ref: "#/components/schemas/ChatEvent",
-      });
-    } catch (error) {
-      fail(`streamChatRunEvents: Ajv 编译 ChatEvent 失败：${error.message}`);
-    }
-    for (const line of dataLines) {
-      let frame;
-      try {
-        frame = JSON.parse(line);
-      } catch {
-        fail(`streamChatRunEvents: SSE data 示例不是合法 JSON：${line}`);
-      }
-      check(
-        validateChatEvent(frame),
-        `streamChatRunEvents: SSE data 示例不符合 ChatEvent：\n${ajv.errorsText(validateChatEvent.errors, { separator: "\n" })}`,
-      );
     }
   }
 

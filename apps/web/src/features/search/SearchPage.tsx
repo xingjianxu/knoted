@@ -67,8 +67,6 @@ function SearchForm({ bundle, filters, filterKey, onSearch }: {
     filters.archived !== undefined && (filters.archived ? "已归档" : "未归档"),
     filters.updated_from && `更新时间起 ${timeFormat.format(new Date(filters.updated_from))}`,
     filters.updated_to && `更新时间止 ${timeFormat.format(new Date(filters.updated_to))}`,
-    filters.path && `路径 ${filters.path}`,
-    filters.format && `格式 ${filters.format}`,
     filters.sort && filters.sort !== "relevance" && searchSorts[filters.sort],
   ].filter(Boolean);
   const changed = JSON.stringify(normalized) !== filterKey;
@@ -184,45 +182,33 @@ function SearchForm({ bundle, filters, filterKey, onSearch }: {
               </Form.Item>
             </div>
           </Fieldset>
-          <div className="min-w-0 space-y-4">
-            <Fieldset legend="更新时间" className="min-w-0">
-              <div className="space-y-2">
-                <Form.Item label="更新时间起">
-                  <Input
-                    type="datetime-local"
-                    step="any"
-                    value={toLocalTime(draft.updated_from)}
-                    onChange={(event) => {
-                      setDraft({ ...draft, updated_from: fromLocalTime(event.target.value) });
-                      if (error === "range") setError(undefined);
-                    }}
-                  />
-                </Form.Item>
-                <Form.Item label="更新时间止" error={error === "range" ? "更新时间起点须早于或等于终点。" : undefined}>
-                  <Input
-                    ref={rangeEnd}
-                    type="datetime-local"
-                    step="any"
-                    value={toLocalTime(draft.updated_to)}
-                    onChange={(event) => {
-                      setDraft({ ...draft, updated_to: fromLocalTime(event.target.value) });
-                      if (error === "range") setError(undefined);
-                    }}
-                  />
-                </Form.Item>
-              </div>
-            </Fieldset>
-            <Fieldset legend="文件位置" className="min-w-0">
-              <div className="space-y-2">
-                <Form.Item label="路径">
-                  <Input value={draft.path ?? ""} onChange={(event) => setDraft({ ...draft, path: event.target.value })} />
-                </Form.Item>
-                <Form.Item label="格式">
-                  <Input value={draft.format ?? ""} onChange={(event) => setDraft({ ...draft, format: event.target.value })} />
-                </Form.Item>
-              </div>
-            </Fieldset>
-          </div>
+          <Fieldset legend="更新时间" className="min-w-0">
+            <div className="space-y-2">
+              <Form.Item label="更新时间起">
+                <Input
+                  type="datetime-local"
+                  step="any"
+                  value={toLocalTime(draft.updated_from)}
+                  onChange={(event) => {
+                    setDraft({ ...draft, updated_from: fromLocalTime(event.target.value) });
+                    if (error === "range") setError(undefined);
+                  }}
+                />
+              </Form.Item>
+              <Form.Item label="更新时间止" error={error === "range" ? "更新时间起点须早于或等于终点。" : undefined}>
+                <Input
+                  ref={rangeEnd}
+                  type="datetime-local"
+                  step="any"
+                  value={toLocalTime(draft.updated_to)}
+                  onChange={(event) => {
+                    setDraft({ ...draft, updated_to: fromLocalTime(event.target.value) });
+                    if (error === "range") setError(undefined);
+                  }}
+                />
+              </Form.Item>
+            </div>
+          </Fieldset>
         </div></Card>}
       </div>
     </Form>

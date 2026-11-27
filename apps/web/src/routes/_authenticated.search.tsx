@@ -9,10 +9,12 @@ export const Route = createFileRoute("/_authenticated/search")({
 
 function SearchRoute() {
   const navigate = Route.useNavigate();
+  // Route search merges validated fields into the original URL parameters.
+  const filters = Route.useSearch({ select: validateSearch });
   return (
     <SearchPage
       bundle={Route.useRouteContext()}
-      filters={Route.useSearch()}
+      filters={filters}
       onSearch={(filters) => void navigate({ search: filters })}
     />
   );

@@ -58,17 +58,8 @@ export const queryKeys = {
     detail: (id: string) => ["files", "detail", id] as const,
   },
   search: (filters?: QueryFilters) => ["search", normalizeFilters(filters)] as const,
-  jobs: {
-    all: () => ["jobs"] as const,
-    list: (filters?: QueryFilters) => ["jobs", "list", normalizeFilters(filters)] as const,
-  },
   dashboard: () => ["dashboard"] as const,
   trash: () => ["trash"] as const,
-  chat: {
-    sessions: () => ["chat", "sessions", "list"] as const,
-    session: (id: string) => ["chat", "sessions", id] as const,
-    messages: (id: string) => ["chat", "sessions", id, "messages"] as const,
-  },
 } as const;
 
 const NO_RETRY_STATUSES = new Set([401, 403, 404, 422]);
