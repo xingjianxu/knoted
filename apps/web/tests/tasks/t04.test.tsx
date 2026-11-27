@@ -213,6 +213,113 @@ describe("t04 generated client", () => {
     });
   });
 
+  it.each([
+    ["absent", {}],
+    ["understated", { "Content-Length": "1" }],
+  ] as const)("caps streamed error bytes with %s length and cancels the unread body", async (_, length) => {
+    const budget = 64 * 1024;
+    const encoder = new TextEncoder();
+    const envelope = encoder.encode(JSON.stringify({ code: "private_code", message: "private text" }));
+    const chunks = [
+      envelope,
+      new Uint8Array(budget - envelope.byteLength).fill(32),
+      encoder.encode(" "),
+      encoder.encode(" "),
+    ];
+    const cancel = vi.fn(() => new Promise<void>(() => {}));
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const chunk = chunks.shift();
+        if (chunk) controller.enqueue(chunk);
+        else controller.close();
+      },
+      cancel,
+    }, { highWaterMark: 0 });
+    const requestId = "00000000-0000-0000-0000-000000000004";
+    const response = new Response(body, { status: 401, headers: { ...length, "X-Request-Id": requestId } });
+    const onUnauthorized = vi.fn();
+    const { raw } = createApiClient({ baseUrl: "/api/v1", fetch: async () => response, onUnauthorized });
+
+    await expect(raw.GET("/notes")).rejects.toMatchObject({
+      status: 401, code: "http_401", message: "HTTP 401", requestId,
+    });
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(chunks).toHaveLength(1);
+    expect(body.locked).toBe(false);
+  });
+
+  it("decodes a complete 64 KiB error envelope across a UTF-8 boundary", async () => {
+    const bytes = new TextEncoder().encode(JSON.stringify({ code: "bad_note", message: "无效" }));
+    const split = bytes.indexOf(0xe6) + 1;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes.subarray(0, split));
+        controller.enqueue(bytes.subarray(split));
+        controller.enqueue(new Uint8Array(64 * 1024 - bytes.byteLength).fill(32));
+        controller.close();
+      },
+    });
+    const requestId = "00000000-0000-0000-0000-000000000006";
+    const response = new Response(body, {
+      status: 422,
+      headers: { "Content-Length": "100000", "X-Request-Id": requestId },
+    });
+    expect(await ApiRequestError.fromResponse(response)).toMatchObject({
+      status: 422, code: "bad_note", message: "无效", requestId,
+    });
+    expect(body.locked).toBe(false);
+  });
+
+  it.each(["truncated JSON", "invalid JSON", "stream failure"])("preserves status and header ID on %s", async (failure) => {
+    const requestId = "00000000-0000-0000-0000-000000000005";
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const text = failure === "invalid JSON" ? "upstream text" : '{"code":"partial"';
+        controller.enqueue(new TextEncoder().encode(text));
+        if (failure === "stream failure") controller.error(new Error("upstream failure"));
+        else controller.close();
+      },
+    });
+    const response = new Response(body, { status: 500, headers: { "X-Request-Id": requestId } });
+    expect(await ApiRequestError.fromResponse(response)).toMatchObject({
+      status: 500, code: "http_500", message: "HTTP 500", requestId,
+    });
+    expect(body.locked).toBe(false);
+  });
+
+  it("aborting while reading an error body cancels a pending read", async () => {
+    const cancel = vi.fn(() => new Promise<void>(() => {}));
+    let notifyRead!: () => void;
+    const started = new Promise<void>((resolve) => { notifyRead = resolve; });
+    let streamController: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        streamController = controller;
+        notifyRead();
+      },
+      cancel,
+    }, { highWaterMark: 0 });
+    const onUnauthorized = vi.fn();
+    const { raw } = createApiClient({
+      baseUrl: "/api/v1",
+      onUnauthorized,
+      fetch: async () => new Response(body, { status: 401 }),
+    });
+    const controller = new AbortController();
+    const result = raw.GET("/notes", { signal: controller.signal }).catch((error: unknown) => error);
+    await started;
+    controller.abort();
+    try {
+      await vi.waitFor(() => expect(cancel).toHaveBeenCalledTimes(1));
+    } finally {
+      if (!cancel.mock.calls.length) streamController!.close();
+    }
+    expect(await result).toMatchObject({ status: 401, code: "http_401" });
+    expect(body.locked).toBe(false);
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
+
   it("t04_1_401_clear_is_scoped", async () => {
     const fetchMock = vi.fn<typeof fetch>(
       async () =>
