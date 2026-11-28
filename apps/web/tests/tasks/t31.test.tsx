@@ -445,7 +445,7 @@ it("sidebar and back navigation share the mounted notes flush barrier", async ()
   await waitFor(() => expect(calls("POST", `/notes/${id(2)}/snapshots`)).toHaveLength(1)); expect(router.state.location.pathname).toBe(`/notes/${id(2)}`);
   await act(async () => pending.resolve(failure(503)));
   await screen.findByText(/无法离开/); expect(router.state.location.pathname).toBe(`/notes/${id(2)}`);
-  fireEvent.click(screen.getByRole("button", { name: "凭据与会话" }));
+  fireEvent.click(screen.getByRole("button", { name: "概览" }));
   await waitFor(() => expect(calls("POST", `/notes/${id(2)}/snapshots`)).toHaveLength(2)); expect(router.state.location.pathname).toBe(`/notes/${id(2)}`);
 });
 it("blocked logout becomes retryable, then explicit save/history and safe location precede revocation", async () => {
@@ -453,7 +453,7 @@ it("blocked logout becomes retryable, then explicit save/history and safe locati
   const { router } = await mount(); fireEvent.change(await title(), { target: { value: "可重试退出" } }); fireEvent.click(await openWorkspaceLogout());
   await screen.findByText(/无法安全离开笔记/);
   expect(await openWorkspaceLogout()).not.toHaveAttribute("aria-disabled", "true");
-  fireEvent.click(screen.getByRole("button", { name: "账号菜单" }));
+  fireEvent.click(screen.getByRole("button", { name: "个人账号" }));
   expect(calls("POST", "/auth/logout")).toHaveLength(0);
   fails = false; fireEvent.click(screen.getByRole("button", { name: "保存并记录历史" }));
   await waitFor(() => expect(calls("POST", "/snapshots")).toHaveLength(1));
@@ -651,7 +651,7 @@ it("returning A→B→A seeds a new real editor from the saved draft, retaining 
   const anchor = selection.anchorNode; const offset = selection.anchorOffset;
   // Observe the real 1000ms debounce; do not replace a timer already created by the editor.
   await waitFor(() => expect(calls("PATCH", id(1))).toHaveLength(1), { timeout: 2500 });
-  await waitFor(() => expect(current.querySelector("[role=status]")).toHaveTextContent("已保存· v2"));
+  await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("已保存· v2"));
   expect(current.querySelector('[contenteditable="true"]')).toBe(editable);
   expect(selection.anchorNode).toBe(anchor); expect(selection.anchorOffset).toBe(offset);
   const saved = await calls("PATCH", id(1))[0]!.json();
@@ -771,7 +771,7 @@ it("move dialog uses TreeSelect to pick a non-root parent while excluding the cu
   expect(await calls("POST", "/move")[0]!.json()).toEqual({ expected_version: 1, parent_id: id(2), position: 0 });
 });
 
-it("notes index opens the first root note by default inside the AppLayout with Topbar and keeps it stable across move/delete", async () => {
+it("notes index opens the first root note by default inside two-column PageLayout with Topbar and keeps it stable across move/delete", async () => {
   notes = [
     { ...note(2), position: 0, title: "首篇根笔记", document: doc("首篇根正文") },
     { ...note(1), position: 1, title: "次篇根笔记", document: doc("次篇根正文") },
@@ -782,8 +782,10 @@ it("notes index opens the first root note by default inside the AppLayout with T
   expect(await title()).toHaveValue("首篇根笔记");
   const current = screen.getByRole("region", { name: "当前笔记" });
   expect(current).toHaveTextContent("首篇根正文");
-  expect(current.closest(".mt-app-layout")).toBeInTheDocument();
-  expect(current.querySelector(".mt-topbar")).toBeInTheDocument();
+  const pageLayout = current.closest(".notes-page-layout.mt-page-layout");
+  expect(pageLayout).toBeInTheDocument();
+  expect(pageLayout?.closest(".workspace-app-layout.mt-app-layout")).toBeInTheDocument();
+  expect(pageLayout?.querySelector(".mt-page-layout-topbar > .notes-topbar.mt-topbar")).toBeInTheDocument();
   expect(screen.getByRole("navigation", { name: "笔记目录" })).toBeInTheDocument();
   expect(within(screen.getByRole("navigation", { name: "笔记路径" })).getByText("首篇根笔记")).toBeInTheDocument();
   expect(screen.getByRole("treeitem", { name: "首篇根笔记" })).toHaveAttribute("aria-selected", "true");
@@ -1124,7 +1126,7 @@ it("failed note load from narrow directory drawer clears pending return focus in
   };
   const origGetClientRects = HTMLButtonElement.prototype.getClientRects;
   const rectSpy = vi.spyOn(HTMLButtonElement.prototype, "getClientRects").mockImplementation(function (this: HTMLButtonElement) {
-    if (this.getAttribute("title") === "目录") return [new DOMRect(0, 0, 28, 28)] as unknown as DOMRectList;
+    if (this.getAttribute("aria-label") === "目录") return [new DOMRect(0, 0, 28, 28)] as unknown as DOMRectList;
     return origGetClientRects.call(this);
   });
   try {

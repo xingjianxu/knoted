@@ -1,6 +1,6 @@
 import { useLayoutEffect, useReducer, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Button, Empty, List, ListItem, Spinner, Status } from "@bixlab/mtone";
+import { Alert, Button, Card, Empty, List, ListItem, PageLayout, Spinner, Status } from "@bixlab/mtone";
 import type { QueryClientBundle } from "../../lib/query";
 import { createCursorState, cursorReducer } from "../../lib/cursor-state";
 import { filesQuery, type FileSource } from "./queries";
@@ -46,12 +46,8 @@ export function FilesPage({ bundle, fileId, onSelectFile }: {
     return () => window.cancelAnimationFrame(frame);
   }, [fileId]);
 
-  return <div className={fileId ? "grid gap-5 @min-[62rem]/workspace:grid-cols-[minmax(0,17rem)_minmax(0,1fr)]" : undefined}>
-    {fileId && <div className="min-w-0 @min-[62rem]/workspace:col-start-2 @min-[62rem]/workspace:row-start-1">
-      <FileDetail key={fileId} bundle={bundle} fileId={fileId} onSelectFile={onSelectFile} />
-    </div>}
-    <section aria-label="文件列表" className={fileId ? "hidden min-w-0 space-y-3 @min-[62rem]/workspace:col-start-1 @min-[62rem]/workspace:row-start-1 @min-[62rem]/workspace:block" : "space-y-3"}>
-      {fileId ? <h2 className="section-title">文件</h2> : <h1>文件</h1>}
+  const listContent = (
+    <div className="space-y-3">
       {list.isPending && <Spinner label="正在读取文件列表" />}
       {list.error && <Alert tone="error" title={list.error.message}><Button onClick={() => void list.refetch()}>重试文件列表</Button></Alert>}
       {list.data && (list.data.items.length > 0 || (!list.isFetching && !list.isError)) && <FileList items={list.data.items} selectedId={fileId} onSelectFile={(id, trigger) => {
@@ -63,6 +59,17 @@ export function FilesPage({ bundle, fileId, onSelectFile }: {
         <Button disabled={list.isFetching || list.isError || !list.data?.next_cursor || list.data.next_cursor === page.cursor}
           onClick={() => dispatch({ type: "next", nextCursor: list.data?.next_cursor ?? null })}>下一页文件</Button>
       </nav>}
+    </div>
+  );
+
+  return <div className={fileId ? "grid gap-5 @min-[62rem]/workspace:grid-cols-[minmax(0,17rem)_minmax(0,1fr)]" : undefined}>
+    {fileId && <div className="min-w-0 @min-[62rem]/workspace:col-start-2 @min-[62rem]/workspace:row-start-1">
+      <Card className="min-w-0">
+        <FileDetail key={fileId} bundle={bundle} fileId={fileId} onSelectFile={onSelectFile} />
+      </Card>
+    </div>}
+    <section aria-label="文件列表" className={fileId ? "hidden min-w-0 @min-[62rem]/workspace:col-start-1 @min-[62rem]/workspace:row-start-1 @min-[62rem]/workspace:block" : undefined}>
+      <PageLayout title="文件" headingLevel={fileId ? 2 : 1}>{listContent}</PageLayout>
     </section>
   </div>;
 }

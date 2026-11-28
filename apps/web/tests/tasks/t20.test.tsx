@@ -214,12 +214,13 @@ describe("t20 auth routes", () => {
     expect(safeReturnTo("/search?q=%E7%AC%94%E8%AE%B0&type=note")).toBe("/search?q=%E7%AC%94%E8%AE%B0&type=note");
     expect(safeReturnTo("/search//evil.example")).toBe("/");
   });
-  it("provides shared navigation, a header action and a single main landmark", async () => {
+  it("provides shared navigation, a bottom-left account action and a single main landmark", async () => {
     loggedIn = true;
     await mount("/");
     const nav = await screen.findByRole("navigation", { name: "主导航" });
     expect(within(nav).getByRole("button", { name: "概览" })).toHaveAttribute("aria-current", "page");
-    expect(within(screen.getByRole("banner")).getByRole("button", { name: "账号菜单" })).toBeEnabled();
+    expect(screen.queryByRole("banner")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "个人账号" })).toBeEnabled();
     const main = screen.getByRole("main");
     expect(await within(main).findByRole("heading", { name: "工作概览" })).toBeVisible();
   });
@@ -550,7 +551,7 @@ describe("t20 ceremony form contracts", () => {
           name: mode === "bootstrap" ? "注册 Passkey" : "替换凭据并恢复",
         }),
       );
-      await screen.findByRole("button", { name: "账号菜单" });
+      await screen.findByRole("button", { name: "个人账号" });
       expect(bodies[0]?.body).toEqual(
         mode === "bootstrap"
           ? { bootstrap_token: "one-use-test-token" }

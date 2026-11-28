@@ -13,7 +13,7 @@
 
 ## 现状与目标
 
-当前精确依赖为 **`@bixlab/mtone@1.0.0`** 与 **`@bixlab/mtone-blockeditor@1.1.0`**（`apps/web/package.json` / `pnpm-lock.yaml`，仓库根目录 `.npmrc` 固定使用官方源 `https://registry.npmjs.org/`），已移除前端对 `@blocknote/core` / `@blocknote/react` 的直接依赖与自建编辑器 UI。笔记主体采用 mtone `AppLayout`（左侧可拖拽调宽目录树侧栏、右侧上部 `Topbar` 与下部可滚动内容区），标题与编辑器继续通过 mtone 的 `Container` 统一居中限宽。下文保留 T17—T19 的原始接入与各版本升级记录。[升级与布局任务 #326](../tasks/326.md) · [升级任务 #310](../tasks/310.md) · [Container 任务 #298](../tasks/298.md)
+当前精确依赖为 **`@bixlab/mtone@1.2.0`** 与 **`@bixlab/mtone-blockeditor@1.1.0`**（`apps/web/package.json` / `pnpm-lock.yaml`，仓库根目录 `.npmrc` 固定使用官方源 `https://registry.npmjs.org/`），已移除前端对 `@blocknote/core` / `@blocknote/react` 的直接依赖与自建编辑器 UI。全站已登录工作区外壳采用 mtone `AppLayout`（左侧可折叠导航与左下角 `account` 菜单，无全局顶栏），笔记页面采用两栏 `PageLayout`（左侧可拖拽调宽目录树侧栏、右侧通过 `PageLayout.topbar` 放置单行 `Topbar` 与无边框居中编辑画布）。下文保留 T17—T19 的原始接入与各版本升级记录。[升级与全站 AppLayout / 笔记 PageLayout 任务 #328](../tasks/328.md) · [升级与布局任务 #326](../tasks/326.md) · [升级任务 #310](../tasks/310.md) · [Container 任务 #298](../tasks/298.md)
 
 T17 已精确接入 npm `@bixlab/mtone@0.2.0`，迁移 App 静态类并移除 `packages/ui`；**PR #42 已普通 merge 至主线 `e3e1db2`，独立审查/主线验证/任务清理完成**。T17 接入时，生产入口使用应用层 `UiProvider` 配置公开 `MtoneProvider`，不转发控件 API；CSS 从应用样式入口导入。基础表单组合仅在测试夹具中，不建立生产演示路由或通用包装库。证据见 [T17](../plans/knoted-v1/evidence/t17.md)。
 
@@ -50,6 +50,14 @@ T17 实测：旧 `cn('p-2', 'p-4')` 返回 `p-4`，mtone 的 `cn` 返回 `p-2 p-
 0.2.0 在实施时距发布不足 pnpm 默认最小等待时间；`pnpm-workspace.yaml` 仅为已明确选择、检查过的精确版本添加 minimumReleaseAgeExclude，其他依赖策略保持不变。不改 workspace 通配范围。
 
 只使用 npm 已发布版本作为正式依赖；不以浮动 latest、Git、file/link、未发布 tarball 交付。不修改 API 或业务语义来迁就组件。
+
+## 1.2.0 升级、全站 AppLayout 与笔记页两栏 PageLayout 重构
+
+将精确依赖升级至 **`@bixlab/mtone@1.2.0`**（`@bixlab/mtone-blockeditor@1.1.0` 已为最新正式版且 peer 范围兼容），同步更新 `pnpm-workspace.yaml` 精确等待期例外与 `pnpm-lock.yaml`（锁文件仅变更 `@bixlab/mtone` 版本与完整性摘要，无无关依赖漂移）。[mtone 1.1.0 发布说明](https://github.com/xingjianxu/mtone/releases/tag/v1.1.0) · [mtone 1.2.0 发布说明](https://github.com/xingjianxu/mtone/releases/tag/v1.2.0) · [任务卡 #328](../tasks/328.md)
+
+- **全站 `AppLayout` 外壳**：`_authenticated` 由 `AdminLayout` 迁移至 `AppLayout`（`fullHeight`、`sidebarWidth={228}`、`sidebarCollapsible`、`contentAs="div"` 内置单一 `<main>` 滚动容器与滚动恢复），移除全局顶栏并将账号操作（`凭据与会话`、`通知`、`退出登录`）统一收拢到左下角 `account` 菜单；仅在项目/事项/文件详情子路由顶部保留返回面包屑 `Topbar`。
+- **笔记页两栏 `PageLayout` 与 `topbar` API**：`NotesPage` 改为直接消费 `PageLayout`（`bordered`、`headerSpan="main"`、`sidebarPosition="left"`、单线 `sidebarResize`），左侧栏放置笔记目录树 `Sidebar`，右侧栏通过 `PageLayout` 的 `topbar` 插槽展示 `Topbar`（左侧为当前笔记路径 `Breadcrumb` 与状态，无用户相关按钮；右侧为保存笔记图标按钮及标签、历史与更多操作图标按钮），并启用 `BlockEditor` `borderless` 实现无边框白纸编辑画布；窄容器 `< 40rem`（640px）由单一 `data-notes-narrow` 状态省略内联侧栏并改由 `Drawer` 承接目录树。
+- **全站页面边框统一**：适配 `mtone@1.2.0` `PageLayout` 默认 `bordered` 布局，并将回收站与文件列表统一纳入 `PageLayout` / `Card` 边框体系，保持无横向溢出与既有焦点恢复契约。
 
 ## 1.0.0 与 BlockEditor 1.1.0 升级及笔记页 AppLayout / Topbar 重构
 

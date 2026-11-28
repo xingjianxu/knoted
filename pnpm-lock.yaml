@@ -200,11 +200,11 @@ importers:
   apps/web:
     dependencies:
       '@bixlab/mtone':
-        specifier: 1.0.0
-        version: 1.0.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        specifier: 1.2.0
+        version: 1.2.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@bixlab/mtone-blockeditor':
         specifier: 1.1.0
-        version: 1.1.0(@bixlab/mtone@1.0.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(@floating-ui/dom@1.8.0)(@types/hast@3.0.5)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@6.0.3)
+        version: 1.1.0(@bixlab/mtone@1.2.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(@floating-ui/dom@1.8.0)(@types/hast@3.0.5)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@6.0.3)
       '@hookform/resolvers':
         specifier: 7.0.6
         version: 7.0.6(ajv-formats@3.0.1(ajv@8.20.0))(ajv@8.20.0)(react-hook-form@7.92.0(@types/react@19.3.0)(react@19.3.1))(zod@4.6.7)
@@ -403,8 +403,8 @@ packages:
       react: ^19.2.0
       react-dom: ^19.2.0
 
-  '@bixlab/mtone@1.0.0':
-    resolution: {integrity: sha512-qHubADOy72WZ+8uxJTGo2+7+teqsWKB/erNyfWG8jxYIF2fZF3W5aVlnZI6NllqfB3WQthrGL/F2MTm+FTA9Mw==}
+  '@bixlab/mtone@1.2.0':
+    resolution: {integrity: sha512-NJm81gJAwoSNahIMM32Sx5hdm3v7F907hMN2otezjcG+OWiRc3i3ocAxphkta38cSZ2M/AGqNCer/xOaDNvIYg==}
     peerDependencies:
       react: ^19.2.0
       react-dom: ^19.2.0
@@ -2646,9 +2646,9 @@ snapshots:
   '@bcoe/v8-coverage@1.0.2':
     optional: true
 
-  '@bixlab/mtone-blockeditor@1.1.0(@bixlab/mtone@1.0.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(@floating-ui/dom@1.8.0)(@types/hast@3.0.5)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@6.0.3)':
+  '@bixlab/mtone-blockeditor@1.1.0(@bixlab/mtone@1.2.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(@floating-ui/dom@1.8.0)(@types/hast@3.0.5)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@6.0.3)':
     dependencies:
-      '@bixlab/mtone': 1.0.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@bixlab/mtone': 1.2.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@blocknote/core': 0.57.0(@types/hast@3.0.5)
       '@blocknote/react': 0.57.0(@floating-ui/dom@1.8.0)(@types/hast@3.0.5)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@6.0.3)
       '@floating-ui/react': 0.27.20(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -2676,7 +2676,7 @@ snapshots:
       - y-protocols
       - yjs
 
-  '@bixlab/mtone@1.0.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
+  '@bixlab/mtone@1.2.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
     dependencies:
       '@base-ui/react': 1.9.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@rc-component/table': 1.12.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)

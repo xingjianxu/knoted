@@ -9,21 +9,18 @@ import {
 } from "@tanstack/react-router";
 import { useLayoutEffect, useRef, useState } from "react";
 import {
-  AdminLayout, Alert, Avatar, Breadcrumb, Button, Dialog, NavGroup, NavItem, Popover,
-  type MenuItem,
+  Alert, AppLayout, Avatar, Breadcrumb, Dialog, NavGroup, NavItem, Topbar,
 } from "@bixlab/mtone";
 import {
   ArrowLeft,
   Bell,
   BookOpen,
-  Ellipsis,
   FolderKanban,
   House,
   LibraryBig,
   ListTodo,
   LogOut,
   Search,
-  Settings,
   ShieldCheck,
   Trash2,
   UserRound,
@@ -35,17 +32,6 @@ export const Route = createFileRoute("/_authenticated")({
   beforeLoad: ({ context, location, abortController }) => AuthGate(context, location.href, abortController.signal),
   component: Shell,
 });
-
-const sectionLabels: Readonly<Record<string, string>> = {
-  "/": "概览",
-  "/notes": "笔记",
-  "/projects": "项目",
-  "/tasks": "事项",
-  "/trash": "回收站",
-  "/files": "文件",
-  "/search": "搜索",
-  "/settings": "凭据与会话",
-};
 
 const detailLabels = {
   "/projects": { back: "返回项目", current: "项目详情" },
@@ -76,14 +62,15 @@ function Shell() {
     : wide
       ? "workspace-frame workspace-frame--wide"
       : "workspace-frame";
-  const section = sectionLabels[pathname.replace(/^(\/[^/]+)\/.*$/, "$1")] ?? "工作空间";
-  const [compactHeader, setCompactHeader] = useState(false);
   const frame = useWorkspaceScrollFrame();
+  const shellRef = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
   const blockedLogout = useRef<(() => void) | null>(null);
   const [error, setError] = useState("");
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const openSearch = () => void navigate({ to: "/search", search: { q: "" } });
   const openSettings = () => void navigate({ to: "/settings/security" });
+
   async function logout() {
     if (busy) return;
     setBusy(true);
@@ -114,136 +101,177 @@ function Shell() {
       setBusy(false);
     }
   }
+
   return (
-    <AdminLayout fullHeight>
-      <a href="#workspace-content" className="page-link sr-only z-50 bg-surface p-3 focus:not-sr-only focus:fixed focus:top-2 focus:left-2"
+    <>
+      <a
+        href="#workspace-content"
+        className="page-link sr-only z-50 bg-surface p-3 focus:not-sr-only focus:fixed focus:top-2 focus:left-2"
         onClick={(event) => {
           const content = document.getElementById("workspace-content");
           if (!content) return;
           event.preventDefault();
           content.focus({ preventScroll: true });
-        }}>跳到主要内容</a>
-      <AdminLayout.Sider
-        className="workspace-sider"
-        logo={<strong>Knoted</strong>}
-        collapsedLogo={<strong><span aria-hidden="true">K</span><span className="sr-only">Knoted</span></strong>}
-        collapsible
-        breakpoint={768}
-        onBreakpoint={setCompactHeader}
+        }}
       >
-        <nav aria-label="主导航">
+        跳到主要内容
+      </a>
+      <AppLayout
+        ref={shellRef}
+        fullHeight
+        className="workspace-app-layout"
+        sidebarWidth={228}
+        sidebarCollapsible
+        brand={
+          <span className="workspace-brand">
+            <span className="workspace-brand-mark" aria-hidden="true">K</span>
+            <span className="workspace-brand-name">Knoted</span>
+          </span>
+        }
+        navigationLabel="主导航"
+        navigation={
           <NavGroup label="工作空间">
-            <NavItem icon={<House size={16} aria-hidden="true" />} active={pathname === "/"}
-              onClick={() => void navigate({ to: "/" })}>概览</NavItem>
-            <NavItem icon={<BookOpen size={16} aria-hidden="true" />} active={/^\/notes(?:\/|$)/.test(pathname)}
-              onClick={() => void navigate({ to: "/notes" })}>笔记</NavItem>
-            <NavItem icon={<FolderKanban size={16} aria-hidden="true" />} active={/^\/projects(?:\/|$)/.test(pathname)}
-              onClick={() => void navigate({ to: "/projects" })}>项目</NavItem>
-            <NavItem icon={<ListTodo size={16} aria-hidden="true" />} active={/^\/tasks(?:\/|$)/.test(pathname)}
-              onClick={() => void navigate({ to: "/tasks" })}>事项</NavItem>
-            <NavItem icon={<Trash2 size={16} aria-hidden="true" />} active={pathname === "/trash"}
-              onClick={() => void navigate({ to: "/trash" })}>回收站</NavItem>
-            <NavItem icon={<LibraryBig size={16} aria-hidden="true" />} active={/^\/files(?:\/|$)/.test(pathname)}
-              onClick={() => void navigate({ to: "/files" })}>文件</NavItem>
-            <NavItem icon={<Search size={16} aria-hidden="true" />} active={pathname === "/search"}
-              onClick={openSearch}>搜索</NavItem>
+            <NavItem
+              icon={<House size={16} aria-hidden="true" />}
+              active={pathname === "/"}
+              onClick={() => void navigate({ to: "/" })}
+            >
+              概览
+            </NavItem>
+            <NavItem
+              icon={<BookOpen size={16} aria-hidden="true" />}
+              active={/^\/notes(?:\/|$)/.test(pathname)}
+              onClick={() => void navigate({ to: "/notes" })}
+            >
+              笔记
+            </NavItem>
+            <NavItem
+              icon={<FolderKanban size={16} aria-hidden="true" />}
+              active={/^\/projects(?:\/|$)/.test(pathname)}
+              onClick={() => void navigate({ to: "/projects" })}
+            >
+              项目
+            </NavItem>
+            <NavItem
+              icon={<ListTodo size={16} aria-hidden="true" />}
+              active={/^\/tasks(?:\/|$)/.test(pathname)}
+              onClick={() => void navigate({ to: "/tasks" })}
+            >
+              事项
+            </NavItem>
+            <NavItem
+              icon={<LibraryBig size={16} aria-hidden="true" />}
+              active={/^\/files(?:\/|$)/.test(pathname)}
+              onClick={() => void navigate({ to: "/files" })}
+            >
+              文件
+            </NavItem>
+            <NavItem
+              icon={<Search size={16} aria-hidden="true" />}
+              active={pathname === "/search"}
+              onClick={openSearch}
+            >
+              搜索
+            </NavItem>
+            <NavItem
+              icon={<Trash2 size={16} aria-hidden="true" />}
+              active={pathname === "/trash"}
+              onClick={() => void navigate({ to: "/trash" })}
+            >
+              回收站
+            </NavItem>
           </NavGroup>
-          <NavGroup label="账号">
-            <NavItem icon={<ShieldCheck size={16} aria-hidden="true" />} active={pathname === "/settings/security"}
-              onClick={openSettings}>凭据与会话</NavItem>
-          </NavGroup>
-        </nav>
-      </AdminLayout.Sider>
-      <AdminLayout className="min-w-0 flex-1">
-        <AdminLayout.Header
-          className="px-3 sm:px-6"
-          breadcrumb={
-            <Breadcrumb
-              aria-label="当前位置"
-              className={collection ? "[&>ol>li:first-child]:shrink-0" : undefined}
-              items={collection ? [
-                { label: (
-                  <Link className="page-link inline-flex items-center gap-1" to={collection}
-                    resetScroll={collection !== "/files"} activeOptions={{ exact: true }}>
-                    <ArrowLeft aria-hidden="true" size={16} />
-                    {detailLabels[collection].back}
-                  </Link>
-                ) },
-                { label: detailLabels[collection].current },
-              ] : [{ label: section }]}
+        }
+        account={{
+          name: "个人账号",
+          description: "Knoted 工作空间",
+          avatar: <Avatar size={28} icon={<UserRound size={15} />} />,
+          menuLabel: "账号菜单",
+          items: [
+            {
+              key: "security",
+              label: "凭据与会话",
+              icon: <ShieldCheck size={15} aria-hidden="true" />,
+              onSelect: openSettings,
+            },
+            {
+              key: "notifications",
+              label: "通知",
+              icon: <Bell size={15} aria-hidden="true" />,
+              onSelect: () => setNotificationsOpen(true),
+            },
+            { type: "divider", key: "before-logout" },
+            {
+              key: "logout",
+              label: busy ? "正在退出…" : "退出登录",
+              icon: <LogOut size={15} aria-hidden="true" />,
+              danger: true,
+              disabled: busy,
+              onSelect: () => void logout(),
+            },
+          ],
+        }}
+        contentAs="div"
+      >
+        <main
+          id="workspace-content"
+          tabIndex={-1}
+          data-workspace-content
+          data-scroll-restoration-id="workspace"
+          className={notesLayout ? "workspace-content workspace-content--flush" : "workspace-content bg-canvas"}
+        >
+          {collection && (
+            <Topbar
+              as="div"
+              className="workspace-detail-topbar"
+              breadcrumb={
+                <Breadcrumb
+                  aria-label="当前位置"
+                  className="[&>ol>li:first-child]:shrink-0"
+                  items={[
+                    {
+                      label: (
+                        <Link
+                          className="page-link inline-flex items-center gap-1"
+                          to={collection}
+                          resetScroll={collection !== "/files"}
+                          activeOptions={{ exact: true }}
+                        >
+                          <ArrowLeft aria-hidden="true" size={16} />
+                          {detailLabels[collection].back}
+                        </Link>
+                      ),
+                    },
+                    { label: detailLabels[collection].current },
+                  ]}
+                />
+              }
             />
-          }
-          extra={
-            <WorkspaceHeaderActions compact={compactHeader} logoutPending={busy}
-              onSearch={openSearch} onSettings={openSettings} onLogout={() => void logout()} />
-          }
-        />
-        <AdminLayout.Content id="workspace-content" tabIndex={-1} data-workspace-content
-          data-scroll-restoration-id="workspace" className="workspace-content bg-canvas p-0">
+          )}
           <div ref={frame} className={frameClass}>
-            {error && <div className={notesLayout ? "shrink-0 px-3 pt-3 sm:px-6 sm:pt-4" : "mb-4"}><Alert tone="error">{error}</Alert></div>}
+            {error && (
+              <div className={notesLayout ? "shrink-0 px-3 pt-3 sm:px-6 sm:pt-4" : "mb-4"}>
+                <Alert tone="error">{error}</Alert>
+              </div>
+            )}
             <NotesNavigationBlocked.Provider value={() => blockedLogout.current?.()}>
               <Outlet />
             </NotesNavigationBlocked.Provider>
           </div>
-        </AdminLayout.Content>
-      </AdminLayout>
-    </AdminLayout>
-  );
-}
-
-function WorkspaceHeaderActions({ compact, logoutPending, onSearch, onSettings, onLogout }: {
-  compact: boolean;
-  logoutPending: boolean;
-  onSearch: () => void;
-  onSettings: () => void;
-  onLogout: () => void;
-}) {
-  const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const notificationsTrigger = useRef<HTMLButtonElement>(null);
-  const actions = [
-    { key: "search", label: "全局搜索", icon: <Search size={17} aria-hidden="true" />, onSelect: onSearch },
-    { key: "notifications", label: "通知", icon: <Bell size={17} aria-hidden="true" />, onSelect: () => setNotificationsOpen(true) },
-    { key: "settings", label: "账号设置", icon: <Settings size={17} aria-hidden="true" />, onSelect: onSettings },
-  ];
-  const logout: MenuItem = {
-    key: "logout",
-    label: logoutPending ? "正在退出…" : "退出登录",
-    icon: <LogOut size={17} aria-hidden="true" />,
-    danger: true,
-    disabled: logoutPending,
-    onSelect: onLogout,
-  };
-  return (
-    <>
-      {compact ? (
-        <Popover.Menu key="more" align="end" label="更多操作" items={[...actions, logout]}
-          trigger={
-            <Button ref={notificationsTrigger} iconOnly variant="ghost" aria-label="更多操作" title="更多操作">
-              <Ellipsis size={17} aria-hidden="true" />
-            </Button>
-          } />
-      ) : (
-        <>
-          {actions.map(({ key, label, icon, onSelect }) => (
-            <Button key={key} iconOnly variant="ghost" aria-label={label} title={label} onClick={onSelect}
-              ref={key === "notifications" ? notificationsTrigger : undefined}
-              aria-haspopup={key === "notifications" ? "dialog" : undefined}>
-              {icon}
-            </Button>
-          ))}
-          <Popover.Menu align="end" label="账号菜单" items={[logout]}
-            trigger={
-              <Button iconOnly variant="ghost" aria-label="账号菜单" title="账号菜单">
-                <Avatar size={24} aria-hidden="true" icon={<UserRound size={15} />} />
-              </Button>
-            } />
-        </>
-      )}
-      <Dialog title="通知" open={notificationsOpen} onOpenChange={(open) => {
-        setNotificationsOpen(open);
-        if (!open) requestAnimationFrame(() => notificationsTrigger.current?.focus());
-      }}>
+        </main>
+      </AppLayout>
+      <Dialog
+        title="通知"
+        open={notificationsOpen}
+        onOpenChange={(open) => {
+          setNotificationsOpen(open);
+          if (!open) {
+            requestAnimationFrame(() => {
+              shellRef.current?.querySelector<HTMLElement>(".mt-app-layout-account")?.focus();
+            });
+          }
+        }}
+      >
         <p className="text-muted">暂无通知</p>
       </Dialog>
     </>
