@@ -117,7 +117,10 @@ function NoteAssociationsContent({ noteId, api, readOnly = false, assertCanWrite
         const existing = knownTagsById.get(value) ?? knownTagsByName.get(trimmed);
         if (existing) {
           await assign(existing.id);
-          if (pendingAssignment?.id === existing.id) setPendingAssignment(undefined);
+          if (pendingAssignment?.id === existing.id) {
+            setPendingAssignment(undefined);
+            await queryClient.invalidateQueries({ queryKey: ["tag-options"] });
+          }
           continue;
         }
         if (!trimmed) throw new Error("请输入标签名称");
@@ -152,24 +155,24 @@ function NoteAssociationsContent({ noteId, api, readOnly = false, assertCanWrite
           {tags.isFetching && !tags.data && <Spinner label="正在读取标签" />}
           {tags.error && <Alert tone="error">{tags.error.message} <Button size="sm" onClick={() => void tags.refetch()}>重试标签</Button></Alert>}
           {options.error && <Alert tone="error">{options.error.message} <Button size="sm" onClick={() => void options.refetch()}>重试已有标签</Button></Alert>}
-          {errors.tags && (
-            <Alert tone="error">
-              {errors.tags}
-              {pendingAssignment && (
-                <div className="mt-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={tagsDisabled}
-                    onClick={() => void mutate("tags", async () => {
-                      await assign(pendingAssignment.id);
-                      setPendingAssignment(undefined);
-                    })}
-                  >
-                    重试添加标签 {pendingAssignment.name}
-                  </Button>
-                </div>
-              )}
+          {errors.tags && <Alert tone="error">{errors.tags}</Alert>}
+          {pendingAssignment && (
+            <Alert tone="warning">
+              标签「{pendingAssignment.name}」已创建，尚未关联到当前笔记。
+              <div className="mt-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={tagsDisabled}
+                  onClick={() => void mutate("tags", async () => {
+                    await assign(pendingAssignment.id);
+                    setPendingAssignment(undefined);
+                    await queryClient.invalidateQueries({ queryKey: ["tag-options"] });
+                  })}
+                >
+                  重试添加标签 {pendingAssignment.name}
+                </Button>
+              </div>
             </Alert>
           )}
           <Select

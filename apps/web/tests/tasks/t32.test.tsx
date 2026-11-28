@@ -137,4 +137,72 @@ describe("T32 note associations", () => {
     await waitFor(() => expect(within(drawer).getAllByRole("alert")).toHaveLength(2));
     expect(screen.getByLabelText("关联目标 ID")).toHaveValue(targetId);
   });
+
+  it("retains pending tag assignment retry across unrelated tag mutations and invalidates tag options on retry", async () => {
+    const requests: Request[] = [];
+    let tags: { id: string; name: string; version: number }[] = [{ id: existingTagId, name: "架构", version: 1 }];
+    const allTags = [{ id: existingTagId, name: "架构", version: 1 }];
+    let failNewTagAssign = true;
+    const api = createApiClient({
+      baseUrl: "http://localhost/api/v1",
+      fetch: async (input) => {
+        const request = input as Request;
+        requests.push(request.clone());
+        const path = new URL(request.url).pathname;
+        if (request.method === "GET") {
+          if (path === "/api/v1/tags") return json({ items: allTags, next_cursor: null });
+          return json({ items: path.endsWith("/links") ? [] : tags, next_cursor: null });
+        }
+        if (request.method === "POST" && path === "/api/v1/tags") {
+          const created = { id: tagId, name: "研究", version: 1, created_at: "2026-11-17T00:00:00Z", updated_at: "2026-11-17T00:00:00Z" };
+          allTags.push({ id: created.id, name: created.name, version: 1 });
+          return json(created, 201);
+        }
+        if (path.endsWith(`/tags/${tagId}`) && request.method === "PUT") {
+          if (failNewTagAssign) {
+            return json({ code: "dependency_unavailable", message: "服务暂不可用", request_id: noteId }, 503);
+          }
+          tags = [...tags, { id: tagId, name: "研究", version: 1 }];
+          return new Response(null, { status: 204 });
+        }
+        if (path.endsWith(`/tags/${existingTagId}`) && request.method === "DELETE") {
+          tags = tags.filter(item => item.id !== existingTagId);
+          return new Response(null, { status: 204 });
+        }
+        throw new Error(`${request.method} ${path}`);
+      },
+    });
+    render(
+      <UiProvider>
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <NoteAssociations noteId={noteId} api={api} />
+        </QueryClientProvider>
+      </UiProvider>,
+    );
+    const drawer = await openAssociations();
+    const tagInput = within(drawer).getByRole("combobox", { name: "笔记标签" });
+    await waitFor(() => expect(tagInput).toBeEnabled());
+
+    // POST /tags succeeds while PUT fails with 503
+    fireEvent.click(within(drawer).getByRole("button", { name: "展开选项" }));
+    fireEvent.change(tagInput, { target: { value: "研究" } });
+    fireEvent.click(await screen.findByRole("option", { name: "创建“研究”" }));
+    expect(await within(drawer).findByRole("button", { name: "重试添加标签 研究" })).toBeInTheDocument();
+
+    // Unrelated tag removal clears errors.tags but keeps pending assignment recovery available
+    fireEvent.click(within(drawer).getByRole("button", { name: "移除 架构" }));
+    await waitFor(() => expect(within(drawer).queryByRole("button", { name: "移除 架构" })).not.toBeInTheDocument());
+    expect(within(drawer).getByRole("button", { name: "重试添加标签 研究" })).toBeEnabled();
+
+    const optionsGetsBeforeRetry = requests.filter(r => r.method === "GET" && new URL(r.url).pathname === "/api/v1/tags").length;
+    failNewTagAssign = false;
+    fireEvent.click(within(drawer).getByRole("button", { name: "重试添加标签 研究" }));
+    expect(await within(drawer).findByRole("button", { name: "移除 研究" })).toBeInTheDocument();
+    expect(within(drawer).queryByRole("button", { name: "重试添加标签 研究" })).not.toBeInTheDocument();
+    expect(requests.filter(r => r.method === "POST" && new URL(r.url).pathname === "/api/v1/tags")).toHaveLength(1);
+    await waitFor(() => {
+      const optionsGetsAfterRetry = requests.filter(r => r.method === "GET" && new URL(r.url).pathname === "/api/v1/tags").length;
+      expect(optionsGetsAfterRetry).toBeGreaterThan(optionsGetsBeforeRetry);
+    });
+  });
 });

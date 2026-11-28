@@ -73,10 +73,9 @@ export function HistoryPanel({ noteId, bundle, disabled = false, onRestore }: Hi
               >
                 <Button
                   size="sm"
-                  variant={selected?.snapshot_id === snapshot.snapshot_id ? "soft" : "ghost"}
+                  variant="ghost"
                   className="max-w-full whitespace-normal text-left [overflow-wrap:anywhere]"
                   aria-label={`预览 ${snapshot.title} · v${snapshot.content_version} · ${snapshot.created_at}`}
-                  aria-pressed={selected?.snapshot_id === snapshot.snapshot_id}
                   onClick={event => { selectedTrigger.current = event.currentTarget; setSelected(snapshot); }}
                 >
                   {snapshot.title}

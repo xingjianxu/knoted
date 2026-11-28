@@ -119,6 +119,7 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
   const [openDirectoryFor, setOpenDirectoryFor] = useState<string>();
   const directoryButton = useRef<HTMLButtonElement>(null);
   const pendingDirectoryReturnFocus = useRef(false);
+  const pendingWideDirectoryFocus = useRef(false);
   const directoryHeading = useRef<HTMLHeadingElement>(null);
   const notesPageRef = useRef<HTMLDivElement>(null);
   const [narrowLayout, setNarrowLayout] = useState(false);
@@ -142,6 +143,7 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
   // Active note pane UI state
   const [noteStateId, setNoteStateId] = useState<string>();
   const [history, setHistory] = useState(false);
+  const [historySession, setHistorySession] = useState(0);
   const [conflict, setConflict] = useState(false);
   const historyTrigger = useRef<HTMLButtonElement>(null);
   const bodyScroll = useRef<HTMLDivElement>(null);
@@ -249,11 +251,8 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
       setNarrowLayout(nextNarrow);
       if (leftNarrow && drawerOpenRef.current) {
         pendingDirectoryReturnFocus.current = false;
+        pendingWideDirectoryFocus.current = true;
         setOpenDirectoryFor(undefined);
-        window.requestAnimationFrame(() => {
-          const heading = directoryHeading.current;
-          if (heading?.isConnected) heading.focus();
-        });
       }
     };
     update(host.clientWidth);
@@ -262,6 +261,15 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
     observer.observe(host);
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    if (!pendingWideDirectoryFocus.current || narrowLayout || directoryDrawerOpen) return;
+    pendingWideDirectoryFocus.current = false;
+    window.requestAnimationFrame(() => {
+      const heading = directoryHeading.current;
+      if (heading?.isConnected) heading.focus();
+    });
+  }, [narrowLayout, directoryDrawerOpen]);
 
   useEffect(() => {
     if (directoryDrawerOpen) {
@@ -547,6 +555,10 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
     }
     void navigate({ to: "/notes/$noteId", params: { noteId: id } });
   }
+  function openHistory() {
+    setHistorySession(count => count + 1);
+    setHistory(true);
+  }
   function closeHistory(restoreFocus: "trigger" | "title" = "trigger") {
     setHistory(false);
     requestAnimationFrame(() => {
@@ -782,7 +794,7 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
               aria-label="历史版本"
               aria-haspopup="dialog"
               aria-expanded={history}
-              onClick={() => { if (history) closeHistory("trigger"); else setHistory(true); }}
+              onClick={() => { if (history) closeHistory("trigger"); else openHistory(); }}
             >
               <History size={15} aria-hidden="true" />
             </Button>
@@ -994,30 +1006,29 @@ export function NotesPage({ bundle }: { bundle: QueryClientBundle }) {
             placement="right"
             open={history}
             onOpenChange={open => {
-              if (open) setHistory(true);
-              else closeHistory("trigger");
+              if (open) openHistory();
+              else if (!busy.current) closeHistory("trigger");
             }}
             title="历史版本"
             className="notes-history-drawer"
           >
-            {history && (
-              <HistoryPanel
-                noteId={initialNote.id}
-                bundle={bundle}
-                disabled={unavailable}
-                onRestore={async snapshot => {
-                  await runCommand(async () => {
-                    await autosave.restoreFromServer(async (noteId, baseVersion) => {
-                      const { data } = await bundle.api.raw.POST("/notes/{noteId}/snapshots/{snapshotId}/restore", { params: { path: { noteId, snapshotId: snapshot.snapshot_id } }, body: { expected_version: baseVersion } });
-                      if (!data) throw new Error("恢复响应缺少笔记");
-                      return data;
-                    });
-                    await refreshTree();
+            <HistoryPanel
+              key={`${initialNote.id}:${historySession}`}
+              noteId={initialNote.id}
+              bundle={bundle}
+              disabled={unavailable}
+              onRestore={async snapshot => {
+                await runCommand(async () => {
+                  await autosave.restoreFromServer(async (noteId, baseVersion) => {
+                    const { data } = await bundle.api.raw.POST("/notes/{noteId}/snapshots/{snapshotId}/restore", { params: { path: { noteId, snapshotId: snapshot.snapshot_id } }, body: { expected_version: baseVersion } });
+                    if (!data) throw new Error("恢复响应缺少笔记");
+                    return data;
                   });
-                  closeHistory("title");
-                }}
-              />
-            )}
+                  await refreshTree();
+                });
+                closeHistory("title");
+              }}
+            />
           </Drawer>
 
           <ConflictDialog
