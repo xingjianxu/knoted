@@ -263,23 +263,17 @@ test("笔记历史立即可读，保存冲突后离开及退出均保留草稿",
   const editor = page.getByRole("textbox", { name: "笔记标题" });
   const history = page.getByRole("button", { name: "历史版本" });
   await history.click();
-  const historyDivider = page.getByRole("region", { name: "当前笔记" }).locator(".mt-container > hr.mt-divider");
-  const historySection = page.getByRole("region", { name: "笔记历史" });
-  await expect(historyDivider).toBeVisible();
-  const [historyDividerBox, historySectionBox] = await Promise.all([
-    historyDivider.boundingBox(),
-    historySection.boundingBox(),
-  ]);
-  expect(historyDividerBox).not.toBeNull();
-  expect(historySectionBox).not.toBeNull();
-  expect(historySectionBox!.y - (historyDividerBox!.y + historyDividerBox!.height)).toBeGreaterThanOrEqual(8);
-  await page.getByRole("button", { name: /预览 历史调研手记/ }).click();
-  await expect(page.getByRole("heading", { name: "历史调研手记" })).toBeInViewport();
-  const preview = page.getByRole("region", { name: "历史预览" });
+  const historyDrawer = page.getByRole("dialog", { name: "历史版本" });
+  await expect(historyDrawer).toBeVisible();
+  expect(await historyDrawer.evaluate(el => el.closest("[data-placement]")?.getAttribute("data-placement"))).toBe("right");
+  await historyDrawer.getByRole("button", { name: /预览 历史调研手记/ }).click();
+  await expect(historyDrawer.getByRole("heading", { name: "历史调研手记" })).toBeInViewport();
+  const preview = historyDrawer.getByRole("region", { name: "历史预览" });
   await expect(preview).toContainText("调研记录第 1 段");
   await expect(preview.locator('[contenteditable="true"]')).toHaveCount(0);
   if (capture) await page.screenshot({ path: `${capture}/390-note-history.png`, animations: "disabled" });
-  await page.getByRole("button", { name: "关闭历史" }).click();
+  await historyDrawer.getByRole("button", { name: "关闭" }).click();
+  await expect(historyDrawer).toBeHidden();
   await expect(history).toBeFocused();
   await expect(page.getByRole("textbox", { name: "笔记编辑器" })).toBeEditable();
   await editor.fill("当前草稿不能丢失");
@@ -290,6 +284,7 @@ test("笔记历史立即可读，保存冲突后离开及退出均保留草稿",
   await page.getByRole("button", { name: "目录", exact: true }).click();
   const directory = page.getByRole("dialog", { name: "笔记目录" });
   await expect(directory.getByRole("tree")).toBeVisible();
+  expect(await directory.evaluate(el => el.closest("[data-placement]")?.getAttribute("data-placement"))).toBe("left");
   if (capture) await page.screenshot({ path: `${capture}/390-note-directory.png`, animations: "disabled" });
   await directory.getByRole("button", { name: "关闭" }).click();
   await page.getByRole("navigation", { name: "主导航" }).getByRole("button", { name: "项目" }).click();
@@ -465,8 +460,26 @@ test("全站使用 AppLayout，笔记页采用两栏 PageLayout 与右侧 Topbar
   expect(beforeTopbar!.y + beforeTopbar!.height).toBeLessThanOrEqual(beforeBody!.y + 1);
 
   const separator = page.getByRole("separator", { name: "调整分栏 1" });
+  await expect(separator).toHaveClass(/mt-splitter-separator-bordered/);
+  await expect(separator).not.toHaveClass(/mt-splitter-separator-line/);
+  const separatorBorders = await separator.evaluate(el => {
+    const s = getComputedStyle(el);
+    return {
+      borderLeftWidth: s.borderLeftWidth,
+      borderRightWidth: s.borderRightWidth,
+      borderLeftStyle: s.borderLeftStyle,
+      borderRightStyle: s.borderRightStyle,
+    };
+  });
+  expect(separatorBorders).toEqual({
+    borderLeftWidth: "1px",
+    borderRightWidth: "1px",
+    borderLeftStyle: "solid",
+    borderRightStyle: "solid",
+  });
   const sepBox = await separator.boundingBox();
   expect(sepBox).toBeTruthy();
+  expect(sepBox!.width).toBeGreaterThanOrEqual(6);
   const startX = sepBox!.x + sepBox!.width / 2;
   const startY = sepBox!.y + sepBox!.height / 2;
   await page.mouse.move(startX, startY);
@@ -788,11 +801,99 @@ test("笔记表格可自动保存、刷新重开并在历史中预览", async ({
   await expect(editor.locator("table").last().locator("th")).toHaveText(["项目", "负责人"]);
   await expect(editor.locator("table").last().locator("td")).toHaveText(["粘贴的项目", ""]);
   await page.getByRole("button", { name: "历史版本", exact: true }).click();
-  await page.getByRole("button", { name: /预览 调研手记/ }).click();
-  const preview = page.getByRole("region", { name: "历史预览" });
+  const historyDrawer = page.getByRole("dialog", { name: "历史版本" });
+  await expect(historyDrawer).toBeVisible();
+  await historyDrawer.getByRole("button", { name: /预览 调研手记/ }).click();
+  const preview = historyDrawer.getByRole("region", { name: "历史预览" });
   await expect(preview.locator("table")).toHaveCount(2);
   await expect(preview.locator("table").last()).toContainText("粘贴的项目");
   await expect(preview.locator("[contenteditable=true]")).toHaveCount(0);
+});
+
+test("笔记页右上角标签与历史均从右侧 Drawer 弹出，标签通过 Select tags 模式选择、创建与移除", async ({ page }) => {
+  test.skip(baseline, "改版后的交互回归");
+  const existingTag = { id: id(71), name: "设计", version: 1, ...timestamps };
+  const createdTag = { id: id(72), name: "研究", version: 1, ...timestamps };
+  const allTags = [existingTag];
+  let noteTags: (typeof existingTag)[] = [];
+  let postTagCount = 0;
+
+  await fixtures(page);
+  await page.route(/\/api\/v1\/tags(?:\?|$)/, route => {
+    if (route.request().method() === "POST") {
+      postTagCount += 1;
+      const body = route.request().postDataJSON() as { name: string };
+      expect(body.name).toBe("研究");
+      allTags.push(createdTag);
+      return route.fulfill({ status: 201, json: createdTag });
+    }
+    return route.fulfill({ json: list(allTags) });
+  });
+  await page.route(new RegExp(`/api/v1/entities/note/${note.id}/tags(?:\\?|$)`), route => route.fulfill({ json: list(noteTags) }));
+  await page.route(`**/api/v1/entities/note/${note.id}/tags/*`, route => {
+    const tagId = new URL(route.request().url()).pathname.split("/").at(-1)!;
+    if (route.request().method() === "PUT") {
+      const found = allTags.find(item => item.id === tagId);
+      if (found && !noteTags.some(item => item.id === tagId)) noteTags = [...noteTags, found];
+      return route.fulfill({ status: 204 });
+    }
+    if (route.request().method() === "DELETE") {
+      noteTags = noteTags.filter(item => item.id !== tagId);
+      return route.fulfill({ status: 204 });
+    }
+    return route.fallback();
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`http://127.0.0.1:4178/notes/${note.id}`);
+
+  const tagsButton = page.getByRole("button", { name: "标签与关联" });
+  await tagsButton.click();
+  const tagsDrawer = page.getByRole("dialog", { name: "标签与关联" });
+  await expect(tagsDrawer).toBeVisible();
+  expect(await tagsDrawer.evaluate(el => el.closest("[data-placement]")?.getAttribute("data-placement"))).toBe("right");
+  await expect.poll(async () => {
+    const box = await tagsDrawer.boundingBox();
+    return box ? Math.abs((box.x + box.width) - 1440) : 999;
+  }).toBeLessThanOrEqual(2);
+
+  const tagCombo = tagsDrawer.getByRole("combobox", { name: "笔记标签" });
+  await expect(tagCombo).toBeEnabled();
+  await tagCombo.click();
+  await page.getByRole("option", { name: "设计" }).click();
+  await expect(tagsDrawer.getByRole("button", { name: "移除 设计" })).toBeVisible();
+  expect(postTagCount).toBe(0);
+
+  await tagCombo.fill("研究");
+  await page.getByRole("option", { name: "创建“研究”" }).click();
+  await expect(tagsDrawer.getByRole("button", { name: "移除 研究" })).toBeVisible();
+  expect(postTagCount).toBe(1);
+
+  await tagsDrawer.getByRole("button", { name: "移除 设计" }).click();
+  await expect(tagsDrawer.getByRole("button", { name: "移除 设计" })).toHaveCount(0);
+  await expect(tagsDrawer.getByRole("button", { name: "移除 研究" })).toBeVisible();
+
+  await tagsDrawer.getByRole("button", { name: "关闭" }).click();
+  await expect(tagsDrawer).toBeHidden();
+  await expect(tagsButton).toBeFocused();
+
+  const historyButton = page.getByRole("button", { name: "历史版本" });
+  await historyButton.click();
+  const historyDrawer = page.getByRole("dialog", { name: "历史版本" });
+  await expect(historyDrawer).toBeVisible();
+  expect(await historyDrawer.evaluate(el => el.closest("[data-placement]")?.getAttribute("data-placement"))).toBe("right");
+  await expect.poll(async () => {
+    const box = await historyDrawer.boundingBox();
+    return box ? Math.abs((box.x + box.width) - 1440) : 999;
+  }).toBeLessThanOrEqual(2);
+
+  await historyDrawer.getByRole("button", { name: /预览 历史调研手记/ }).click();
+  await expect(historyDrawer.getByRole("region", { name: "历史预览" })).toContainText("调研记录第 1 段");
+  await historyDrawer.getByRole("button", { name: "返回版本列表" }).click();
+  await expect(historyDrawer.getByRole("button", { name: /预览 历史调研手记/ })).toBeFocused();
+  await historyDrawer.getByRole("button", { name: "关闭" }).click();
+  await expect(historyDrawer).toBeHidden();
+  await expect(historyButton).toBeFocused();
 });
 
 test("笔记编辑页标题输入框在常态、悬停与聚焦态均隐藏边框", async ({ page }) => {

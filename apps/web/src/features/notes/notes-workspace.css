@@ -304,6 +304,10 @@
   flex: 1 0 auto;
 }
 
+.notes-history-drawer {
+  width: min(560px, 92vw);
+}
+
 .notes-history-preview .mt-block-editor .bn-editor {
   min-block-size: 8rem;
 }
@@ -312,10 +316,6 @@
 .notes-history-preview pre {
   max-width: 100%;
   overflow-x: auto;
-}
-
-.notes-history--preview .notes-history-list {
-  display: none;
 }
 
 @container notes-pane (width < 26rem) {
@@ -379,21 +379,4 @@
 .notes-page:not([data-notes-narrow="true"]) .notes-body-editor {
   gap: 0.625rem;
   padding-block: 1rem 1.25rem;
-}
-
-@container workspace (min-width: 64rem) {
-  .notes-history-body {
-    display: grid;
-    grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr);
-    gap: 1.25rem;
-    align-items: start;
-  }
-
-  .notes-history--preview .notes-history-list {
-    display: block;
-  }
-
-  .notes-history-body .notes-history-back {
-    display: none;
-  }
 }

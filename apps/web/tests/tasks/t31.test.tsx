@@ -211,7 +211,7 @@ it("t31_clean_refetch_never_upgrades_old_editor_base and Query clear retains ini
   act(() => bundle.queryClient.clear()); expect(input).toHaveValue("笔记1");
   expect(screen.getByRole("region", { name: "当前笔记" }).querySelector('[contenteditable="true"]')).toBe(editor);
 });
-it("history replaces the writing area and gives focus back without remounting the draft editor", async () => {
+it("history opens in a right-side drawer and gives focus back without remounting the draft editor", async () => {
   notes[0]!.document = doc("长正文".repeat(500));
   await mount();
   const currentTitle = await title();
@@ -221,11 +221,13 @@ it("history replaces the writing area and gives focus back without remounting th
 
   const history = screen.getByRole("button", { name: "历史版本" });
   fireEvent.click(history);
-  const versions = await screen.findByRole("region", { name: "笔记历史" });
-  expect(within(pane).queryByRole("region", { name: "笔记编辑器" })).not.toBeInTheDocument();
-  expect(editable).not.toBeVisible();
-  fireEvent.click(within(versions).getByRole("button", { name: "关闭历史" }));
-  expect(history).toHaveFocus();
+  const drawer = await screen.findByRole("dialog", { name: "历史版本" });
+  expect(drawer.closest("[data-placement]")).toHaveAttribute("data-placement", "right");
+  expect(within(drawer).getByRole("region", { name: "笔记历史" })).toBeInTheDocument();
+  expect(pane.querySelector('[contenteditable="true"]')).toBe(editable);
+  fireEvent.click(within(drawer).getByRole("button", { name: "关闭" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "历史版本" })).not.toBeInTheDocument());
+  await waitFor(() => expect(history).toHaveFocus());
   expect(pane.querySelector('[contenteditable="true"]')).toBe(editable);
   expect(currentTitle).toHaveValue("还在编辑的标题");
 });
@@ -320,8 +322,8 @@ it("refreshes the directory instead of dragging a note back to its former parent
 it("t31_2_history_restore_new_document_and_version flushes then atomically replaces title/body/base", async () => {
   const pending = deferred(); intercept = (_r, url) => url.pathname.includes("/snapshots/") && url.pathname.endsWith("/restore") ? pending.promise : undefined;
   await mount(); const input = await title(); fireEvent.change(input, { target: { value: "当前新稿" } });
-  fireEvent.click(screen.getByRole("button", { name: "历史版本" })); fireEvent.click(await screen.findByRole("button", { name: /预览.*历史标题/ }));
   const oldEditor = screen.getByRole("region", { name: "当前笔记" }).querySelector('[contenteditable="true"]');
+  fireEvent.click(screen.getByRole("button", { name: "历史版本" })); fireEvent.click(await screen.findByRole("button", { name: /预览.*历史标题/ }));
   fireEvent.click(screen.getByRole("button", { name: "恢复此历史版本" })); fireEvent.click(await screen.findByRole("button", { name: "确认恢复" }));
   await waitFor(() => expect(calls("POST", "/snapshot-1/restore")).toHaveLength(1));
   expect(await calls("POST", "/snapshot-1/restore")[0]!.json()).toEqual({ expected_version: 2 });
@@ -414,9 +416,11 @@ it("history pagination passes opaque cursor, disables while loading, and resets 
   const second = deferred(); intercept = (r, u) => r.method === "GET" && u.pathname.endsWith("/snapshots") ? u.searchParams.has("cursor") ? second.promise : json({ items: [snapshot({ ...notes[0]!, title: "分页历史" })], next_cursor: "history-opaque" }) : undefined;
   const { router } = await mount(); await title(); fireEvent.click(screen.getByRole("button", { name: "历史版本" }));
   fireEvent.click(await screen.findByRole("button", { name: /预览.*分页历史/ }));
+  expect(await screen.findByRole("region", { name: "历史预览" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "返回版本列表" }));
+  expect(screen.queryByRole("region", { name: "历史预览" })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "下一页历史" }));
   expect(screen.getByRole("button", { name: "下一页历史" })).toBeDisabled(); expect(screen.getByRole("button", { name: "上一页历史" })).toBeDisabled();
-  expect(screen.queryByRole("region", { name: "历史预览" })).not.toBeInTheDocument();
   await waitFor(() => expect(calls("GET", "/snapshots")).toHaveLength(2));
   expect(new URL(calls("GET", "/snapshots")[1]!.url).searchParams.get("cursor")).toBe("history-opaque");
   await act(async () => second.resolve(json({ items: [], next_cursor: null })));
@@ -575,23 +579,28 @@ it("association tag creation acknowledged after independent401 pauses assignment
   };
   const { bundle, router } = await mount(); const input = await title();
   const associations = await openAssociations();
-  fireEvent.click(within(associations).getByRole("button", { name: "添加标签" }));
-  const create = await screen.findByRole("button", { name: "创建并添加标签" }); await waitFor(() => expect(create).toBeEnabled());
-  fireEvent.change(screen.getByRole("textbox", { name: "新标签名称" }), { target: { value: "失效后保留标签" } }); fireEvent.click(create);
+  expect(associations.closest("[data-placement]")).toHaveAttribute("data-placement", "right");
+  const tagInput = within(associations).getByRole("combobox", { name: "笔记标签" });
+  await waitFor(() => expect(tagInput).toBeEnabled());
+  fireEvent.click(within(associations).getByRole("button", { name: "展开选项" }));
+  fireEvent.change(tagInput, { target: { value: "失效后保留标签" } });
+  fireEvent.click(await screen.findByRole("option", { name: "创建“失效后保留标签”" }));
   await waitFor(() => expect(calls("POST", "/tags")).toHaveLength(1));
   expired = true; await act(async () => { await bundle.api.raw.GET("/links", { params: { query: { source_type: "note", source_id: id(1) } } }).catch(() => {}); });
   await screen.findByText("会话已失效，本地草稿已保留"); created = true;
   await act(async () => tagPost.resolve(json(createdTag, 201)));
   expect(calls("PUT", `/tags/${id(98)}`)).toHaveLength(0); expect(assigned).toBe(false);
   expect(input).toHaveValue("笔记1"); expect(router.state.location.pathname).toBe(`/notes/${id(1)}`);
-  expect(screen.getByRole("button", { name: "添加已有标签" })).toBeDisabled();
+  const retryAssign = await within(associations).findByRole("button", { name: "重试添加标签 失效后保留标签" });
+  expect(retryAssign).toBeDisabled();
   fireEvent.click(within(associations).getByRole("button", { name: "关闭" }));
   expired = false; fireEvent.click(await screen.findByRole("button", { name: "已重新登录，重试原版本" }));
   await waitFor(() => expect(screen.queryByText("会话已失效，本地草稿已保留")).not.toBeInTheDocument());
-  await openAssociations();
-  await waitFor(() => expect(screen.getByRole("button", { name: "添加已有标签" })).toBeEnabled());
-  fireEvent.click(screen.getByRole("button", { name: "添加已有标签" }));
-  await screen.findByRole("button", { name: "移除标签 失效后保留标签" });
+  const reopened = await openAssociations();
+  const enabledRetry = await within(reopened).findByRole("button", { name: "重试添加标签 失效后保留标签" });
+  await waitFor(() => expect(enabledRetry).toBeEnabled());
+  fireEvent.click(enabledRetry);
+  await within(reopened).findByRole("button", { name: "移除 失效后保留标签" });
   expect(calls("POST", "/tags")).toHaveLength(1); expect(calls("PUT", `/tags/${id(98)}`)).toHaveLength(1);
 });
 
@@ -789,7 +798,10 @@ it("notes index opens the first root note by default inside two-column PageLayou
   expect(screen.getByRole("navigation", { name: "笔记目录" })).toBeInTheDocument();
   expect(within(screen.getByRole("navigation", { name: "笔记路径" })).getByText("首篇根笔记")).toBeInTheDocument();
   expect(screen.getByRole("treeitem", { name: "首篇根笔记" })).toHaveAttribute("aria-selected", "true");
-  expect(screen.getByRole("separator", { name: "调整分栏 1" })).toBeInTheDocument();
+  const separator = screen.getByRole("separator", { name: "调整分栏 1" });
+  expect(separator).toBeInTheDocument();
+  expect(separator).toHaveClass("mt-splitter-separator-bordered");
+  expect(separator).not.toHaveClass("mt-splitter-separator-line");
 
   // Moving the default root note while on /notes must not jump away to another note.
   await selectNoteAction("移动笔记");

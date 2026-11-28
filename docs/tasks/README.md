@@ -44,6 +44,7 @@
 | [#312](312.md) | Task | 给笔记页 Splitter 加上 mtone 外框 | 无 |
 | [#326](326.md) | Feature | 升级 mtone 1.0.0 与 blockeditor 1.1.0 并用 AppLayout 与 Topbar 重构笔记页面 | 无 |
 | [#328](328.md) | Feature | 升级 mtone 至 1.2.0，全站采用 AppLayout 并用两栏 PageLayout 重构笔记页面 | 无 |
+| [#330](330.md) | Feature | 升级 mtone 1.2.1，更新 PageLayout 与笔记页 Drawer/Select 标签交互 | 无 |
 
 ## 开发部署
 
