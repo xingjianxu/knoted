@@ -7,6 +7,7 @@ import { createCursorState, cursorReducer } from "../../../lib/cursor-state";
 
 type EntityType = components["schemas"]["EntityEndType"];
 type Section = "tags" | "links";
+interface TagItem { id: string; name: string; }
 const entityLabels = { note: "笔记", file: "文件", project: "项目", task: "事项" } satisfies Record<EntityType, string>;
 export interface NoteAssociationsProps {
   noteId: string;
@@ -23,13 +24,12 @@ export function NoteAssociations(props: NoteAssociationsProps) {
 }
 function NoteAssociationsContent({ noteId, api, readOnly = false, assertCanWrite = () => {}, trigger }: NoteAssociationsProps) {
   const queryClient = useQueryClient();
-  const [name, setName] = useState("");
-  const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [targetType, setTargetType] = useState<EntityType>("note");
   const [targetId, setTargetId] = useState("");
-  const [editingTags, setEditingTags] = useState(false);
   const [editingLinks, setEditingLinks] = useState(false);
-  const [createdTag, setCreatedTag] = useState<{ id: string; name: string }>();
+  const [createdTag, setCreatedTag] = useState<TagItem>();
+  const [pendingAssignment, setPendingAssignment] = useState<TagItem>();
   const pending = useRef(false);
   const [busy, setBusy] = useState(false);
   const [errors, setErrors] = useState({ tags: "", links: "" });
@@ -47,7 +47,7 @@ function NoteAssociationsContent({ noteId, api, readOnly = false, assertCanWrite
     },
   });
   const options = useQuery({
-    queryKey: ["tag-options", optionsPage.cursor], enabled: editingTags, retry: false,
+    queryKey: ["tag-options", optionsPage.cursor], enabled: drawerOpen, retry: false,
     queryFn: async ({ signal }) => {
       const { data } = await api.raw.GET("/tags", { signal, params: { query: { limit: 50, cursor: optionsPage.cursor ?? undefined } } });
       if (!data) throw new Error("无法读取已有标签"); return data;
@@ -61,7 +61,7 @@ function NoteAssociationsContent({ noteId, api, readOnly = false, assertCanWrite
     },
   });
   const tagsDisabled = readOnly || busy || tags.isFetching || tags.isError;
-  const optionsDisabled = tagsDisabled || options.isFetching || options.isError;
+  const selectDisabled = tagsDisabled || options.isFetching;
   const linksDisabled = readOnly || busy || links.isFetching || links.isError;
 
   async function mutate(section: Section, operation: () => Promise<void>) {
@@ -83,104 +83,155 @@ function NoteAssociationsContent({ noteId, api, readOnly = false, assertCanWrite
     assertCanWrite();
     await api.raw.PUT("/entities/{entityType}/{entityId}/tags/{tagId}", { params: { path: { entityType: "note", entityId: noteId, tagId } } });
   }
-  const tagChoices = options.data?.items ?? [];
-  const tagOptions = tagChoices.map(tag => ({ value: tag.id, label: tag.name }));
-  if (createdTag && !tagChoices.some(tag => tag.id === createdTag.id)) {
-    tagOptions.unshift({ value: createdTag.id, label: createdTag.name });
+
+  const assignedTags = tags.data?.items ?? [];
+  const selectedTagIds = assignedTags.map(tag => tag.id);
+  const knownTagsById = new Map<string, TagItem>();
+  const knownTagsByName = new Map<string, TagItem>();
+  for (const tag of [
+    ...assignedTags,
+    ...(options.data?.items ?? []),
+    ...(createdTag ? [createdTag] : []),
+    ...(pendingAssignment ? [pendingAssignment] : []),
+  ]) {
+    if (!knownTagsById.has(tag.id)) knownTagsById.set(tag.id, { id: tag.id, name: tag.name });
+    const normalized = tag.name.trim();
+    if (normalized && !knownTagsByName.has(normalized)) knownTagsByName.set(normalized, { id: tag.id, name: tag.name });
   }
+  const tagOptions = [...knownTagsById.values()].map(tag => ({ value: tag.id, label: tag.name }));
   const nextTag = tags.data?.next_cursor ?? null;
   const nextOption = options.data?.next_cursor ?? null;
   const nextLink = links.data?.next_cursor ?? null;
 
-  return <Drawer title="标签与关联" trigger={trigger ?? <Button size="sm" variant="outline"><Tags size={14} aria-hidden="true" />标签与关联</Button>}>
+  function handleTagsChange(next: string[]) {
+    if (selectDisabled) return;
+    const currentSet = new Set(selectedTagIds);
+    const nextSet = new Set(next);
+    const added = next.filter(value => !currentSet.has(value));
+    const removed = selectedTagIds.filter(id => !nextSet.has(id));
+    if (added.length === 0 && removed.length === 0) return;
+
+    void mutate("tags", async () => {
+      for (const value of added) {
+        const trimmed = value.trim();
+        const existing = knownTagsById.get(value) ?? knownTagsByName.get(trimmed);
+        if (existing) {
+          await assign(existing.id);
+          if (pendingAssignment?.id === existing.id) setPendingAssignment(undefined);
+          continue;
+        }
+        if (!trimmed) throw new Error("请输入标签名称");
+        if ([...trimmed].length > 64) throw new Error("标签名称最多 64 个字符");
+        assertCanWrite();
+        const { data } = await api.raw.POST("/tags", { body: { name: trimmed } });
+        if (!data) throw new Error("无法创建标签");
+        // The created ID survives assignment failure and permits an explicit retry.
+        setCreatedTag(data);
+        setPendingAssignment(data);
+        await assign(data.id);
+        setPendingAssignment(undefined);
+        await queryClient.invalidateQueries({ queryKey: ["tag-options"] });
+      }
+      for (const tagId of removed) {
+        assertCanWrite();
+        await api.raw.DELETE("/entities/{entityType}/{entityId}/tags/{tagId}", { params: { path: { entityType: "note", entityId: noteId, tagId } } });
+      }
+    });
+  }
+
+  return <Drawer
+    placement="right"
+    open={drawerOpen}
+    onOpenChange={setDrawerOpen}
+    title="标签与关联"
+    trigger={trigger ?? <Button size="sm" variant="outline"><Tags size={14} aria-hidden="true" />标签与关联</Button>}
+  >
     <SectionGroup aria-label="笔记标签与资料关联" role="region">
       <SectionGroup.Section title="标签" headingLevel={3} aria-labelledby={undefined} aria-label="笔记标签">
         <div className="space-y-3">
-        {tags.isFetching && <Spinner label="正在读取标签" />}
-        {tags.error && <Alert tone="error">{tags.error.message} <Button size="sm" onClick={() => void tags.refetch()}>重试标签</Button></Alert>}
-        {errors.tags && <Alert tone="error">{errors.tags}</Alert>}
-        {tags.data?.items.length === 0 && <Empty title="暂无标签" />}
-        {!!tags.data?.items.length && <List aria-label="笔记标签列表">
-          {tags.data.items.map(tag => <ListItem key={tag.id}
-            actions={<Button size="sm" variant="ghost" disabled={tagsDisabled} aria-label={`移除标签 ${tag.name}`} onClick={() => void mutate("tags", async () => {
-              assertCanWrite();
-              await api.raw.DELETE("/entities/{entityType}/{entityId}/tags/{tagId}", { params: { path: { entityType: "note", entityId: noteId, tagId: tag.id } } });
-            })}>移除</Button>}><Tag tone="neutral"><span className="[overflow-wrap:anywhere]">{tag.name}</span></Tag></ListItem>)}
-        </List>}
-        <div className="flex flex-wrap gap-2">
-          <Button size="sm" disabled={tags.isFetching || tagPage.previous.length === 0} onClick={() => tagDispatch({ type: "previous" })}>上一页标签</Button>
-          <Button size="sm" disabled={tags.isFetching || !nextTag || nextTag === tagPage.cursor} onClick={() => tagDispatch({ type: "next", nextCursor: nextTag })}>下一页标签</Button>
-          <Button size="sm" variant="outline" aria-expanded={editingTags} aria-controls="edit-note-tags" onClick={() => setEditingTags(value => !value)}>添加标签</Button>
-        </div>
-        <div id="edit-note-tags" hidden={!editingTags} className="space-y-3">
-          <Form onSubmit={event => {
-            event.preventDefault();
-            if (tagsDisabled) return;
-            void mutate("tags", async () => {
-              if (!name.trim()) throw new Error("请输入标签名称");
-              assertCanWrite();
-              const { data } = await api.raw.POST("/tags", { body: { name: name.trim() } });
-              if (!data) throw new Error("无法创建标签");
-              // The created ID survives assignment failure and permits an explicit retry.
-              setCreatedTag(data);
-              setSelectedTag(data.id);
-              setName("");
-              await assign(data.id);
-              await queryClient.invalidateQueries({ queryKey: ["tag-options"] });
-            });
-          }} className="flex flex-wrap items-end gap-2">
-            <Form.Item label="新标签名称"><Input value={name} maxLength={64} onChange={event => setName(event.target.value)} disabled={tagsDisabled} /></Form.Item>
-            <Button type="submit" disabled={tagsDisabled}>创建并添加标签</Button>
-          </Form>
-          {options.isFetching && <Spinner label="正在读取已有标签" />}
+          {tags.isFetching && !tags.data && <Spinner label="正在读取标签" />}
+          {tags.error && <Alert tone="error">{tags.error.message} <Button size="sm" onClick={() => void tags.refetch()}>重试标签</Button></Alert>}
           {options.error && <Alert tone="error">{options.error.message} <Button size="sm" onClick={() => void options.refetch()}>重试已有标签</Button></Alert>}
-          <div className="flex flex-wrap items-end gap-2">
-            <Form.Item label="已有标签"><Select value={selectedTag} onValueChange={setSelectedTag} options={tagOptions} disabled={optionsDisabled} /></Form.Item>
-            <Button disabled={tagsDisabled || (optionsDisabled && selectedTag !== createdTag?.id) || !selectedTag}
-              onClick={() => { if (selectedTag) void mutate("tags", () => assign(selectedTag)); }}>添加已有标签</Button>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button size="sm" disabled={options.isFetching || optionsPage.previous.length === 0} onClick={() => optionsDispatch({ type: "previous" })}>上一页已有标签</Button>
-            <Button size="sm" disabled={options.isFetching || !nextOption || nextOption === optionsPage.cursor} onClick={() => optionsDispatch({ type: "next", nextCursor: nextOption })}>下一页已有标签</Button>
-          </div>
-        </div>
+          {errors.tags && (
+            <Alert tone="error">
+              {errors.tags}
+              {pendingAssignment && (
+                <div className="mt-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={tagsDisabled}
+                    onClick={() => void mutate("tags", async () => {
+                      await assign(pendingAssignment.id);
+                      setPendingAssignment(undefined);
+                    })}
+                  >
+                    重试添加标签 {pendingAssignment.name}
+                  </Button>
+                </div>
+              )}
+            </Alert>
+          )}
+          <Select
+            mode="tags"
+            label="笔记标签"
+            placeholder="选择或输入新标签…"
+            options={tagOptions}
+            value={selectedTagIds}
+            onValueChange={handleTagsChange}
+            disabled={selectDisabled}
+            aria-busy={busy || tags.isFetching || options.isFetching}
+            className="w-full"
+          />
+          {(tagPage.previous.length > 0 || Boolean(nextTag)) && (
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" disabled={tags.isFetching || tagPage.previous.length === 0} onClick={() => tagDispatch({ type: "previous" })}>上一页标签</Button>
+              <Button size="sm" disabled={tags.isFetching || !nextTag || nextTag === tagPage.cursor} onClick={() => tagDispatch({ type: "next", nextCursor: nextTag })}>下一页标签</Button>
+            </div>
+          )}
+          {(optionsPage.previous.length > 0 || Boolean(nextOption)) && (
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" disabled={options.isFetching || optionsPage.previous.length === 0} onClick={() => optionsDispatch({ type: "previous" })}>上一页已有标签</Button>
+              <Button size="sm" disabled={options.isFetching || !nextOption || nextOption === optionsPage.cursor} onClick={() => optionsDispatch({ type: "next", nextCursor: nextOption })}>下一页已有标签</Button>
+            </div>
+          )}
         </div>
       </SectionGroup.Section>
       <SectionGroup.Section title="资料关联" headingLevel={3}>
         <div className="space-y-3">
-        {links.isFetching && <Spinner label="正在读取资料关联" />}
-        {links.error && <Alert tone="error">{links.error.message} <Button size="sm" onClick={() => void links.refetch()}>重试资料关联</Button></Alert>}
-        {errors.links && <Alert tone="error">{errors.links}</Alert>}
-        {links.data?.items.length === 0 && <Empty title="暂无资料关联" />}
-        {!!links.data?.items.length && <List aria-label="资料关联列表">
-          {links.data.items.map(link => <ListItem key={link.id} description={<Tag tone="neutral">{entityLabels[link.target_type] ?? link.target_type}</Tag>}
-            actions={<Button size="sm" variant="ghost" disabled={linksDisabled} aria-label={`移除关联 ${link.target_id}`} onClick={() => void mutate("links", async () => {
-              assertCanWrite();
-              await api.raw.DELETE("/links/{linkId}", { params: { path: { linkId: link.id }, query: { expected_version: link.version } } });
-            })}>移除</Button>}><span className="[overflow-wrap:anywhere]">{link.target_id}</span></ListItem>)}
-        </List>}
-        <div className="flex flex-wrap gap-2">
-          <Button size="sm" disabled={links.isFetching || linkPage.previous.length === 0} onClick={() => linkDispatch({ type: "previous" })}>上一页关联</Button>
-          <Button size="sm" disabled={links.isFetching || !nextLink || nextLink === linkPage.cursor} onClick={() => linkDispatch({ type: "next", nextCursor: nextLink })}>下一页关联</Button>
-          <Button size="sm" variant="outline" aria-expanded={editingLinks} aria-controls="edit-note-links" onClick={() => setEditingLinks(value => !value)}>新建关联</Button>
-        </div>
-        <div id="edit-note-links" hidden={!editingLinks}>
-          <Form onSubmit={event => {
-            event.preventDefault();
-            if (linksDisabled) return;
-            void mutate("links", async () => {
-              if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetId.trim())) throw new Error("请输入有效的目标 ID");
-              assertCanWrite();
-              await api.raw.POST("/links", { body: { source_type: "note", source_id: noteId, target_type: targetType, target_id: targetId.trim() } });
-              setTargetId("");
-            });
-          }} className="flex flex-wrap items-end gap-2">
-            <Form.Item label="关联目标类型"><Select value={targetType} onValueChange={value => { if (value) setTargetType(value as EntityType); }}
-              options={Object.entries(entityLabels).map(([value, label]) => ({ value, label }))} disabled={linksDisabled} /></Form.Item>
-            <Form.Item label="关联目标 ID"><Input value={targetId} onChange={event => setTargetId(event.target.value)} disabled={linksDisabled} /></Form.Item>
-            <Button type="submit" disabled={linksDisabled}>添加关联</Button>
-          </Form>
-        </div>
+          {links.isFetching && <Spinner label="正在读取资料关联" />}
+          {links.error && <Alert tone="error">{links.error.message} <Button size="sm" onClick={() => void links.refetch()}>重试资料关联</Button></Alert>}
+          {errors.links && <Alert tone="error">{errors.links}</Alert>}
+          {links.data?.items.length === 0 && <Empty title="暂无资料关联" />}
+          {!!links.data?.items.length && <List aria-label="资料关联列表">
+            {links.data.items.map(link => <ListItem key={link.id} description={<Tag tone="neutral">{entityLabels[link.target_type] ?? link.target_type}</Tag>}
+              actions={<Button size="sm" variant="ghost" disabled={linksDisabled} aria-label={`移除关联 ${link.target_id}`} onClick={() => void mutate("links", async () => {
+                assertCanWrite();
+                await api.raw.DELETE("/links/{linkId}", { params: { path: { linkId: link.id }, query: { expected_version: link.version } } });
+              })}>移除</Button>}><span className="[overflow-wrap:anywhere]">{link.target_id}</span></ListItem>)}
+          </List>}
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" disabled={links.isFetching || linkPage.previous.length === 0} onClick={() => linkDispatch({ type: "previous" })}>上一页关联</Button>
+            <Button size="sm" disabled={links.isFetching || !nextLink || nextLink === linkPage.cursor} onClick={() => linkDispatch({ type: "next", nextCursor: nextLink })}>下一页关联</Button>
+            <Button size="sm" variant="outline" aria-expanded={editingLinks} aria-controls="edit-note-links" onClick={() => setEditingLinks(value => !value)}>新建关联</Button>
+          </div>
+          <div id="edit-note-links" hidden={!editingLinks}>
+            <Form onSubmit={event => {
+              event.preventDefault();
+              if (linksDisabled) return;
+              void mutate("links", async () => {
+                if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetId.trim())) throw new Error("请输入有效的目标 ID");
+                assertCanWrite();
+                await api.raw.POST("/links", { body: { source_type: "note", source_id: noteId, target_type: targetType, target_id: targetId.trim() } });
+                setTargetId("");
+              });
+            }} className="flex flex-wrap items-end gap-2">
+              <Form.Item label="关联目标类型"><Select value={targetType} onValueChange={value => { if (value) setTargetType(value as EntityType); }}
+                options={Object.entries(entityLabels).map(([value, label]) => ({ value, label }))} disabled={linksDisabled} /></Form.Item>
+              <Form.Item label="关联目标 ID"><Input value={targetId} onChange={event => setTargetId(event.target.value)} disabled={linksDisabled} /></Form.Item>
+              <Button type="submit" disabled={linksDisabled}>添加关联</Button>
+            </Form>
+          </div>
         </div>
       </SectionGroup.Section>
     </SectionGroup>
