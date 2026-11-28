@@ -1,4 +1,4 @@
-import { Alert, Button, Dialog, Empty, List, ListItem, Paragraph, Select, Spinner, Tag, Toolbar } from "@bixlab/mtone";
+import { Alert, Button, Dialog, Empty, List, ListItem, PageLayout, Paragraph, Select, Spinner, Tag, Toolbar } from "@bixlab/mtone";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useReducer, useRef, useState } from "react";
 import { ApiRequestError, type components } from "@knoted/api-client";
@@ -14,10 +14,15 @@ export function TrashPage({ bundle }: { bundle: QueryClientBundle }) {
   const [filter, setFilter] = useState<EntityType | "all">("all");
   const [paging, dispatch] = useReducer(cursorReducer, createCursorState("all"));
   const [restoredItem, setRestoredItem] = useState<Item>();
-  const heading = useRef<HTMLHeadingElement>(null);
+  const pageLayout = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!restoredItem) return;
-    const frame = window.requestAnimationFrame(() => heading.current?.focus());
+    const frame = window.requestAnimationFrame(() => {
+      const heading = pageLayout.current?.querySelector<HTMLElement>("h1");
+      if (!heading) return;
+      heading.tabIndex = -1;
+      heading.focus();
+    });
     return () => window.cancelAnimationFrame(frame);
   }, [restoredItem]);
   const key = [...queryKeys.trash(), { entity_type: filter, cursor: paging.cursor }];
@@ -36,38 +41,41 @@ export function TrashPage({ bundle }: { bundle: QueryClientBundle }) {
       void bundle.queryClient.invalidateQueries({ queryKey });
     }
   }
-  return <section aria-labelledby="trash-title" className="grid gap-4">
-    <h1 id="trash-title" ref={heading} tabIndex={-1}>回收站</h1>
-    <Toolbar
-      background="white"
-      aria-label="回收站筛选"
-      start={
-        <>
-          <Select label="对象类型" value={filter}
-            options={[{ value: "all", label: "全部" }, { value: "note", label: "笔记" }, { value: "project", label: "项目" }, { value: "task", label: "事项" }]}
-            onValueChange={value => {
-              if (value) {
-                setFilter(value as EntityType | "all");
-                dispatch({ type: "filter", filterKey: value });
-              }
-            }} />
-          <Button disabled={page.isFetching} onClick={() => { void page.refetch(); }}>刷新列表</Button>
-        </>
-      }
-    />
-    <Paragraph muted className="text-sm">删除满 30 天后具备清理资格。恢复时会重新校验版本与关系。</Paragraph>
-    {restoredItem && <p role="status" key={`${restoredItem.entity_type}:${restoredItem.id}`}>已恢复 {restoredItem.title}</p>}
-    {page.isFetching && <Spinner label="加载回收站" />}
-    {page.isError && <Alert tone="error" title={page.data ? "列表刷新失败" : "回收站暂时不可用"}>请重试读取列表；已经成功的恢复操作无需重复提交。</Alert>}
-    {!!page.data?.items.length && <List aria-label="回收对象">
-      {page.data.items.map(item => <RestoreAction key={`${item.entity_type}:${item.id}`} bundle={bundle} item={item} onRestored={restored} />)}
-    </List>}
-    {page.isSuccess && !page.isFetching && page.data.items.length === 0 && <Empty title="回收站为空" description="当前筛选下没有软删除对象。" />}
-    {(page.data || paging.previous.length > 0) && <nav aria-label="回收站翻页" className="flex flex-wrap gap-2">
-      <Button disabled={page.isFetching || paging.previous.length === 0} onClick={() => dispatch({ type: "previous" })}>上一页</Button>
-      <Button disabled={page.isFetching || page.isError || !page.data?.next_cursor || page.data.next_cursor === paging.cursor}
-        onClick={() => dispatch({ type: "next", nextCursor: page.data?.next_cursor ?? null })}>下一页</Button>
-    </nav>}
+  return <section aria-labelledby="trash-title">
+    <PageLayout ref={pageLayout} title={<span id="trash-title">回收站</span>}>
+      <div className="grid gap-4">
+        <Toolbar
+          background="white"
+          aria-label="回收站筛选"
+          start={
+            <>
+              <Select label="对象类型" value={filter}
+                options={[{ value: "all", label: "全部" }, { value: "note", label: "笔记" }, { value: "project", label: "项目" }, { value: "task", label: "事项" }]}
+                onValueChange={value => {
+                  if (value) {
+                    setFilter(value as EntityType | "all");
+                    dispatch({ type: "filter", filterKey: value });
+                  }
+                }} />
+              <Button disabled={page.isFetching} onClick={() => { void page.refetch(); }}>刷新列表</Button>
+            </>
+          }
+        />
+        <Paragraph muted className="text-sm">删除满 30 天后具备清理资格。恢复时会重新校验版本与关系。</Paragraph>
+        {restoredItem && <p role="status" key={`${restoredItem.entity_type}:${restoredItem.id}`}>已恢复 {restoredItem.title}</p>}
+        {page.isFetching && <Spinner label="加载回收站" />}
+        {page.isError && <Alert tone="error" title={page.data ? "列表刷新失败" : "回收站暂时不可用"}>请重试读取列表；已经成功的恢复操作无需重复提交。</Alert>}
+        {!!page.data?.items.length && <List aria-label="回收对象">
+          {page.data.items.map(item => <RestoreAction key={`${item.entity_type}:${item.id}`} bundle={bundle} item={item} onRestored={restored} />)}
+        </List>}
+        {page.isSuccess && !page.isFetching && page.data.items.length === 0 && <Empty title="回收站为空" description="当前筛选下没有软删除对象。" />}
+        {(page.data || paging.previous.length > 0) && <nav aria-label="回收站翻页" className="flex flex-wrap gap-2">
+          <Button disabled={page.isFetching || paging.previous.length === 0} onClick={() => dispatch({ type: "previous" })}>上一页</Button>
+          <Button disabled={page.isFetching || page.isError || !page.data?.next_cursor || page.data.next_cursor === paging.cursor}
+            onClick={() => dispatch({ type: "next", nextCursor: page.data?.next_cursor ?? null })}>下一页</Button>
+        </nav>}
+      </div>
+    </PageLayout>
   </section>;
 }
 

@@ -64,114 +64,87 @@ async function mockWorkspace(page: Page, authenticated = true) {
   });
 }
 
-for (const width of [1440, 768, 390, 320]) {
-  test(`侧栏品牌区与顶栏底边在 ${width}px 对齐`, async ({ page }) => {
-    await page.setViewportSize({ width, height: 720 });
-    await mockWorkspace(page);
-    await page.goto(`/projects/${fixtureId(201)}`);
-
-    const sidebarToggle = page.getByRole("button", {
-      name: width < 768 ? "展开侧边栏" : "收起侧边栏",
-    });
-    await expect(sidebarToggle).toHaveAttribute("aria-expanded", String(width >= 768));
-    const header = page.getByRole("banner");
-    await expect(header.getByRole("link", { name: "返回项目" })).toBeInViewport({ ratio: 1 });
-    await expect(header.getByRole("button", {
-      name: width < 768 ? "更多操作" : "账号菜单",
-    })).toBeInViewport({ ratio: 1 });
-
-    const brand = page.locator(".mt-sidebar-heading");
-    await expect.poll(async () => {
-      const [left, right] = await Promise.all([brand.boundingBox(), header.boundingBox()]);
-      return left && right ? (right.y + right.height) - (left.y + left.height) : null;
-    }).toBe(0);
-  });
-}
-
-test("桌面顶栏可打开全局搜索、通知和账号设置", async ({ page }) => {
+test("全站使用 AppLayout 无全局顶栏，左下角账户菜单可打开通知、凭据与会话和退出登录", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 720 });
   await mockWorkspace(page);
   await page.goto("/");
-  const header = page.getByRole("banner");
-  const location = header.getByRole("navigation", { name: "当前位置" });
-  await expect(location.locator('[aria-current="page"]')).toHaveText("概览");
-  await expect(header.getByRole("button", { name: "更多操作" })).toBeHidden();
 
-  await header.getByRole("button", { name: "全局搜索" }).click();
+  await expect(page.locator(".workspace-app-layout.mt-app-layout")).toBeVisible();
+  await expect(page.getByRole("banner")).toHaveCount(0);
+
+  const nav = page.getByRole("navigation", { name: "主导航" });
+  await expect(nav.getByRole("button", { name: "概览" })).toHaveAttribute("aria-current", "page");
+
+  await nav.getByRole("button", { name: "搜索" }).click();
   await expect(page).toHaveURL((url) => url.pathname === "/search");
-  await expect(location.locator('[aria-current="page"]')).toHaveText("搜索");
   const searchButton = page.getByRole("search", { name: "搜索资料" }).getByRole("button", { name: "搜索" });
   await expect(searchButton).toHaveCSS("background-color", "rgb(55, 53, 47)");
 
-  const notifications = header.getByRole("button", { name: "通知" });
-  await notifications.focus();
+  const account = page.getByRole("button", { name: "个人账号" });
+  await expect(account).toBeInViewport({ ratio: 1 });
+  const [sidebarBox, accountBox] = await Promise.all([
+    page.locator(".workspace-app-layout > .mt-app-layout-sidebar").boundingBox(),
+    account.boundingBox(),
+  ]);
+  expect(sidebarBox).toBeTruthy();
+  expect(accountBox).toBeTruthy();
+  expect(accountBox!.y).toBeGreaterThan(sidebarBox!.y + sidebarBox!.height / 2);
+
+  await account.focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("dialog", { name: "通知" })).toContainText("暂无通知");
-  await page.keyboard.press("Escape");
-  await expect(notifications).toBeFocused();
-
-  await header.getByRole("button", { name: "账号设置" }).click();
-  await expect(page.getByRole("heading", { name: "凭据与会话", level: 1 })).toBeVisible();
-});
-
-test("320px 顶栏菜单可用键盘访问同一组操作", async ({ page }) => {
-  await page.setViewportSize({ width: 320, height: 640 });
-  await mockWorkspace(page);
-  await page.goto("/");
-  const header = page.getByRole("banner");
-  await expect(header.getByRole("button", { name: "全局搜索" })).toBeHidden();
-  await expect(header.getByRole("button", { name: "账号菜单" })).toBeHidden();
-
-  const more = header.getByRole("button", { name: "更多操作" });
-  await more.focus();
-  await page.keyboard.press("Enter");
-  const menu = page.getByRole("menu", { name: "更多操作" });
-  await expect(menu.getByRole("menuitem")).toHaveText(["全局搜索", "通知", "账号设置", "退出登录"]);
-  await expect(menu.getByRole("menuitem", { name: "全局搜索" })).toBeFocused();
+  const menu = page.getByRole("menu", { name: "账号菜单" });
+  await expect(menu.getByRole("menuitem")).toHaveText(["凭据与会话", "通知", "退出登录"]);
+  await expect(menu.getByRole("menuitem", { name: "凭据与会话" })).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await expect(menu.getByRole("menuitem", { name: "通知" })).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("dialog", { name: "通知" })).toContainText("暂无通知");
   await page.keyboard.press("Escape");
-  await expect(more).toBeFocused();
+  await expect(account).toBeFocused();
 
   await page.keyboard.press("Enter");
-  await expect(menu.getByRole("menuitem", { name: "全局搜索" })).toBeFocused();
-  await page.keyboard.press("End");
-  await expect(menu.getByRole("menuitem", { name: "退出登录" })).toBeFocused();
+  await expect(menu.getByRole("menuitem", { name: "凭据与会话" })).toBeFocused();
   await page.keyboard.press("Enter");
+  await expect(page.getByRole("heading", { name: "凭据与会话", level: 1 })).toBeVisible();
+
+  await account.click();
+  await menu.getByRole("menuitem", { name: "退出登录" }).click();
   await expect(page.getByRole("button", { name: "使用 Passkey 登录" })).toBeVisible();
 });
 
-test("320px 手动展开侧栏后，详情返回与顶栏菜单仍可点击", async ({ page }) => {
-  await page.setViewportSize({ width: 320, height: 640 });
-  await mockWorkspace(page);
-  await page.goto(`/files/${fixtureId(201)}`);
-  await page.getByRole("button", { name: "展开侧边栏" }).click();
+for (const width of [1440, 768, 390, 320]) {
+  test(`详情页在 ${width}px 保留返回顶栏且侧栏品牌区与详情顶栏底边对齐`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 720 });
+    await mockWorkspace(page);
+    await page.goto(`/projects/${fixtureId(201)}`);
 
-  const banner = page.getByRole("banner");
-  const back = banner.getByRole("link", { name: "返回文件列表" });
-  const more = banner.getByRole("button", { name: "更多操作" });
-  await expect(back).toBeInViewport({ ratio: 1 });
-  await expect(more).toBeInViewport({ ratio: 1 });
-  const [backBox, moreBox] = await Promise.all([back.boundingBox(), more.boundingBox()]);
-  expect(backBox!.x + backBox!.width).toBeLessThan(moreBox!.x);
+    const detailBar = page.locator(".workspace-detail-topbar");
+    await expect(detailBar.getByRole("link", { name: "返回项目" })).toBeInViewport({ ratio: 1 });
+    await expect(page.getByRole("button", { name: "个人账号" })).toBeInViewport({ ratio: 1 });
 
-  await more.click();
-  await expect(page.getByRole("menu", { name: "更多操作" })).toBeVisible();
-  await page.keyboard.press("Escape");
-  await back.click();
-  await expect(page).toHaveURL(/\/files$/);
-});
+    const brand = page.locator(".workspace-app-layout > .mt-app-layout-sidebar > .mt-sidebar-heading");
+    await expect.poll(async () => {
+      const [left, right] = await Promise.all([brand.boundingBox(), detailBar.boundingBox()]);
+      return left && right ? Math.abs((right.y + right.height) - (left.y + left.height)) : null;
+    }).toBeLessThanOrEqual(1);
+  });
+}
 
-test("窄屏图标导航可通过键盘打开页面，并可在桌面折叠或展开", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 700 });
+test("AppLayout 侧栏支持收起为图标窄栏并通过键盘访问导航与左下角账户菜单", async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 700 });
   await mockWorkspace(page);
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "工作概览" })).toBeVisible();
+  const collapse = page.getByRole("button", { name: "收起侧边栏" });
+  await expect(collapse).toHaveAttribute("aria-expanded", "true");
+  await collapse.click();
+
   const expand = page.getByRole("button", { name: "展开侧边栏" });
   await expect(expand).toHaveAttribute("aria-expanded", "false");
+  const sidebar = page.locator(".workspace-app-layout > .mt-app-layout-sidebar");
+  expect((await sidebar.boundingBox())!.width).toBeLessThanOrEqual(56);
+
   const nav = page.getByRole("navigation", { name: "主导航" });
   await expect(nav.getByRole("button", { name: "概览" })).toHaveAttribute("aria-current", "page");
   const trash = nav.getByRole("button", { name: "回收站" });
@@ -183,23 +156,25 @@ test("窄屏图标导航可通过键盘打开页面，并可在桌面折叠或�
   await expect(page.getByRole("heading", { name: "回收站", exact: true })).toBeVisible();
   expect(await page.getByRole("main").evaluate((el) => el.scrollWidth === el.clientWidth)).toBe(true);
 
-  await page.setViewportSize({ width: 1024, height: 700 });
-  const collapse = page.getByRole("button", { name: "收起侧边栏" });
-  await expect(collapse).toHaveAttribute("aria-expanded", "true");
-  await collapse.click();
-  await expect(expand).toHaveAttribute("aria-expanded", "false");
+  const account = page.getByRole("button", { name: "个人账号" });
+  await expect(account).toBeInViewport({ ratio: 1 });
+  await account.click();
+  await expect(page.getByRole("menu", { name: "账号菜单" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
   await expand.click();
   await expect(collapse).toHaveAttribute("aria-expanded", "true");
 });
 
-test("短视口可逐个 Tab 到所有收起的导航项", async ({ page }) => {
+test("短视口收起侧栏后可逐个 Tab 到所有导航项", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 280 });
   await mockWorkspace(page);
   await page.goto("/");
+  await page.getByRole("button", { name: "收起侧边栏" }).click();
   const nav = page.getByRole("navigation", { name: "主导航" });
   await expect(nav.getByRole("button", { name: "概览" })).toHaveAttribute("aria-current", "page");
-  await page.getByRole("link", { name: "跳到主要内容" }).focus();
-  for (const name of ["概览", "笔记", "项目", "事项", "回收站", "文件", "搜索", "凭据与会话"]) {
+  await page.getByRole("button", { name: "展开侧边栏" }).focus();
+  for (const name of ["概览", "笔记", "项目", "事项", "文件", "搜索", "回收站"]) {
     await page.keyboard.press("Tab");
     const item = nav.getByRole("button", { name });
     await expect(item).toBeFocused();
@@ -213,7 +188,7 @@ test("主区独立滚动并在切换到另一个长页面时归顶", async ({ pa
   await mockWorkspace(page);
   await page.goto("/trash");
   const main = page.getByRole("main");
-  const account = page.getByRole("banner").getByRole("button", { name: "账号菜单" });
+  const account = page.getByRole("button", { name: "个人账号" });
   const nav = page.getByRole("navigation", { name: "主导航" });
   // Warm the destination first: a short loading state would clamp scrollTop
   // to zero even if navigation did not reset the scroll container.
@@ -303,16 +278,19 @@ test("未认证用户只看到独立登录页", async ({ page }) => {
   await expect(page.getByRole("main")).toHaveCount(1);
 });
 
-for (const [path, label] of [["projects", "项目"], ["tasks", "事项"]]) {
-  test(`${label}详情在 320px 可通过顶栏返回清单`, async ({ page }) => {
+for (const [path, label, backLabel] of [
+  ["projects", "项目", "返回项目"],
+  ["tasks", "事项", "返回事项"],
+  ["files", "文件", "返回文件列表"],
+] as const) {
+  test(`${label}详情在 320px 可通过详情顶栏返回清单`, async ({ page }) => {
     await page.setViewportSize({ width: 320, height: 640 });
     await mockWorkspace(page);
     await page.goto(`/${path}/${fixtureId(201)}`);
-    const banner = page.getByRole("banner");
-    const back = banner.getByRole("link", { name: `返回${label}` });
+    const detailBar = page.locator(".workspace-detail-topbar");
+    const back = detailBar.getByRole("link", { name: backLabel });
     await expect(back).toBeInViewport();
     await expect(back).not.toHaveAttribute("aria-current");
-    await expect(banner.getByRole("button", { name: "更多操作" })).toBeInViewport();
     await expect(page.getByRole("navigation", { name: "主导航" }).getByRole("button", { name: label }))
       .toHaveAttribute("aria-current", "page");
     await back.focus();

@@ -329,11 +329,21 @@ export class NoteEditingSession {
   };
 }
 
-export function useNoteAutosave({ initialNote, draftStore }: { initialNote: Note; draftStore: NoteDraftStore }) {
-  const session = draftStore.open(initialNote);
-  const state = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
-  useEffect(() => { session.observeServer(initialNote); }, [initialNote, session]);
+const noopSubscribe = () => () => {};
+const getNullSnapshot = () => null;
+
+export function useOptionalNoteAutosave({ initialNote, draftStore }: { initialNote?: Note; draftStore: NoteDraftStore }) {
+  const session = initialNote ? draftStore.open(initialNote) : null;
+  const state = useSyncExternalStore(
+    session ? session.subscribe : noopSubscribe,
+    session ? session.getSnapshot : getNullSnapshot,
+    session ? session.getSnapshot : getNullSnapshot,
+  );
   useEffect(() => {
+    if (session && initialNote) session.observeServer(initialNote);
+  }, [initialNote, session]);
+  useEffect(() => {
+    if (!session) return;
     const beforeUnload = (event: BeforeUnloadEvent) => {
       const current = session.getSnapshot();
       if (current.dirty || current.unresolvedWrite || current.error) { event.preventDefault(); event.returnValue = ""; }
@@ -343,6 +353,24 @@ export function useNoteAutosave({ initialNote, draftStore }: { initialNote: Note
     window.addEventListener("pagehide", pagehide);
     return () => { window.removeEventListener("beforeunload", beforeUnload); window.removeEventListener("pagehide", pagehide); };
   }, [session]);
-  return { ...state, changeDraft: session.changeDraft, retrySave: session.retrySave, flush: session.flush,
-    runStructuralMutation: session.runStructuralMutation, loadServer: session.loadServer, restoreFromServer: session.restoreFromServer, resetFromServer: session.resetFromServer, saveCopy: session.saveCopy, copyDraft: session.copyDraft };
+  if (!session || !state) return null;
+  return {
+    ...state,
+    session,
+    changeDraft: session.changeDraft,
+    retrySave: session.retrySave,
+    flush: session.flush,
+    runStructuralMutation: session.runStructuralMutation,
+    loadServer: session.loadServer,
+    restoreFromServer: session.restoreFromServer,
+    resetFromServer: session.resetFromServer,
+    saveCopy: session.saveCopy,
+    copyDraft: session.copyDraft,
+  };
+}
+
+export function useNoteAutosave({ initialNote, draftStore }: { initialNote: Note; draftStore: NoteDraftStore }) {
+  const { session: _session, ...autosave } = useOptionalNoteAutosave({ initialNote, draftStore })!;
+  void _session;
+  return autosave;
 }

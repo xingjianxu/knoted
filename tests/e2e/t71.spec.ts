@@ -91,7 +91,7 @@ test("T71 自动扫描、原件预览及笔记项目事项搜索", async ({ play
     await page.getByLabel("一次性令牌").fill(token);
     await page.getByLabel("凭据名称", { exact: true }).fill("T71 合成 Passkey");
     await page.getByRole("button", { name: "注册 Passkey", exact: true }).click();
-    const account = page.getByRole("button", { name: "账号菜单" });
+    const account = page.getByRole("button", { name: "个人账号" });
     await account.click();
     await page.getByRole("menuitem", { name: "退出登录" }).click();
     await page.getByRole("button", { name: "使用 Passkey 登录", exact: true }).click();

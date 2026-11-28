@@ -13,6 +13,7 @@ export type NoteEditorProps = {
   document: NoteDocument;
   onChange: (document: NoteDocument) => void;
   fillHeight?: boolean;
+  borderless?: boolean;
   readOnly?: boolean;
   /** Optional API client enabling image uploads via BlockEditor's built-in image dialog. */
   client?: ApiClient;
@@ -24,6 +25,7 @@ export function NoteEditor({
   document,
   onChange,
   fillHeight = false,
+  borderless = false,
   readOnly = false,
   client,
   className,
@@ -102,6 +104,7 @@ export function NoteEditor({
           initialContent={initialContent}
           onChange={handleChange}
           fillHeight={fillHeight}
+          borderless={borderless}
           readOnly={readOnly}
           label="笔记编辑器"
           locale="zh"

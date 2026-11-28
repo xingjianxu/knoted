@@ -22,15 +22,89 @@
   --color-accent-soft: var(--mt-hover);
 }
 
-/* Application page composition. The mtone Content remains the scroll owner. */
+/* Application page composition. The workspace main landmark remains the scroll owner. */
 @layer components {
-  .workspace-sider {
-    /* Leave room for the return link and actions when expanded on a narrow screen. */
-    max-inline-size: max(52px, calc(100% - 13rem));
+  .workspace-app-layout {
+    --mt-app-layout-content-padding: 0px;
+  }
+
+  .workspace-app-layout > .mt-app-layout-sidebar {
+    background: var(--mt-subtle);
+  }
+
+  .workspace-app-layout > .mt-app-layout-sidebar > .mt-sidebar-heading {
+    box-sizing: border-box;
+    height: var(--mt-layout-header-height, 48px);
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--mt-border);
+  }
+
+  .workspace-app-layout > .mt-app-layout-sidebar[data-collapsed="true"] > .mt-sidebar-heading {
+    padding-inline: 4px;
+  }
+
+  .workspace-app-layout > .mt-app-layout-content {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .workspace-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;
+  }
+
+  .workspace-brand-mark {
+    display: inline-grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    flex: none;
+    border-radius: 6px;
+    background: var(--mt-primary);
+    color: var(--mt-primary-fg, #fff);
+    font-size: 0.8125rem;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: -0.02em;
+  }
+
+  .workspace-brand-name {
+    font-size: 0.9375rem;
+    font-weight: 650;
+    letter-spacing: -0.015em;
+    color: var(--mt-fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .workspace-content {
     container: workspace / inline-size;
+    flex: 1 1 0%;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+  }
+
+  .workspace-content--flush {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--mt-bg);
+  }
+
+  .workspace-detail-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    flex: none;
+    padding-inline: 0.75rem;
+    background: var(--mt-bg);
   }
 
   .workspace-frame {
@@ -45,7 +119,11 @@
   }
 
   .workspace-frame--flush {
+    width: 100%;
     max-width: none;
+    margin-inline: 0;
+    flex: 1 1 0%;
+    min-height: 0;
     height: 100%;
     padding: 0;
     display: flex;
@@ -53,6 +131,10 @@
   }
 
   @container workspace (min-width: 48rem) {
+    .workspace-detail-topbar {
+      padding-inline: 1.5rem;
+    }
+
     .workspace-frame {
       padding: 1.5rem;
     }
